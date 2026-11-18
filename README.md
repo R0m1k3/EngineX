@@ -116,6 +116,50 @@ En mode d'approbation *Automatique*, Codex lance ses commandes sans demander. En
 accord dans le fil avant chaque commande ou modification. Vous pouvez joindre, coller ou glisser des images quand le
 preset actif a un fichier mmproj (vision).
 
+### Code dans une session
+
+Avant et après chaque tour, EngineX prend un instantané du dossier de travail dans un dépôt git à part
+(`/data/snapshots/topic-<id>.git`), sans toucher au `.git` du projet. Ce git tourne dans un conteneur d'aide sans
+réseau (image devbox, uid 1000), jamais dans EngineX : rien de ce que la sandbox a écrit (hooks, filtres, config d'un
+dépôt imbriqué) ne s'exécute sur le serveur.
+
+- Sous chaque tour qui a changé des fichiers, le bloc **Modifications** liste les fichiers (ajouté, modifié,
+  supprimé, lignes +/-) ; un clic ouvre le diff. **Annuler ce fichier** le remet dans son état d'avant le tour ; s'il
+  a encore changé depuis, EngineX demande confirmation.
+- **Revenir avant ce message** (sous un de vos messages) remet les fichiers dans leur état d'avant ce message. Avec
+  « Fichiers et conversation », ce message et les suivants disparaissent du fil, chez EngineX et chez Codex, et le
+  texte revient dans la zone de saisie. Avec « Fichiers seulement », la conversation reste et une note prévient Codex
+  au message suivant. Le bandeau **Rétablir** annule le dernier retour.
+- Limites : les dossiers ignorés (`node_modules/`, `target/`, `.venv/`, `.next/`...) et les fichiers de plus de
+  50 Mo ne sont pas suivis ; un dépôt git imbriqué sans commit est ignoré. Les sessions d'un même topic partagent le
+  même dossier : un retour arrière attend la fin d'un tour en cours dans une autre session (`folder_busy` sinon).
+
+### Vérification
+
+Après un tour terminé qui a changé des fichiers, EngineX lance la recette de vérification dans la sandbox. Elle se
+trouve dans `.enginex/verify.toml` du dossier de travail :
+
+```toml
+[[step]]
+name = "tests"
+run = "npm test"
+timeout = 600   # secondes, 10 à 3600 (défaut 600)
+```
+
+Sans ce fichier, EngineX détecte une recette (npm, pnpm ou yarn avec `lint`, `build`, `test` ; Cargo ; Go ; pytest)
+et propose de l'enregistrer. Chaque tour affiche un badge (en cours, réussie, en échec, impossible). Sur échec,
+EngineX envoie lui-même le rapport à Codex, dans un message « Vérification EngineX », jusqu'à 3 tours de correction,
+puis rend la main. « Revenir au dernier état vert » remet les fichiers du dernier tour vérifié. Paramètres → Sessions
+règle la vérification (activée ou non, nombre de corrections) et l'identité git des instantanés.
+
+### Terminal et fichiers
+
+Les boutons **Fichiers** et **Terminal** du fil ouvrent un panneau à droite. Le terminal est un shell dans la
+sandbox de la session (il la démarre au besoin) ; un seul par session, les secrets affichés sont masqués. Fermer le
+panneau ou l'onglet termine le shell. Le panneau Fichiers montre l'arborescence du dossier de travail (sans `.git`),
+l'aperçu des images, PDF, vidéos, Markdown et textes (masqués), et le téléchargement. Il est en lecture seule et ne
+suit pas les liens symboliques.
+
 ### Secrets
 
 Paramètres → Clés enregistre des secrets, pour tous les projets ou pour un seul. Chacun devient une variable

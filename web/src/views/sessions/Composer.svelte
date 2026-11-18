@@ -7,15 +7,17 @@
     disabled = false,
     send,
     interrupt,
+    text = $bindable(''),
   }: {
     sessionId: string;
     running: boolean;
     disabled?: boolean;
     send: (text: string, attachments: string[]) => Promise<boolean>;
     interrupt: () => void;
+    /** Zone de saisie (remplie par un retour arrière de la conversation). */
+    text?: string;
   } = $props();
 
-  let text = $state('');
   let images = $state<Attachment[]>([]);
   let uploading = $state(0);
   let sending = $state(false);

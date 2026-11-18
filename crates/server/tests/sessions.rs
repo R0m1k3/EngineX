@@ -809,7 +809,9 @@ async fn revert_lost_with_the_connection_is_kept_and_retried() {
     let t = ev.until("turn_stored", |_| true).await;
     assert_eq!(t["turn"]["status"], "completed", "{t}");
     assert_eq!(session_body(&e, &sid).await["session"]["pending_revert"], false);
-    assert_eq!(fake.received("thread/revert").len(), 1);
+    // Le faux app-server peut avoir lu le premier envoi juste avant de couper.
+    let n = fake.received("thread/revert").len();
+    assert!((1..=2).contains(&n), "{n}");
 }
 
 #[tokio::test]

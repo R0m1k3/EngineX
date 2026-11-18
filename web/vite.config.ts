@@ -6,5 +6,5 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 export default defineConfig({
   plugins: [svelte()],
   build: { target: 'es2022', assetsInlineLimit: 0 },
-  server: { proxy: { '/api': 'http://127.0.0.1:8090' } },
+  server: { proxy: { '/api': { target: 'http://127.0.0.1:8090', ws: true } } },
 });

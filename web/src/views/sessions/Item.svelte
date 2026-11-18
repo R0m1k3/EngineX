@@ -18,6 +18,7 @@
 {#if item.type === 'userMessage'}
   <div class="user">
     {#if item.text}<div class="text">{item.text}</div>{/if}
+    {#if item.note}<p class="note small muted" title={item.note}>Note d’EngineX jointe : fichiers remis à un état antérieur.</p>{/if}
     {#if item.images?.length}
       <div class="thumbs">
         {#each item.images as img (img.name)}
@@ -72,6 +73,8 @@
   </div>
 {:else if item.type === 'plan'}
   <div class="tool"><Markdown text={item.text ?? ''} /></div>
+{:else if item.type === 'notice'}
+  <p class="notice small">{item.text}</p>
 {:else if item.type === 'contextCompaction'}
   <p class="small muted">Contexte résumé pour rester dans la fenêtre du modèle.</p>
 {:else}
@@ -91,6 +94,8 @@
     padding: var(--s2) var(--s3);
   }
   .text { white-space: pre-wrap; }
+  .note { margin: var(--s1) 0 0; }
+  .notice { border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2) var(--s3); margin: 0; white-space: pre-wrap; }
   .thumbs { display: flex; gap: var(--s2); flex-wrap: wrap; margin-top: var(--s2); }
   .thumbs img { max-height: 120px; max-width: 200px; border-radius: 4px; display: block; }
   .agent { max-width: 100%; }

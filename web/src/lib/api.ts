@@ -5,6 +5,7 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     public retryAfter: number | null,
+    public detail: string | null = null,
   ) {
     super(code);
   }
@@ -28,7 +29,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const retry = res.headers.get('Retry-After');
-    const err = new ApiError(res.status, data.error ?? 'internal', retry ? Number(retry) : null);
+    const err = new ApiError(res.status, data.error ?? 'internal', retry ? Number(retry) : null, data.detail ?? null);
     if (res.status === 401 && err.code === 'unauthorized') onUnauthorized();
     throw err;
   }
@@ -424,6 +425,20 @@ export function message(e: unknown): string {
       return 'Pas vide : supprimez d’abord ce qu’il contient.';
     case 'attachment_invalid':
       return e.status === 413 ? 'Image trop lourde (20 Mo au plus).' : 'Image refusée (PNG, JPEG, WebP ou GIF).';
+    case 'folder_busy':
+      return 'Un tour ou une vérification travaille sur ce dossier : réessayez quand il a fini.';
+    case 'changed_since':
+      return 'Ce fichier a changé depuis ce tour.';
+    case 'no_snapshot':
+      return 'Instantané absent : retour arrière indisponible pour ce message.';
+    case 'recipe_exists':
+      return 'Le fichier .enginex/verify.toml existe déjà.';
+    case 'no_recipe':
+      return 'Aucune recette de vérification (ni .enginex/verify.toml, ni projet reconnu).';
+    case 'not_git':
+      return 'Ce topic n’est pas un dépôt git.';
+    case 'copy_failed':
+      return `La copie séparée a échoué.${e.detail ? `\n${e.detail}` : ''}`;
     default:
       return `Erreur : ${e.code}`;
   }
@@ -457,6 +472,12 @@ export interface Session {
   created_at: number;
   updated_at: number;
   running: boolean;
+  copy_branch: string | null;
+  /** Note jointe au prochain message (après un retour arrière des fichiers). */
+  pending_note: string | null;
+  pending_revert: boolean;
+  /** « Rétablir » possible (état d'avant le dernier retour arrière). */
+  undo: boolean;
 }
 
 /** Élément d'un fil (forme Codex : `type`, `id` et les champs du type). */
@@ -477,6 +498,57 @@ export interface TurnInfo {
   usage: Usage | null;
   started_at?: number;
   completed_at?: number | null;
+  origin?: 'user' | 'verify';
+  has_snapshot?: boolean;
+  has_post?: boolean;
+  changes?: Changes | null;
+  verifications?: Verification[];
+}
+
+export interface ChangedFile {
+  path: string;
+  status: 'A' | 'M' | 'D' | 'T';
+  added: number;
+  deleted: number;
+  binary: boolean;
+}
+
+export interface Changes {
+  files: ChangedFile[];
+  truncated: boolean;
+}
+
+export interface StepResult {
+  name?: string;
+  run?: string;
+  exit_code?: number | null;
+  duration_ms?: number;
+  timed_out?: boolean;
+  output?: string;
+  error?: string;
+}
+
+export interface Verification {
+  id: number;
+  turn_id: string;
+  attempt: number;
+  status: 'running' | 'passed' | 'failed' | 'error' | 'cancelled';
+  steps: StepResult[] | null;
+  fixes_done?: number;
+  max_fixes?: number;
+}
+
+export interface Recipe {
+  source: 'file' | 'detected' | 'none';
+  steps: { name: string; run: string; timeout: number }[];
+  error?: string;
+}
+
+export interface TreeEntry {
+  name: string;
+  kind: 'dir' | 'file' | 'link';
+  size: number;
+  mtime: number;
 }
 
 export interface Usage {
@@ -490,6 +562,7 @@ export interface SessionDetail {
   turns: TurnInfo[];
   items: StoredItem[];
   more: boolean;
+  green_turn: string | null;
 }
 
 export interface PendingRequest {
@@ -526,6 +599,10 @@ export interface SandboxStatus {
 export interface SessionSettings {
   idle_minutes: number;
   max: number;
+  verify_enabled?: boolean;
+  verify_max_fixes?: number;
+  git_name?: string;
+  git_email?: string;
 }
 
 export const projects = () => request<{ projects: Project[] }>('GET', '/api/projects').then((r) => r.projects);
@@ -578,3 +655,23 @@ export const deleteSecret = (id: number) => request('DELETE', `/api/vault/${id}`
 export const sandboxStatus = () => request<SandboxStatus>('GET', '/api/sandbox/status');
 export const sessionSettings = () => request<SessionSettings>('GET', '/api/settings/sessions');
 export const saveSessionSettings = (s: SessionSettings) => request<SessionSettings>('PUT', '/api/settings/sessions', s);
+
+// ---- Code dans une session ----
+
+const S = (id: string) => `/api/sessions/${id}`;
+export const turnDiff = (id: string, tid: string, path: string) =>
+  request<{ diff: string; truncated: boolean; binary: boolean }>('GET', `${S(id)}/turns/${q(tid)}/diff?path=${q(path)}`);
+export const undoFile = (id: string, tid: string, path: string, force = false) =>
+  request('POST', `${S(id)}/turns/${q(tid)}/undo-file`, { path, force });
+export const revertTurn = (id: string, tid: string, conversation: boolean) =>
+  request<{ ok: boolean; user: ItemData | null }>('POST', `${S(id)}/turns/${q(tid)}/revert`, { conversation });
+export const restoreUndo = (id: string) => request('POST', `${S(id)}/restore-undo`);
+export const restoreGreen = (id: string) => request('POST', `${S(id)}/restore-green`);
+export const verifyRecipe = (id: string) => request<Recipe>('GET', `${S(id)}/verify`);
+export const saveRecipe = (id: string) => request('POST', `${S(id)}/verify/save`);
+export const runVerify = (id: string) => request('POST', `${S(id)}/verify/run`);
+export const tree = (id: string, path: string) =>
+  request<{ path: string; entries: TreeEntry[]; truncated: boolean }>('GET', `${S(id)}/tree?path=${q(path)}`);
+export const fileText = (id: string, path: string) =>
+  request<{ text: string; truncated: boolean; binary: boolean }>('GET', `${S(id)}/file/text?path=${q(path)}`);
+export const downloadUrl = (id: string, path: string) => `${fileUrl(id, path)}&download=1`;

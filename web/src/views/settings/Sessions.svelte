@@ -6,6 +6,10 @@
   let status = $state<SandboxStatus | null>(null);
   let idle = $state(10);
   let max = $state(3);
+  let verifyOn = $state(true);
+  let fixes = $state(3);
+  let gitName = $state('');
+  let gitEmail = $state('');
   let error = $state('');
   let saved = $state(false);
 
@@ -14,6 +18,10 @@
       const s = await sessionSettings();
       idle = s.idle_minutes;
       max = s.max;
+      verifyOn = s.verify_enabled ?? true;
+      fixes = s.verify_max_fixes ?? 3;
+      gitName = s.git_name ?? '';
+      gitEmail = s.git_email ?? '';
       status = await sandboxStatus();
       error = '';
     } catch (e) {
@@ -26,7 +34,14 @@
     error = '';
     saved = false;
     try {
-      const s = await saveSessionSettings({ idle_minutes: idle, max });
+      const s = await saveSessionSettings({
+        idle_minutes: idle,
+        max,
+        verify_enabled: verifyOn,
+        verify_max_fixes: fixes,
+        git_name: gitName.trim() || undefined,
+        git_email: gitEmail.trim() || undefined,
+      });
       idle = s.idle_minutes;
       max = s.max;
       saved = true;
@@ -53,6 +68,16 @@
     </label>
     <label>Sandboxes actives en même temps (1 à 10)
       <input class="num" type="number" min="1" max="10" bind:value={max} required />
+    </label>
+    <label class="check"><input type="checkbox" bind:checked={verifyOn} /> Vérification après chaque tour qui change des fichiers</label>
+    <label>Corrections automatiques au plus (0 à 10)
+      <input class="num" type="number" min="0" max="10" bind:value={fixes} required disabled={!verifyOn} />
+    </label>
+    <label>Nom git des commits d’EngineX
+      <input bind:value={gitName} placeholder="EngineX" maxlength="100" />
+    </label>
+    <label>E-mail git
+      <input type="email" bind:value={gitEmail} placeholder="enginex@localhost" maxlength="200" />
     </label>
     <div class="actions"><button type="submit">Enregistrer</button>{#if saved}<span class="ok small">Enregistré.</span>{/if}</div>
   </form>

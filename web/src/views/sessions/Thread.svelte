@@ -2,14 +2,19 @@
   import { onDestroy, tick, untrack } from 'svelte';
   import {
     sessionDetail, postTurn, interruptTurn, patchSession, presets, message,
+    revertTurn, restoreUndo, restoreGreen, runVerify,
     type Session, type StoredItem, type TurnInfo, type ItemData, type PendingRequest, type Usage, type Approval as Mode,
+    type Verification,
   } from '../../lib/api';
   import { openEvents } from '../../lib/sse';
   import Item from './Item.svelte';
   import Approval from './Approval.svelte';
   import Composer from './Composer.svelte';
+  import Changes from './Changes.svelte';
+  import Verify from './Verify.svelte';
+  import Revert from './Revert.svelte';
 
-  let { id, changed }: { id: string; changed: () => void } = $props();
+  let { id, changed, panel }: { id: string; changed: () => void; panel: (tab: 'files' | 'terminal') => void } = $props();
 
   interface Live {
     id: string | null;
@@ -35,6 +40,11 @@
   let notice = $state('');
   let preset = $state('');
   let scroller: HTMLDivElement | undefined = $state();
+  let green = $state<string | null>(null);
+  let draft = $state('');
+  let reverting = $state<string | null>(null);
+  // « Rétablir » vient d'être fait : le bouton défait le rétablissement.
+  let redone = $state(false);
 
   async function loadHistory() {
     try {
@@ -43,6 +53,7 @@
       history = d.items;
       more = d.more;
       turns = Object.fromEntries(d.turns.map((t) => [t.id, t]));
+      green = d.green_turn;
     } catch (e) {
       error = message(e);
     }
@@ -118,8 +129,32 @@
         follow();
       },
       request_resolved: (r) => (requests = requests.filter((x) => x.rid !== r.rid)),
+      changes: (d) => {
+        const t = turns[d.turn_id];
+        if (t) {
+          t.changes = d.changes;
+          t.has_post = true;
+        }
+      },
+      verify: (d: Verification & { turn_id: string }) => {
+        const t = turns[d.turn_id];
+        if (t) {
+          const list = (t.verifications ??= []);
+          const i = list.findIndex((v) => v.id === d.id);
+          if (i >= 0) list[i] = d;
+          else list.push(d);
+        }
+        if (d.status === 'passed') green = d.turn_id;
+        follow();
+      },
+      session: (d) => {
+        session = d;
+        if (!d.undo) redone = false;
+      },
+      history: () => loadHistory(),
+      notice: () => loadHistory().then(() => follow()),
       turn_stored: async (d) => {
-        turns[d.turn.id] = d.turn;
+        turns[d.turn.id] = { ...turns[d.turn.id], ...d.turn };
         await loadHistory();
         live = null;
         requests = [];
@@ -222,6 +257,54 @@
     }
   }
 
+  async function revert(conversation: boolean) {
+    const tid = reverting;
+    reverting = null;
+    if (!tid) return;
+    error = '';
+    try {
+      const r = await revertTurn(id, tid, conversation);
+      if (conversation && r.user?.text && !draft.trim()) draft = r.user.text;
+      redone = false;
+      await loadHistory();
+      changed();
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
+  async function redo() {
+    error = '';
+    try {
+      await restoreUndo(id);
+      redone = !redone;
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
+  async function toGreen() {
+    if (!confirm('Remettre les fichiers dans l’état du dernier tour vérifié ?')) return;
+    error = '';
+    try {
+      await restoreGreen(id);
+      redone = false;
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
+  async function rerun() {
+    error = '';
+    try {
+      await runVerify(id);
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
+  const isVerify = (tid: string | null) => !!tid && turns[tid]?.origin === 'verify';
+
   async function rename() {
     const t = prompt('Titre de la session', session?.title ?? '');
     if (!t?.trim()) return;
@@ -239,6 +322,8 @@
   <header class="row head">
     <button class="link title" title="Renommer" onclick={rename}>{session?.title ?? '…'}</button>
     <div class="actions small">
+      <button class="link" onclick={() => panel('files')}>Fichiers</button>
+      <button class="link" onclick={() => panel('terminal')}>Terminal</button>
       <span class="pill state-{sandbox.state}" title={sandbox.detail ?? ''}>{SANDBOX[sandbox.state] ?? sandbox.state}{pull}</span>
       {#if preset}<span class="muted" title="Preset actif (Modèles)">{preset}</span>{/if}
       <label class="mode">
@@ -256,14 +341,44 @@
     <p class="banner" class:bad={sandbox.state === 'error'}>{sandbox.detail}</p>
   {/if}
 
+  {#if session?.undo}
+    <p class="banner small row">
+      <span>{redone ? 'Fichiers rétablis.' : 'Fichiers remis dans un état antérieur.'}</span>
+      <button class="link" onclick={redo}>{redone ? 'Annuler le rétablissement' : 'Rétablir'}</button>
+    </p>
+  {/if}
+  {#if session?.pending_note}<p class="banner small">Une note sur ce retour arrière sera jointe à votre prochain message pour Codex.</p>{/if}
+  {#if session?.pending_revert}<p class="banner small">Retour de conversation en attente : il sera appliqué à Codex au prochain message.</p>{/if}
+
   <div class="scroll" bind:this={scroller}>
     {#if more}<button class="link small" onclick={older}>Messages plus anciens</button>{/if}
     {#if !history.length && !live}
       <p class="muted empty">Écrivez une demande ci-dessous. La sandbox démarre au premier message ; elle s’arrête seule après un moment sans activité.</p>
     {/if}
     {#each rows as { it, end } (it.item_id)}
-      <Item item={it.data} sessionId={id} />
+      {#if it.kind === 'userMessage' && isVerify(it.turn_id)}
+        <details class="fix">
+          <summary class="small">Vérification EngineX : rapport d’échec envoyé à Codex</summary>
+          <div class="pre small">{it.data.text}</div>
+        </details>
+      {:else}
+        <Item item={it.data} sessionId={id} />
+      {/if}
+      {#if it.kind === 'userMessage' && it.turn_id && !isVerify(it.turn_id) && !live}
+        {@const t = turns[it.turn_id]}
+        <div class="msg-actions small">
+          <button class="link" disabled={!t?.has_snapshot} title={t?.has_snapshot ? '' : 'Instantané absent : retour arrière indisponible pour ce message'}
+            onclick={() => (reverting = it.turn_id)}>Revenir avant ce message</button>
+        </div>
+      {/if}
       {#if end}
+        {#if end.changes?.files.length}
+          <Changes sessionId={id} turnId={end.id} changes={end.changes} canUndo={!!end.has_snapshot && !!end.has_post && !live} />
+        {/if}
+        {#if end.verifications?.length}
+          <Verify checks={end.verifications} green={green === end.id}
+            rerun={live ? null : rerun} toGreen={green && green !== end.id && !live ? toGreen : null} />
+        {/if}
         {#if end.status === 'failed'}<p class="banner bad small">Tour en échec : {end.error ?? 'erreur inconnue'}</p>
         {:else if end.status === 'interrupted'}<p class="muted small">Tour interrompu.</p>{/if}
         {#if tokens(end.usage)}<p class="muted tiny">{tokens(end.usage)}</p>{/if}
@@ -280,7 +395,8 @@
   </div>
 
   {#if error}<p class="error small">{error}</p>{/if}
-  <Composer sessionId={id} running={!!live} disabled={session?.archived ?? false} {send} {interrupt} />
+  <Composer sessionId={id} running={!!live} disabled={session?.archived ?? false} {send} {interrupt} bind:text={draft} />
+  {#if reverting}<Revert close={() => (reverting = null)} choose={revert} />{/if}
 </section>
 
 <style>
@@ -297,4 +413,9 @@
   .tiny { font-size: 12px; margin: 0; }
   .empty { margin-top: var(--s6); text-align: center; }
   .working { margin: 0; }
+  .msg-actions { align-self: flex-end; margin-top: calc(-1 * var(--s2)); }
+  .fix { border-left: 2px solid #d9b36c; padding-left: var(--s3); }
+  .fix summary { cursor: pointer; }
+  .fix .pre { white-space: pre-wrap; margin-top: var(--s1); max-height: 320px; overflow: auto; }
+  .banner.row { justify-content: space-between; gap: var(--s3); }
 </style>

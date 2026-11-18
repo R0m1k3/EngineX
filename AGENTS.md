@@ -13,6 +13,7 @@ UI Svelte 5 (`web/`, embarquée dans le binaire), image Docker basée sur `ghcr.
   (réseau `enginex-sandbox-test`, proxy sur 127.0.0.1:23750 et uid 1000 : voir `.github/workflows/ci.yml`)
 - Image devbox : `docker build --build-arg CODEX_VERSION=<version> docker/devbox`
 - Fichiers attendus du crate `oai` : `UPDATE_FIXTURES=1 cargo test -p enginex-oai`, puis relire le diff
+- Instantanés, Fichiers, vérification : `cargo test -p enginex-server --test snapshots --test files --test verify`
 - UI : `cd web && npm ci && npm run check && npm run build`
 - Build release (exige `web/dist`) : `cargo build --release -p enginex-server`
 - Dev : `cd web && npm run dev` + `ENGINEX_DATA=/tmp/ex ENGINEX_BIND=127.0.0.1:8090 cargo run -p enginex-server`
@@ -32,4 +33,12 @@ UI Svelte 5 (`web/`, embarquée dans le binaire), image Docker basée sur `ghcr.
   (masquage). Tout texte venant de Codex passe par le masqueur avant d'être stocké, diffusé ou envoyé au modèle.
 - Notifications et requêtes de Codex : seules celles de `enginex_codex::types::WHITELIST` et `SERVER_REQUESTS` sont
   traitées ; une nouvelle méthode s'ajoute là, avec son cas dans le test de contrat.
+- Fichiers d'un dossier que la sandbox écrit (topic, copie) : jamais de chemin suivi par le noyau ; passer par
+  `files::open_beneath` (openat2 `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`) et ses fonctions (`read_beneath`,
+  `create_beneath`, `remove_beneath`).
+- Git sur un dossier que la sandbox écrit : uniquement par le conteneur d'aide (`Backend::run_helper`, spec
+  `spec::helper_spec`, sans réseau) et des scripts fixes de `snapshots.rs` (macros `prelude!` et `snap_core!`, réglages
+  `-c` communs) ; aucune valeur venue de l'utilisateur dans le script, tout passe par l'environnement.
+- Retours arrière, annulations et instantanés : prendre le verrou du dossier (`snapshots::lock`) une fois par fonction
+  publique ; les fonctions `*_locked` le demandent en argument.
 - Textes de l'UI et de la doc en français.
