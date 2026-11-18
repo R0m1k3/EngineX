@@ -11,8 +11,8 @@ use std::{path::PathBuf, time::Duration};
 /// Dossiers de la session vus par EngineX (sous son dossier de données).
 #[derive(Clone, Debug)]
 pub struct Mounts {
-    /// Dossier du topic → `/workspace`.
-    pub topic: PathBuf,
+    /// Dossier de travail (topic, ou copie séparée) → `/workspace`.
+    pub work: PathBuf,
     /// `<data>/sessions/<id>/codex` → `/home/dev/.codex` (CODEX_HOME).
     pub codex_home: PathBuf,
     /// `<data>/sessions/<id>/run` (jeton) → `/run/enginex`, lecture seule.

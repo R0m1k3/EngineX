@@ -14,7 +14,7 @@ fn spec() -> (Spec, DockerOpts) {
         owner: "instance-1".into(),
         preset: "4:1795000000:deadbeef".into(),
         mounts: Mounts {
-            topic: data.join("workspace/projects/site/topics/front"),
+            work: data.join("workspace/projects/site/topics/front"),
             codex_home: data.join("sessions/0123456789abcdef/codex"),
             run: data.join("sessions/0123456789abcdef/run"),
             attachments: data.join("sessions/0123456789abcdef/attachments"),
@@ -59,7 +59,7 @@ fn container_spec_snapshot() {
 #[test]
 fn paths_outside_the_data_dir_are_refused() {
     let (mut s, o) = spec();
-    s.mounts.topic = "/etc".into();
+    s.mounts.work = "/etc".into();
     assert!(container_spec(&s, &o).is_err());
 }
 

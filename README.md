@@ -134,6 +134,17 @@ dépôt imbriqué) ne s'exécute sur le serveur.
   50 Mo ne sont pas suivis ; un dépôt git imbriqué sans commit est ignoré. Les sessions d'un même topic partagent le
   même dossier : un retour arrière attend la fin d'un tour en cours dans une autre session (`folder_busy` sinon).
 
+### Copie séparée
+
+Si le dossier d'un topic est un dépôt git, « + copie » à côté du topic crée une session qui travaille dans un clone
+du dépôt (`/data/sessions/<id>/work`), sur la branche `enginex/<topic>-<8 caractères>`, avec le même `origin`. Les
+modifications non commitées du topic ne sont pas copiées. Les instantanés, le terminal, les fichiers et la
+vérification de cette session portent sur la copie. **Ramener dans le topic** commite ce qui reste dans la copie,
+place la branche dans le dépôt du topic et la fusionne si le topic n'a pas de modification en cours et si la fusion
+se fait sans conflit ; sinon la branche reste dans le dépôt du topic, à fusionner depuis une session du topic.
+Supprimer la session supprime la copie. Les commits sont signés du nom et de l'e-mail git de Paramètres → Sessions
+(un secret `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`... l'emporte dans les sandboxes).
+
 ### Vérification
 
 Après un tour terminé qui a changé des fichiers, EngineX lance la recette de vérification dans la sandbox. Elle se

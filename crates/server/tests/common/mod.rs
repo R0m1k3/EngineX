@@ -770,3 +770,55 @@ pub async fn ws_connect(base: &str, cookie: &str, path: &str, origin: Option<&st
         Err(e) => panic!("WebSocket {path} : {e}"),
     }
 }
+
+// ---- Copies séparées ----
+
+/// `git` sur l'hôte (tests), identité fixe.
+pub fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
+    let o = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@localhost",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success(),
+        "git {args:?} : {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+/// Fait du topic `inbox` un dépôt git avec un commit (`a.txt`) ; `origin` si donné.
+pub fn make_git_topic(e: &Env, origin: Option<&str>) -> PathBuf {
+    let dir = e.dir.path().join("data/workspace/projects/general/topics/inbox");
+    std::fs::create_dir_all(&dir).unwrap();
+    git_in(&dir, &["init", "-q"]);
+    std::fs::write(dir.join("a.txt"), "un\n").unwrap();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "départ"]);
+    if let Some(o) = origin {
+        git_in(&dir, &["remote", "add", "origin", o]);
+    }
+    dir
+}
+
+/// Session en copie séparée du topic `inbox` ; rend `(id, branche)`.
+pub async fn new_copy_session(e: &Env) -> (String, String) {
+    let r = e
+        .send("POST", "/api/sessions", json!({"topic_id": 1, "copy": true}))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    (
+        r.body["id"].as_str().unwrap().to_string(),
+        r.body["copy_branch"].as_str().unwrap().to_string(),
+    )
+}

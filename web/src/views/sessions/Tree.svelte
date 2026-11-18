@@ -58,13 +58,18 @@
     const name = ask(`Nouveau topic dans « ${p.name} »`);
     if (name) act(() => createTopic(p.id, name));
   }
-  async function newSession(topic: number) {
+  let creating = $state<number | null>(null);
+  async function newSession(topic: number, copy = false) {
+    if (copy && !confirm('Créer une copie séparée du dépôt git de ce topic ? La session travaillera sur sa propre branche. Les modifications non commitées du topic ne sont pas copiées.')) return;
+    creating = copy ? topic : null;
     try {
-      const s = await createSession(topic);
+      const s = await createSession(topic, 'auto', copy);
       await load();
       open(s.id);
     } catch (e) {
       error = message(e);
+    } finally {
+      creating = null;
     }
   }
   function rename(s: Session) {
@@ -72,7 +77,10 @@
     if (title) act(() => patchSession(s.id, { title }));
   }
   function remove(s: Session) {
-    if (confirm(`Supprimer la session « ${s.title} » et son historique ? Les fichiers du topic sont gardés.`))
+    const msg = s.copy_branch
+      ? `Supprimer la session « ${s.title} » ? La copie et sa branche seront supprimées ; ce qui n’a pas été ramené dans le topic est perdu.`
+      : `Supprimer la session « ${s.title} » et son historique ? Les fichiers du topic sont gardés.`;
+    if (confirm(msg))
       act(() => deleteSession(s.id));
   }
   function removeTopic(name: string, id: number) {
@@ -87,6 +95,7 @@
   <li class:current={s.id === selected}>
     <a href="#sessions/{s.id}" class="sess" title={s.title}>
       {#if s.running}<span class="dot" title="Tour en cours"></span>{/if}{s.title}
+      {#if s.copy_branch}<span class="branch" title={s.copy_branch}>copie</span>{/if}
     </a>
     <details class="menu">
       <summary aria-label="Actions">⋯</summary>
@@ -126,6 +135,10 @@
               <button class="link" onclick={() => (closed[t.id] = !closed[t.id])}>{closed[t.id] ? '▸' : '▾'} {t.name}</button>
               <span class="tools">
                 <button class="link small" onclick={() => newSession(t.id)} title="Nouvelle session">+ session</button>
+                {#if t.git}
+                  <button class="link small" onclick={() => newSession(t.id, true)} disabled={creating === t.id}
+                    title="Nouvelle session dans une copie séparée du dépôt git">{creating === t.id ? 'Création de la copie…' : '+ copie'}</button>
+                {/if}
                 <button class="link small" onclick={() => removeTopic(t.name, t.id)} title="Supprimer le topic">×</button>
               </span>
             </div>
@@ -159,4 +172,5 @@
   .pop { position: absolute; right: 0; z-index: 2; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2) var(--s3); display: flex; flex-direction: column; gap: var(--s1); min-width: 130px; }
   .danger { color: var(--error); }
   input[type='search'] { width: 100%; }
+  .branch { margin-left: var(--s1); font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 5px; }
 </style>

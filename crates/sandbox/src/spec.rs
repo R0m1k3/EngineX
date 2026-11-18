@@ -47,7 +47,7 @@ pub fn host_path(p: &Path, opts: &DockerOpts) -> anyhow::Result<String> {
 pub fn container_spec(spec: &Spec, opts: &DockerOpts) -> anyhow::Result<ContainerCreateBody> {
     let m = &spec.mounts;
     let binds = vec![
-        format!("{}:{WORKDIR}:rw", host_path(&m.topic, opts)?),
+        format!("{}:{WORKDIR}:rw", host_path(&m.work, opts)?),
         format!("{}:{CODEX_HOME}:rw", host_path(&m.codex_home, opts)?),
         format!("{}:{RUN_DIR}:ro", host_path(&m.run, opts)?),
         format!("{}:{ATTACHMENTS}:ro", host_path(&m.attachments, opts)?),

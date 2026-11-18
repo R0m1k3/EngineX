@@ -66,6 +66,7 @@ pub struct TopicInfo {
     pub id: i64,
     pub project_id: i64,
     pub project_slug: String,
+    pub slug: String,
     pub dir: PathBuf,
 }
 
@@ -82,6 +83,7 @@ pub async fn topic(state: &AppState, topic_id: i64) -> Result<TopicInfo, ApiErro
         project_id: pid,
         dir: topic_path(state, &pslug, &tslug),
         project_slug: pslug,
+        slug: tslug,
     })
 }
 
@@ -170,7 +172,11 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError
             let t: Vec<Value> = topics
                 .iter()
                 .filter(|t| t.1 == id)
-                .map(|(tid, _, ts, tn, n)| json!({"id": tid, "slug": ts, "name": tn, "sessions": n}))
+                .map(|(tid, _, ts, tn, n)| {
+                    // Copie séparée proposée si le topic est un dépôt git.
+                    let git = crate::files::kind_beneath(&topic_path(&state, &slug, ts), ".git").is_some();
+                    json!({"id": tid, "slug": ts, "name": tn, "sessions": n, "git": git})
+                })
                 .collect();
             json!({"id": id, "slug": slug, "name": name, "topics": t})
         })

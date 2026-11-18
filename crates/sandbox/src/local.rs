@@ -69,7 +69,7 @@ impl Local {
             .arg(format!("ws://127.0.0.1:{port}"))
             .args(["--ws-auth", "capability-token", "--ws-token-file"])
             .arg(m.run.join("token"))
-            .current_dir(&m.topic)
+            .current_dir(&m.work)
             .env("CODEX_HOME", &m.codex_home)
             .envs(spec.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
@@ -92,7 +92,7 @@ impl Local {
         Ok(Handle {
             ws_url: format!("ws://127.0.0.1:{port}"),
             readyz_url: format!("http://127.0.0.1:{port}/readyz"),
-            cwd: m.topic.display().to_string(),
+            cwd: m.work.display().to_string(),
             attachments: m.attachments.display().to_string(),
         })
     }

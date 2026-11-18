@@ -2,7 +2,7 @@
   import { onDestroy, tick, untrack } from 'svelte';
   import {
     sessionDetail, postTurn, interruptTurn, patchSession, presets, message,
-    revertTurn, restoreUndo, restoreGreen, runVerify,
+    revertTurn, restoreUndo, restoreGreen, runVerify, bringBack,
     type Session, type StoredItem, type TurnInfo, type ItemData, type PendingRequest, type Usage, type Approval as Mode,
     type Verification,
   } from '../../lib/api';
@@ -303,6 +303,25 @@
     }
   }
 
+  let bringing = $state(false);
+  let brought = $state('');
+  async function bring() {
+    bringing = true;
+    error = '';
+    brought = '';
+    try {
+      const r = await bringBack(id);
+      brought =
+        r.result === 'merged'
+          ? `Branche ${r.branch} fusionnée dans le topic.`
+          : `La branche ${r.branch} est dans le dépôt du topic, sans fusion : ${r.reason === 'topic_dirty' ? 'le topic a des modifications non commitées' : 'la fusion a des conflits'}. Fusionnez-la depuis une session du topic.`;
+    } catch (e) {
+      error = message(e);
+    } finally {
+      bringing = false;
+    }
+  }
+
   const isVerify = (tid: string | null) => !!tid && turns[tid]?.origin === 'verify';
 
   async function rename() {
@@ -322,6 +341,10 @@
   <header class="row head">
     <button class="link title" title="Renommer" onclick={rename}>{session?.title ?? '…'}</button>
     <div class="actions small">
+      {#if session?.copy_branch}
+        <span class="muted" title="Copie séparée">⎇ {session.copy_branch}</span>
+        <button class="link" onclick={bring} disabled={bringing || !!live}>{bringing ? 'Fusion…' : 'Ramener dans le topic'}</button>
+      {/if}
       <button class="link" onclick={() => panel('files')}>Fichiers</button>
       <button class="link" onclick={() => panel('terminal')}>Terminal</button>
       <span class="pill state-{sandbox.state}" title={sandbox.detail ?? ''}>{SANDBOX[sandbox.state] ?? sandbox.state}{pull}</span>
@@ -341,6 +364,7 @@
     <p class="banner" class:bad={sandbox.state === 'error'}>{sandbox.detail}</p>
   {/if}
 
+  {#if brought}<p class="banner small">{brought}</p>{/if}
   {#if session?.undo}
     <p class="banner small row">
       <span>{redone ? 'Fichiers rétablis.' : 'Fichiers remis dans un état antérieur.'}</span>

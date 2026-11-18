@@ -269,6 +269,9 @@ fn session_json(state: &AppState, r: &SessionRow) -> Value {
 pub struct CreateBody {
     topic_id: i64,
     approval: Option<String>,
+    /// Copie séparée (topic dépôt git).
+    #[serde(default)]
+    copy: bool,
 }
 
 fn valid_approval(a: &str) -> bool {
@@ -276,15 +279,21 @@ fn valid_approval(a: &str) -> bool {
 }
 
 pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CreateBody>) -> Result<Json<Value>, ApiError> {
-    workspace::topic(&state, b.topic_id).await?;
+    let topic = workspace::topic(&state, b.topic_id).await?;
     let approval = b.approval.unwrap_or_else(|| "auto".into());
     if !valid_approval(&approval) {
         return Err(ApiError::BadRequest);
     }
     let id = uuid::Uuid::new_v4().to_string();
+    let branch = if b.copy {
+        Some(crate::copies::create(&state, &topic, &id).await?)
+    } else {
+        None
+    };
     let t = now();
     sqlx::query(
-        "INSERT INTO chat_sessions (id, topic_id, title, approval, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chat_sessions (id, topic_id, title, approval, created_at, updated_at, copy_branch) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(b.topic_id)
@@ -292,9 +301,10 @@ pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CreateBod
     .bind(&approval)
     .bind(t)
     .bind(t)
+    .bind(&branch)
     .execute(state.db())
     .await?;
-    Ok(Json(json!({ "id": id })))
+    Ok(Json(json!({ "id": id, "copy_branch": branch })))
 }
 
 #[derive(Deserialize)]
@@ -654,7 +664,7 @@ pub async fn events(State(state): State<AppState>, UrlPath(id): UrlPath<String>)
 
 /// 409 `folder_busy` si un tour ou une vérification tourne dans une session
 /// qui partage ce dossier de travail.
-async fn ensure_folder_free(state: &AppState, f: &snapshots::Folder) -> Result<(), ApiError> {
+pub(crate) async fn ensure_folder_free(state: &AppState, f: &snapshots::Folder) -> Result<(), ApiError> {
     let want = std::fs::canonicalize(&f.work).unwrap_or_else(|_| f.work.clone());
     for h in bridge::hubs(state) {
         if !h.busy() {

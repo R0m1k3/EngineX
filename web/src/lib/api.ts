@@ -451,6 +451,8 @@ export interface Topic {
   slug: string;
   name: string;
   sessions: number;
+  /** Dépôt git : copie séparée possible. */
+  git?: boolean;
 }
 
 export interface Project {
@@ -619,8 +621,8 @@ export function sessions(f: { topic?: number; q?: string; archived?: boolean }) 
   if (f.archived) p.set('archived', '1');
   return request<{ sessions: Session[] }>('GET', `/api/sessions?${p}`).then((r) => r.sessions);
 }
-export const createSession = (topic_id: number, approval: Approval = 'auto') =>
-  request<{ id: string }>('POST', '/api/sessions', { topic_id, approval });
+export const createSession = (topic_id: number, approval: Approval = 'auto', copy = false) =>
+  request<{ id: string; copy_branch: string | null }>('POST', '/api/sessions', { topic_id, approval, copy });
 export const sessionDetail = (id: string, before?: number) =>
   request<SessionDetail>('GET', `/api/sessions/${id}${before === undefined ? '' : `?before=${before}`}`);
 export const patchSession = (id: string, patch: { title?: string; approval?: Approval; archived?: boolean }) =>
@@ -675,3 +677,5 @@ export const tree = (id: string, path: string) =>
 export const fileText = (id: string, path: string) =>
   request<{ text: string; truncated: boolean; binary: boolean }>('GET', `${S(id)}/file/text?path=${q(path)}`);
 export const downloadUrl = (id: string, path: string) => `${fileUrl(id, path)}&download=1`;
+export const bringBack = (id: string) =>
+  request<{ result: 'merged' | 'branch_only'; reason?: 'topic_dirty' | 'conflict'; branch: string }>('POST', `${S(id)}/bring-back`);

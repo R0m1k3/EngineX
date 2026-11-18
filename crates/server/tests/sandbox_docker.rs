@@ -327,3 +327,39 @@ async fn code_session_in_a_real_docker_sandbox() {
         .unwrap();
     assert_eq!(left.as_array().unwrap().len(), 0, "{left}");
 }
+
+/// Copie séparée dans Docker : clone par le conteneur d'aide, tour dans la
+/// copie, « Ramener dans le topic », aucun conteneur d'aide restant.
+#[tokio::test]
+#[ignore = "lancé par la CI (job sandbox-e2e, ENGINEX_TEST_DOCKER=1)"]
+async fn copy_session_in_a_real_docker_sandbox() {
+    let (e, _port, _chat_log, _tmp) = docker_env("model-e2e-4b").await;
+    let topic = make_git_topic(&e, Some("https://example.com/depot.git"));
+    let (sid, branch) = new_copy_session(&e).await;
+    let copy = enginex_server::snapshots::copy_dir(&e.state, &sid);
+    assert_eq!(git_in(&copy, &["branch", "--show-current"]), branch);
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "Écris un.txt").await;
+    let t = until_long(&mut ev, "turn_stored", 300).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}\n{:?}", ev.names());
+    assert!(copy.join("un.txt").exists());
+    assert!(!topic.join("un.txt").exists(), "le tour a écrit dans le topic");
+    assert_eq!(std::fs::metadata(copy.join("un.txt")).unwrap().uid(), 1000);
+    let r = e
+        .send("POST", &format!("/api/sessions/{sid}/bring-back"), json!({}))
+        .await;
+    assert_eq!(r.body["result"], "merged", "{}", r.text);
+    assert_eq!(std::fs::read_to_string(topic.join("un.txt")).unwrap(), "un\n");
+    e.send("DELETE", &format!("/api/sessions/{sid}"), json!({})).await;
+    let filters = r#"{"label":["enginex.helper=1"]}"#;
+    let left: Value = reqwest::Client::new()
+        .get(format!("{PROXY}/containers/json"))
+        .query(&[("all", "1"), ("filters", filters)])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(left.as_array().unwrap().len(), 0, "{left}");
+}

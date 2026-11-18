@@ -188,14 +188,14 @@ async fn as_env(scenario: &str, fake_env: &str, vision: bool) -> AsEnv {
         .clone();
     let root = tmp.path().join("session");
     let mounts = Mounts {
-        topic: tmp.path().join("topic"),
+        work: tmp.path().join("topic"),
         codex_home: root.join("codex"),
         run: root.join("run"),
         attachments: root.join("attachments"),
         cache: tmp.path().join("cache"),
     };
     for d in [
-        &mounts.topic,
+        &mounts.work,
         &mounts.codex_home,
         &mounts.run,
         &mounts.attachments,
@@ -265,7 +265,7 @@ impl AsEnv {
     }
 
     fn cwd(&self) -> String {
-        self.spec.mounts.topic.display().to_string()
+        self.spec.mounts.work.display().to_string()
     }
 
     fn chat_requests(&self) -> Vec<Value> {
@@ -415,7 +415,7 @@ async fn appserver_approval() {
         asked.iter().any(|(m, _)| m == "item/commandExecution/requestApproval"),
         "V1 faux : aucune approbation demandée ({methods:?})"
     );
-    assert!(a.spec.mounts.topic.join("made.txt").exists(), "{methods:?}");
+    assert!(a.spec.mounts.work.join("made.txt").exists(), "{methods:?}");
 }
 
 /// V2 : `localImage` → `image_url` en data: dans la requête chat.

@@ -8,6 +8,7 @@ pub mod bridge;
 pub mod client_ip;
 pub mod codex_config;
 pub mod config;
+pub mod copies;
 pub mod db;
 pub mod engine_api;
 pub mod error;
@@ -128,6 +129,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/sessions/{id}/turns/{tid}/revert", post(sessions::revert))
         .route("/api/sessions/{id}/restore-undo", post(sessions::restore_undo))
         .route("/api/sessions/{id}/restore-green", post(sessions::restore_green))
+        .route("/api/sessions/{id}/bring-back", post(copies::bring_back))
         .route("/api/sessions/{id}/terminal", get(terminal::ws))
         .route("/api/sessions/{id}/verify", get(verify::get))
         .route("/api/sessions/{id}/verify/save", post(verify::save))

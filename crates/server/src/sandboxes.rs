@@ -223,15 +223,25 @@ pub(crate) async fn start(
     // 2. nouvelle clé interne.
     let key = api_keys::create_internal(state, &key_name(session_id)).await?;
     let dir = session_dir(state, session_id);
+    // Copie séparée : son dossier remplace le topic comme `/workspace`.
+    let copy = crate::sessions::row(state, session_id)
+        .await
+        .map(|r| r.copy_branch.is_some())
+        .unwrap_or(false);
+    let work = if copy {
+        crate::snapshots::copy_dir(state, session_id)
+    } else {
+        topic.dir.clone()
+    };
     let mounts = Mounts {
-        topic: topic.dir.clone(),
+        work,
         codex_home: dir.join("codex"),
         run: dir.join("run"),
         attachments: dir.join("attachments"),
         cache: state.config().data_dir.join("cache").join(&topic.project_slug),
     };
     for d in [
-        &mounts.topic,
+        &mounts.work,
         &mounts.codex_home,
         &mounts.run,
         &mounts.attachments,
@@ -246,9 +256,11 @@ pub(crate) async fn start(
     let toml = crate::codex_config::render(&active.name, active.settings.ctx, &state.config().sandbox.api_url);
     std::fs::write(mounts.codex_home.join("config.toml"), toml)?;
     // 5. environnement, puis conteneur.
+    // Ordre : identité git, secrets (un secret GIT_* l'emporte), variables d'EngineX.
     let secrets = vault::env_for(state, topic.project_id).await?;
     let injected: Vec<String> = secrets.iter().map(|(_, v)| v.clone()).collect();
-    let mut env = secrets;
+    let mut env = git_env(state).await;
+    env.extend(secrets);
     env.push((crate::codex_config::ENV_KEY.into(), key));
     env.extend(state.config().sandbox.extra_env.iter().cloned());
     let preset = preset_label(active);
@@ -410,6 +422,20 @@ pub async fn git_identity(state: &AppState) -> (String, String) {
         .flatten()
         .unwrap_or_else(|| "enginex@localhost".into());
     (name, email)
+}
+
+/// `GIT_AUTHOR_*` et `GIT_COMMITTER_*` du réglage Paramètres → Sessions.
+pub(crate) async fn git_env(state: &AppState) -> Vec<(String, String)> {
+    let (name, email) = git_identity(state).await;
+    ["AUTHOR", "COMMITTER"]
+        .iter()
+        .flat_map(|w| {
+            [
+                (format!("GIT_{w}_NAME"), name.clone()),
+                (format!("GIT_{w}_EMAIL"), email.clone()),
+            ]
+        })
+        .collect()
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
