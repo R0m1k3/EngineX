@@ -41,8 +41,9 @@ async fn serve() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// SIGTERM ou SIGINT : llama-server arrêté d'abord (15 s au plus), puis les
-/// requêtes en cours finissent ; sortie forcée au bout de 25 s.
+/// SIGTERM ou SIGINT : sandboxes supprimées (8 s au plus), puis llama-server
+/// arrêté (15 s au plus), puis les requêtes en cours finissent ; sortie
+/// forcée au bout de 25 s.
 async fn shutdown_signal(state: AppState) {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -61,6 +62,7 @@ async fn shutdown_signal(state: AppState) {
         tokio::time::sleep(Duration::from_secs(25)).await;
         std::process::exit(0);
     });
+    state.shutdown_sessions().await;
     let _ = tokio::time::timeout(Duration::from_secs(15), state.supervisor().stop(false)).await;
 }
 

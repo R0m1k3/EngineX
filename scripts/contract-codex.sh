@@ -9,6 +9,10 @@ dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 npm install --prefix "$dir" --no-audit --no-fund --silent "@openai/codex@${CODEX_VERSION:-latest}"
 codex="$dir/node_modules/.bin/codex"
-echo "Codex : $("$codex" --version)"
+full=$("$codex" --version)
+echo "Codex : $full"
+# Version testée (`codex-cli 0.170.0` -> `0.170.0`), reprise par le job devbox.
+version=$(echo "$full" | awk '{print $2}')
+if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "codex_version=$version" >> "$GITHUB_OUTPUT"; fi
 cargo build -p enginex-fake-llama
 ENGINEX_CODEX_BIN="$codex" cargo test -p enginex-server --test contract_codex -- --ignored --nocapture

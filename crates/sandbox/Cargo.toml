@@ -1,0 +1,19 @@
+[package]
+name = "enginex-sandbox"
+description = "Sandboxes de session : conteneur Docker ou processus local"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+bollard = "0.21"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+libc = "0.2"
+
+[dev-dependencies]

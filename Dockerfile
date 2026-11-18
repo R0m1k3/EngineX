@@ -21,13 +21,18 @@ COPY crates/engine/Cargo.toml crates/engine/
 COPY crates/hub/Cargo.toml crates/hub/
 COPY crates/oai/Cargo.toml crates/oai/
 COPY crates/fake-llama/Cargo.toml crates/fake-llama/
-RUN mkdir -p crates/server/src crates/engine/src crates/hub/src crates/oai/src crates/fake-llama/src web/dist \
+COPY crates/codex/Cargo.toml crates/codex/
+COPY crates/sandbox/Cargo.toml crates/sandbox/
+RUN mkdir -p crates/server/src crates/engine/src crates/hub/src crates/oai/src crates/fake-llama/src \
+       crates/codex/src crates/sandbox/src web/dist \
     && echo 'fn main() {}' > crates/server/src/main.rs && touch crates/server/src/lib.rs \
     && touch crates/engine/src/lib.rs crates/hub/src/lib.rs crates/oai/src/lib.rs \
+       crates/codex/src/lib.rs crates/sandbox/src/lib.rs \
     && echo 'fn main() {}' > crates/fake-llama/src/main.rs \
     && echo '<!doctype html>' > web/dist/index.html \
     && cargo build --release --locked -p enginex-server \
-    && rm -rf crates/server/src crates/engine/src crates/hub/src crates/oai/src crates/fake-llama/src web/dist
+    && rm -rf crates/server/src crates/engine/src crates/hub/src crates/oai/src crates/fake-llama/src \
+       crates/codex/src crates/sandbox/src web/dist
 COPY crates/ crates/
 COPY --from=web /src/web/dist web/dist
 # Sources plus récentes que les vides compilés ci-dessus.

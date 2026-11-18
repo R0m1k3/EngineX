@@ -1,0 +1,4 @@
+[
+ {"tool_calls": [{"name": "exec_command", "arguments": "{\"cmd\": \"echo contrat\"}", "id": "call_echo"}]},
+ {"content": "La commande a affiché contrat."}
+]

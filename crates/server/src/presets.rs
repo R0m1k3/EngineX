@@ -33,10 +33,11 @@ pub struct PresetRow {
     pub model_id: i64,
     pub settings: String,
     pub sources: String,
+    pub updated_at: i64,
 }
 
 pub async fn preset(state: &AppState, id: i64) -> Result<PresetRow, ApiError> {
-    sqlx::query_as("SELECT id, name, model_id, settings, sources FROM presets WHERE id = ?")
+    sqlx::query_as("SELECT id, name, model_id, settings, sources, updated_at FROM presets WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.0.db)
         .await?
@@ -142,7 +143,7 @@ fn to_json(p: &PresetRow, active: Option<i64>) -> Result<Value, ApiError> {
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let rows: Vec<PresetRow> =
-        sqlx::query_as("SELECT id, name, model_id, settings, sources FROM presets ORDER BY name, id")
+        sqlx::query_as("SELECT id, name, model_id, settings, sources, updated_at FROM presets ORDER BY name, id")
             .fetch_all(&state.0.db)
             .await?;
     let active = active_id(&state).await?;

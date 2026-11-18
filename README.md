@@ -3,12 +3,10 @@
 Application locale qui pilote un agent de code. Elle fait tourner des modèles GGUF avec llama.cpp sur GPU NVIDIA, et
 Codex CLI sert d'agent dans une sandbox par session. Un seul utilisateur, tout reste sur la machine.
 
-**État : étape 1 (socle).** Pour l'instant, EngineX fait trois choses :
-- il sert l'interface, protégée par un mot de passe ;
-- il affiche une page Système avec les GPU vus par `nvidia-smi`, ainsi que la version et les périphériques CUDA vus par `llama-server` ;
-- il publie son image automatiquement.
-
-Le moteur, les modèles Hugging Face, Codex, les sandboxes et la mémoire arrivent aux étapes suivantes.
+**État : étape 4a (sessions).** EngineX fait tourner les modèles GGUF : recherche et téléchargement sur Hugging Face,
+presets réglés d'après la page du modèle, mise à jour de llama.cpp. Il sert une API compatible OpenAI pour Codex, et la
+page Sessions permet de travailler avec Codex dans une sandbox Docker. La mémoire, les tâches, les fichiers et la
+vérification automatique arrivent aux étapes suivantes.
 
 ## Installation (Portainer ou compose de l'Unraid)
 
@@ -98,6 +96,45 @@ la met en service quand le modèle est au repos (10 minutes sans requête, aucun
 ne charge pas ou si les appels d'outils ne passent plus, EngineX revient à la version d'avant et ne retente plus
 celle-là ; l'installer à la main la remet en jeu.
 
+## Sessions et sandboxes
+
+La page Sessions s'ouvre au démarrage. À gauche se trouvent les projets, leurs topics et leurs sessions ; au centre, le
+fil de la session ouverte. Un topic est un dossier de travail (`/data/workspace/projects/<projet>/topics/<topic>`)
+partagé par toutes ses sessions.
+
+Chaque session a sa sandbox. Le premier message démarre un conteneur à partir de l'image
+`ghcr.io/r0m1k3/enginex-devbox:latest` (Node, Python avec uv, Rust, Go, gh et Codex), et Codex y travaille dans le
+dossier du topic, monté sur `/workspace`. Ouvrir ou relire une session ne démarre rien. La sandbox s'arrête après
+10 minutes sans tour en cours (réglable dans Paramètres → Sessions), ou quand la session est archivée ou supprimée.
+Le code et l'historique restent : au message suivant, une nouvelle sandbox démarre et Codex reprend le fil.
+
+L'image devbox pèse plusieurs Go. Le premier message la télécharge, avec la progression affichée dans la session ;
+EngineX la met ensuite à jour en fond toutes les 24 h. Quand EngineX redémarre (une mise à jour Watchtower par
+exemple), il supprime les sandboxes et le tour en cours est perdu, mais le code et le fil sont gardés.
+
+En mode d'approbation *Automatique*, Codex lance ses commandes sans demander. En mode *Prudent*, il demande votre
+accord dans le fil avant chaque commande ou modification. Vous pouvez joindre, coller ou glisser des images quand le
+preset actif a un fichier mmproj (vision).
+
+### Secrets
+
+Paramètres → Clés enregistre des secrets, pour tous les projets ou pour un seul. Chacun devient une variable
+d'environnement dans les sandboxes. Les valeurs sont chiffrées avec `/data/master.key` : sauvegardez ce fichier avec le
+volume, car sans lui les secrets sont illisibles. EngineX remplace les valeurs par `***` dans l'historique et dans ce
+qu'il envoie au modèle. Une commande lancée dans la sandbox peut quand même les lire et les envoyer ailleurs, donc ne
+donnez que des jetons aux droits limités. Les valeurs de moins de 6 caractères ne sont pas masquées. Une sandbox déjà démarrée garde ses variables jusqu'à
+son arrêt : un secret ajouté, modifié ou supprimé compte au démarrage suivant.
+
+### Accès à Docker
+
+EngineX passe par le service `docker-proxy` de la stack (tecnativa/docker-socket-proxy) au lieu du socket Docker. Le
+proxy n'autorise que les conteneurs et les images : pas d'`exec`, de volumes ni de réseaux. Il est sur un réseau
+interne que les sandboxes ne voient pas. Les sandboxes ont accès à Internet et joignent EngineX par
+`http://enginex:8090/v1`. Elles tournent en uid 1000, sans privilèges ni capacités, avec 8 Go de mémoire au plus.
+
+Docker attend des chemins de l'hôte. EngineX lit donc le montage de son propre conteneur pour savoir où se trouve
+`/data` sur l'hôte. Si la détection échoue, donnez ce chemin avec `ENGINEX_HOST_DATA`.
+
 ## Accès depuis l'extérieur
 
 EngineX ne fait pas de HTTPS. Sur le réseau local, l'accès direct suffit. Hors du réseau local, passez par un VPN
@@ -111,7 +148,7 @@ EngineX ne fait pas de HTTPS. Sur le réseau local, l'accès direct suffit. Hors
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `ENGINEX_DATA` | `/data` | base SQLite (`enginex.db`) |
+| `ENGINEX_DATA` | `/data` | base SQLite (`enginex.db`), clé du coffre (`master.key`), dossiers des topics et des sessions |
 | `ENGINEX_TRUST_PROXY` | `false` | lire `X-Forwarded-For/Proto/Host` (derrière un reverse proxy uniquement) |
 | `ENGINEX_LLAMA_BIN` | absent | impose le binaire llama-server (tests, dépannage) ; absent : moteur choisi dans Paramètres → Moteur, sinon `/app/llama-server` |
 | `ENGINEX_MODELS` | `/models` | dossier des modèles GGUF |
@@ -121,6 +158,14 @@ EngineX ne fait pas de HTTPS. Sur le réseau local, l'accès direct suffit. Hors
 | `ENGINEX_HF_BASE` | `https://huggingface.co` | adresse de Hugging Face (tests) |
 | `ENGINEX_OCI_REGISTRY` | `https://ghcr.io` | registre des images llama.cpp (tests) |
 | `ENGINEX_BIND` | `0.0.0.0:8090` | adresse d'écoute (développement ; l'image écoute sur 8090) |
+| `ENGINEX_SANDBOX` | `docker` | `docker`, ou `local` (développement : Codex lancé en processus, sans isolation) |
+| `ENGINEX_DOCKER_HOST` | `tcp://docker-proxy:2375` | accès à Docker (le proxy de la stack) |
+| `ENGINEX_DEVBOX_IMAGE` | `ghcr.io/r0m1k3/enginex-devbox:latest` | image des sandboxes |
+| `ENGINEX_SANDBOX_NETWORK` | `enginex-sandbox` | réseau Docker des sandboxes |
+| `ENGINEX_SANDBOX_API_URL` | `http://enginex:8090/v1` | adresse d'EngineX vue depuis une sandbox |
+| `ENGINEX_SANDBOX_MEMORY` | `8g` | mémoire maximale d'une sandbox |
+| `ENGINEX_HOST_DATA` | absent | chemin de `/data` sur l'hôte, si la détection échoue |
+| `ENGINEX_CODEX_BIN` | `codex` | binaire Codex du mode `local` |
 | `RUST_LOG` | `info` | niveau des logs |
 
 ## Développement
@@ -132,6 +177,8 @@ cd web && npm ci && npm run dev          # UI sur http://localhost:5173, /api re
 cargo build -p enginex-fake-llama        # faux llama-server (pas de GPU nécessaire)
 ENGINEX_DATA=/tmp/ex/data ENGINEX_MODELS=/tmp/ex/models ENGINEX_BIND=127.0.0.1:8090 \
   ENGINEX_IMAGE_LLAMA_BIN=$PWD/target/debug/fake-llama-server \
+  ENGINEX_SANDBOX=local ENGINEX_CODEX_BIN=$(which codex) \
+  ENGINEX_SANDBOX_API_URL=http://127.0.0.1:8090/v1 \
   cargo run -p enginex-server             # API (code de configuration dans la sortie)
 ```
 

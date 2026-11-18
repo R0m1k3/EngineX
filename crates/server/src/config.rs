@@ -22,6 +22,81 @@ pub struct Timings {
     /// Lance la boucle de mise à jour automatique (les tests appellent `tick`).
     pub auto_loop: bool,
     pub auto: AutoUpdateTimings,
+    pub sandbox: SandboxTimings,
+}
+
+#[derive(Clone, Debug)]
+pub struct SandboxTimings {
+    /// Attente de `/readyz` après le démarrage d'une sandbox.
+    pub ready_wait: Duration,
+    /// Délai d'une requête à l'app-server.
+    pub rpc_timeout: Duration,
+    /// Période du contrôle d'inactivité.
+    pub idle_tick: Duration,
+    /// Remplace `sandbox.idle_minutes` (tests).
+    pub idle_override: Option<Duration>,
+    /// Tirage de l'image devbox en fond (`None` : jamais).
+    pub pull_every: Option<Duration>,
+}
+
+impl Default for SandboxTimings {
+    fn default() -> Self {
+        Self {
+            ready_wait: Duration::from_secs(60),
+            rpc_timeout: Duration::from_secs(30),
+            idle_tick: Duration::from_secs(30),
+            idle_override: None,
+            pull_every: Some(Duration::from_secs(24 * 3600)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SandboxBackend {
+    Docker,
+    Local,
+}
+
+/// Sandboxes de session (variables `ENGINEX_SANDBOX*`, `ENGINEX_DOCKER_HOST`,
+/// `ENGINEX_DEVBOX_IMAGE`, `ENGINEX_HOST_DATA`, `ENGINEX_CODEX_BIN`).
+#[derive(Clone, Debug)]
+pub struct SandboxConfig {
+    pub backend: SandboxBackend,
+    /// Binaire `codex` du backend local.
+    pub codex_bin: PathBuf,
+    pub docker_host: String,
+    pub devbox_image: String,
+    /// Dossier de données vu par l'hôte Docker (sinon découvert).
+    pub host_data: Option<PathBuf>,
+    pub network: String,
+    /// URL de `/v1` vue depuis une sandbox.
+    pub api_url: String,
+    pub host_gateway: bool,
+    /// Mémoire d'une sandbox (octets).
+    pub memory: i64,
+    /// Variables ajoutées à chaque sandbox (tests ; vide en production).
+    pub extra_env: Vec<(String, String)>,
+    /// `ENGINEX_RECORD_DIR` : enregistre les échanges du pont (contrat).
+    pub record_dir: Option<PathBuf>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            backend: SandboxBackend::Local,
+            codex_bin: "codex".into(),
+            docker_host: "tcp://docker-proxy:2375".into(),
+            devbox_image: "ghcr.io/r0m1k3/enginex-devbox:latest".into(),
+            host_data: None,
+            network: "enginex-sandbox".into(),
+            api_url: "http://enginex:8090/v1".into(),
+            host_gateway: false,
+            memory: 8 << 30,
+            extra_env: Vec::new(),
+            record_dir: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +121,7 @@ impl Default for Timings {
                 idle_for: Duration::from_secs(10 * 60),
                 tick: Duration::from_secs(60),
             },
+            sandbox: SandboxTimings::default(),
         }
     }
 }
@@ -67,6 +143,7 @@ pub struct Config {
     pub registry: String,
     pub hf_base: String,
     pub timings: Timings,
+    pub sandbox: SandboxConfig,
 }
 
 impl Config {
@@ -93,6 +170,7 @@ impl Config {
             registry: var("ENGINEX_OCI_REGISTRY", "https://ghcr.io"),
             hf_base: var("ENGINEX_HF_BASE", "https://huggingface.co"),
             timings: Timings::default(),
+            sandbox: sandbox_from_env()?,
         })
     }
 
@@ -107,6 +185,45 @@ impl Config {
         check_writable(&self.data_dir)?;
         check_writable(&self.models_dir)
     }
+}
+
+fn sandbox_from_env() -> anyhow::Result<SandboxConfig> {
+    let d = SandboxConfig::default();
+    let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let backend = match var("ENGINEX_SANDBOX").as_deref().unwrap_or("docker") {
+        "docker" => SandboxBackend::Docker,
+        "local" => SandboxBackend::Local,
+        other => anyhow::bail!("ENGINEX_SANDBOX invalide ({other}) : docker ou local"),
+    };
+    let memory = match var("ENGINEX_SANDBOX_MEMORY") {
+        Some(v) => parse_size(&v).ok_or_else(|| anyhow::anyhow!("ENGINEX_SANDBOX_MEMORY invalide ({v})"))?,
+        None => d.memory,
+    };
+    Ok(SandboxConfig {
+        backend,
+        codex_bin: var("ENGINEX_CODEX_BIN").map(PathBuf::from).unwrap_or(d.codex_bin),
+        docker_host: var("ENGINEX_DOCKER_HOST").unwrap_or(d.docker_host),
+        devbox_image: var("ENGINEX_DEVBOX_IMAGE").unwrap_or(d.devbox_image),
+        host_data: var("ENGINEX_HOST_DATA").map(PathBuf::from),
+        network: var("ENGINEX_SANDBOX_NETWORK").unwrap_or(d.network),
+        api_url: var("ENGINEX_SANDBOX_API_URL").unwrap_or(d.api_url),
+        host_gateway: matches!(var("ENGINEX_SANDBOX_HOST_GATEWAY").as_deref(), Some("1" | "true")),
+        memory,
+        extra_env: Vec::new(),
+        record_dir: var("ENGINEX_RECORD_DIR").map(PathBuf::from),
+    })
+}
+
+/// `8g`, `512m`, `1073741824`.
+fn parse_size(v: &str) -> Option<i64> {
+    let v = v.trim().to_ascii_lowercase();
+    let (n, mul) = match v.chars().last()? {
+        'g' => (&v[..v.len() - 1], 1i64 << 30),
+        'm' => (&v[..v.len() - 1], 1 << 20),
+        'k' => (&v[..v.len() - 1], 1 << 10),
+        _ => (&v[..], 1),
+    };
+    n.trim_end_matches('i').parse::<i64>().ok().map(|n| n * mul)
 }
 
 fn check_writable(dir: &Path) -> anyhow::Result<()> {

@@ -18,10 +18,11 @@ const NAME_MAX: usize = 50;
 pub const PREFIX: &str = "ex_";
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let rows: Vec<(i64, String, i64, Option<i64>)> =
-        sqlx::query_as("SELECT id, name, created_at, last_used_at FROM api_keys ORDER BY created_at, id")
-            .fetch_all(state.db())
-            .await?;
+    let rows: Vec<(i64, String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT id, name, created_at, last_used_at FROM api_keys WHERE internal = 0 ORDER BY created_at, id",
+    )
+    .fetch_all(state.db())
+    .await?;
     Ok(Json(Value::Array(
         rows.into_iter()
             .map(|(id, name, c, u)| json!({"id": id, "name": name, "created_at": c, "last_used_at": u}))
@@ -59,7 +60,8 @@ pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CreateBod
 }
 
 pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) -> Result<Json<Value>, ApiError> {
-    let done = sqlx::query("DELETE FROM api_keys WHERE id = ?")
+    // Les clés `internal` (sandboxes) n'existent pas pour l'UI.
+    let done = sqlx::query("DELETE FROM api_keys WHERE id = ? AND internal = 0")
         .bind(id)
         .execute(state.db())
         .await?;
@@ -69,11 +71,33 @@ pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) ->
     Ok(Json(json!({ "ok": true })))
 }
 
-/// Id de la clé, si elle existe (recherche du hash) ; pose `last_used_at`.
-pub(crate) async fn find(state: &AppState, key: &str) -> Result<Option<i64>, sqlx::Error> {
-    sqlx::query_scalar("UPDATE api_keys SET last_used_at = ? WHERE hash = ? RETURNING id")
+/// `(id, internal)` de la clé, si elle existe (recherche du hash) ; pose
+/// `last_used_at`.
+pub(crate) async fn find(state: &AppState, key: &str) -> Result<Option<(i64, bool)>, sqlx::Error> {
+    sqlx::query_as("UPDATE api_keys SET last_used_at = ? WHERE hash = ? RETURNING id, internal")
         .bind(now())
         .bind(sha256(key.as_bytes()))
         .fetch_optional(state.db())
         .await
+}
+
+/// Crée la clé interne `name` (sandbox) et rend sa valeur.
+pub(crate) async fn create_internal(state: &AppState, name: &str) -> Result<String, sqlx::Error> {
+    let key = format!("{PREFIX}{}", random_token());
+    sqlx::query("INSERT INTO api_keys (name, hash, created_at, internal) VALUES (?, ?, ?, 1)")
+        .bind(name)
+        .bind(sha256(key.as_bytes()))
+        .bind(now())
+        .execute(state.db())
+        .await?;
+    Ok(key)
+}
+
+/// Révoque la clé interne `name` (sans erreur si absente).
+pub(crate) async fn revoke_internal(state: &AppState, name: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM api_keys WHERE name = ? AND internal = 1")
+        .bind(name)
+        .execute(state.db())
+        .await
+        .map(|_| ())
 }

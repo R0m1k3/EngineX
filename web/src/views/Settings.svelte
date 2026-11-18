@@ -1,9 +1,17 @@
 <script lang="ts">
   import Engine from './settings/Engine.svelte';
   import Api from './settings/Api.svelte';
+  import Vault from './settings/Vault.svelte';
+  import Sessions from './settings/Sessions.svelte';
 
   let { sub }: { sub: string } = $props();
-  let tab = $derived(sub === 'api' ? 'api' : 'engine');
+  const tabs = [
+    { id: 'engine', label: 'Moteur' },
+    { id: 'sessions', label: 'Sessions' },
+    { id: 'vault', label: 'Clés' },
+    { id: 'api', label: 'API' },
+  ];
+  let tab = $derived(tabs.some((t) => t.id === sub) ? sub : 'engine');
 </script>
 
 <header class="row">
@@ -11,8 +19,9 @@
 </header>
 
 <div class="tabs" role="tablist">
-  <a role="tab" href="#settings/engine" class:active={tab === 'engine'} aria-selected={tab === 'engine'}>Moteur</a>
-  <a role="tab" href="#settings/api" class:active={tab === 'api'} aria-selected={tab === 'api'}>API</a>
+  {#each tabs as t (t.id)}
+    <a role="tab" href="#settings/{t.id}" class:active={tab === t.id} aria-selected={tab === t.id}>{t.label}</a>
+  {/each}
 </div>
 
-{#if tab === 'api'}<Api />{:else}<Engine />{/if}
+{#if tab === 'api'}<Api />{:else if tab === 'vault'}<Vault />{:else if tab === 'sessions'}<Sessions />{:else}<Engine />{/if}

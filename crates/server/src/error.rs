@@ -54,6 +54,27 @@ pub enum ApiError {
     NameTaken,
     #[error("no_active_preset")]
     NoActivePreset,
+    #[error("vault_locked")]
+    VaultLocked,
+    #[error("invalid_name")]
+    InvalidName,
+    #[error("not_empty")]
+    NotEmpty,
+    #[error("engine_not_ready")]
+    EngineNotReady,
+    #[error("no_vision")]
+    NoVision,
+    #[error("turn_in_progress")]
+    TurnInProgress,
+    #[error("sandbox_unavailable")]
+    SandboxUnavailable,
+    #[error("sandbox_timeout")]
+    SandboxTimeout,
+    #[error("too_many_sandboxes")]
+    TooManySandboxes,
+    /// `true` : trop gros (413), sinon type refusé (400).
+    #[error("attachment_invalid")]
+    AttachmentInvalid(bool),
     /// Hugging Face ou ghcr injoignable ou en erreur (détail dans les logs).
     #[error("upstream_error")]
     Upstream(String),
@@ -78,7 +99,16 @@ impl ApiError {
             | Self::NofitConfirmRequired
             | Self::EnvOverride
             | Self::NameTaken
-            | Self::NoActivePreset => StatusCode::CONFLICT,
+            | Self::NoActivePreset
+            | Self::VaultLocked
+            | Self::NotEmpty
+            | Self::NoVision
+            | Self::TurnInProgress
+            | Self::TooManySandboxes => StatusCode::CONFLICT,
+            Self::InvalidName | Self::AttachmentInvalid(false) => StatusCode::BAD_REQUEST,
+            Self::AttachmentInvalid(true) => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::EngineNotReady | Self::SandboxUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::SandboxTimeout => StatusCode::GATEWAY_TIMEOUT,
             Self::GatedRepo => StatusCode::FORBIDDEN,
             Self::DiskFull => StatusCode::INSUFFICIENT_STORAGE,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,

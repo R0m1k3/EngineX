@@ -1,8 +1,10 @@
 //! EngineX : serveur de l'API et de l'UI embarquée.
 
 pub mod api_keys;
+pub mod attachments;
 pub mod auth;
 pub mod autoupdate;
+pub mod bridge;
 pub mod client_ip;
 pub mod codex_config;
 pub mod config;
@@ -10,16 +12,21 @@ pub mod db;
 pub mod engine_api;
 pub mod error;
 pub mod limiter;
+pub mod mask;
 pub mod models;
 pub mod presets;
+pub mod sandboxes;
+pub mod sessions;
 pub mod state;
 pub mod system;
 pub mod v1;
+pub mod vault;
 pub mod web;
+pub mod workspace;
 
 use axum::{
     Json, Router,
-    extract::Request,
+    extract::{DefaultBodyLimit, Request},
     http::{HeaderValue, Method, header},
     middleware,
     response::{IntoResponse, Response},
@@ -90,6 +97,32 @@ pub fn app(state: AppState) -> Router {
         .route("/api/api-keys", get(api_keys::list).post(api_keys::create))
         .route("/api/api-keys/{id}", delete(api_keys::delete))
         .route("/api/codex-config", get(codex_config::codex_config))
+        .route("/api/vault", get(vault::list).put(vault::put))
+        .route("/api/vault/{id}", delete(vault::delete))
+        .route("/api/projects", get(workspace::list).post(workspace::create_project))
+        .route("/api/projects/{id}", delete(workspace::delete_project))
+        .route("/api/projects/{id}/topics", post(workspace::create_topic))
+        .route("/api/topics/{id}", delete(workspace::delete_topic))
+        .route("/api/sessions", get(sessions::list).post(sessions::create))
+        .route(
+            "/api/sessions/{id}",
+            get(sessions::get).patch(sessions::patch).delete(sessions::delete),
+        )
+        .route("/api/sessions/{id}/turns", post(sessions::post_turn))
+        .route("/api/sessions/{id}/interrupt", post(sessions::interrupt))
+        .route("/api/sessions/{id}/requests/{rid}", post(sessions::answer))
+        .route(
+            "/api/sessions/{id}/attachments",
+            post(attachments::upload).layer(DefaultBodyLimit::max(attachments::BODY_LIMIT)),
+        )
+        .route("/api/sessions/{id}/attachments/{name}", get(attachments::serve))
+        .route("/api/sessions/{id}/file", get(attachments::file))
+        .route("/api/sessions/{id}/events", get(sessions::events))
+        .route("/api/sandbox/status", get(sandboxes::status))
+        .route(
+            "/api/settings/sessions",
+            get(sandboxes::get_settings).put(sandboxes::put_settings),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_session));
     let public = Router::new()
         .route("/api/health", get(health))

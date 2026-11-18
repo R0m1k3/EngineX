@@ -519,3 +519,86 @@ async fn gate_holds_loads_until_requests_end() {
     let (text, _) = late.await.unwrap();
     assert!(text.contains("event: response.completed"), "{text}");
 }
+
+// ---- Étape 4a : masquage et clés internes ----
+
+#[tokio::test]
+async fn secrets_are_masked_before_the_model_even_with_quotes_and_backslashes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("chat.log");
+    let e = env_with(&format!("FAKE_CHAT_LOG={}", log.display())).await;
+    make_active_preset(&e).await;
+    let key = new_key(&e, "codex").await;
+    let tricky = r#"ab"cd\ef-9876"#;
+    for (name, value) in [("PLAIN_TOKEN", "ghp_plainvalue123"), ("TRICKY", tricky)] {
+        let r = e
+            .send(
+                "PUT",
+                "/api/vault",
+                json!({"scope": "global", "name": name, "value": value}),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    }
+    let body = json!({"model": "x", "stream": true, "store": false, "input": [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "lis le fichier"}]},
+        {"type": "function_call", "call_id": "c1", "name": "exec_command", "arguments": "{\"cmd\":\"cat .env\"}"},
+        {"type": "function_call_output", "call_id": "c1",
+         "output": format!("TOKEN=ghp_plainvalue123\nOTHER={tricky}\n")},
+    ]});
+    let r = v1(&e.router, "POST", "/v1/responses", Some(&key), Some(body), None).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let sent = chat_log(&log);
+    let raw = serde_json::to_string(&sent).unwrap();
+    assert!(!raw.contains("ghp_plainvalue123"), "{raw}");
+    assert!(!sent.last().unwrap().to_string().contains("9876"), "{raw}");
+    let tool = sent.last().unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .unwrap()
+        .clone();
+    assert_eq!(tool["content"], "TOKEN=***\nOTHER=***\n");
+    // Même chose sur /v1/chat/completions.
+    let chat = json!({"model": "x", "messages": [{"role": "user", "content": "x ghp_plainvalue123 y"}]});
+    let r = v1(&e.router, "POST", "/v1/chat/completions", Some(&key), Some(chat), None).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(chat_log(&log).last().unwrap()["messages"][0]["content"], "x *** y");
+}
+
+#[tokio::test]
+async fn internal_keys_are_scoped_and_hidden() {
+    use sha2::{Digest, Sha256};
+    let e = env().await;
+    make_active_preset(&e).await;
+    let key = "ex_internal-key-for-tests";
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO api_keys (name, hash, created_at, internal) VALUES ('sandbox:t', ?, 0, 1) RETURNING id",
+    )
+    .bind(Sha256::digest(key.as_bytes()).to_vec())
+    .fetch_one(e.state.db())
+    .await
+    .unwrap();
+    let chat = json!({"model": "x", "messages": [{"role": "user", "content": "x"}]});
+    let r = v1(&e.router, "POST", "/v1/chat/completions", Some(key), Some(chat), None).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text);
+    assert_eq!(r.body["error"]["code"], "key_scope");
+    assert_eq!(r.body["error"]["type"], "invalid_request_error");
+    let r = v1(
+        &e.router,
+        "POST",
+        "/v1/responses",
+        Some(key),
+        Some(request("bonjour")),
+        None,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = v1(&e.router, "GET", "/v1/models", Some(key), None, None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let list = e.get("/api/api-keys").await;
+    assert!(!list.text.contains("sandbox:t"), "{}", list.text);
+    let r = e.send("DELETE", &format!("/api/api-keys/{id}"), json!({})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+}

@@ -20,7 +20,11 @@
 //! Sous-commandes :
 //! - `capture --port P --log F` : reçoit `POST /v1/responses`, ajoute le corps
 //!   brut à F (une ligne par requête) et répond un flux Responses minimal ;
-//! - `mcp` : serveur MCP minimal sur stdio (outil `echo(text)`).
+//! - `mcp` : serveur MCP minimal sur stdio (outil `echo(text)`) ;
+//! - `app-server --listen ws://… --ws-auth capability-token --ws-token-file F` :
+//!   faux `codex app-server` scripté (voir `appserver.rs`).
+
+mod appserver;
 
 use std::io::Write as _;
 use std::sync::Arc;
@@ -86,6 +90,7 @@ async fn main() {
         }
         Some("capture") => return capture(&args).await,
         Some("mcp") => return mcp().await,
+        Some("app-server") => return appserver::run(&args).await,
         _ => {}
     }
     eprintln!("main: argv = {}", args.join(" "));

@@ -20,7 +20,7 @@ use axum::{
 };
 use enginex_server::{
     AppState, Config, app,
-    config::{AutoUpdateTimings, Timings},
+    config::{AutoUpdateTimings, SandboxConfig, SandboxTimings, Timings},
     db,
 };
 use http_body_util::BodyExt;
@@ -31,6 +31,8 @@ use tower::ServiceExt;
 pub const PASSWORD: &str = "correct horse battery";
 pub const REPO: &str = "unsloth/Qwen3-0.6B-GGUF";
 pub const BASE: &str = "Qwen/Qwen3-0.6B";
+/// Dépôt de test avec un projecteur de vision.
+pub const VISION: &str = "test/vision";
 
 pub fn fake_bin() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
@@ -104,6 +106,12 @@ pub async fn serve_hf() -> String {
         {"type": "file", "path": "Qwen3-0.6B-Q8_0.gguf", "size": gguf.len(),
          "lfs": {"oid": sha_hex(&gguf), "size": gguf.len()}},
     ]);
+    let vision_tree = json!([
+        {"type": "file", "path": "vision-Q8_0.gguf", "size": gguf.len(),
+         "lfs": {"oid": sha_hex(&gguf), "size": gguf.len()}},
+        {"type": "file", "path": "mmproj-test.gguf", "size": gguf.len(),
+         "lfs": {"oid": sha_hex(&gguf), "size": gguf.len()}},
+    ]);
     let g = gguf.clone();
     let app = Router::new()
         .route(
@@ -118,13 +126,20 @@ pub async fn serve_hf() -> String {
                 match format!("{o}/{r}").as_str() {
                     REPO => Json(json!({"id": REPO, "gated": false, "cardData": {"base_model": BASE}})).into_response(),
                     BASE => Json(json!({"id": BASE, "gated": false, "cardData": {}})).into_response(),
+                    VISION => Json(json!({"id": VISION, "gated": false, "cardData": {}})).into_response(),
                     _ => StatusCode::NOT_FOUND.into_response(),
                 }
             }),
         )
         .route(
             "/api/models/{owner}/{repo}/tree/main",
-            get(move || async move { Json(tree.clone()) }),
+            get(move |UrlPath((o, r)): UrlPath<(String, String)>| async move {
+                if format!("{o}/{r}") == VISION {
+                    Json(vision_tree.clone())
+                } else {
+                    Json(tree.clone())
+                }
+            }),
         )
         .route(
             "/{owner}/{repo}/resolve/main/{*file}",
@@ -262,6 +277,13 @@ pub fn test_timings() -> Timings {
             idle_for: Duration::from_millis(300),
             tick: Duration::from_millis(50),
         },
+        sandbox: SandboxTimings {
+            ready_wait: Duration::from_secs(5),
+            rpc_timeout: Duration::from_secs(5),
+            idle_tick: Duration::from_millis(100),
+            idle_override: None,
+            pull_every: None,
+        },
     }
 }
 
@@ -379,6 +401,7 @@ pub async fn env_cfg(fake_env: &str, tweak: impl FnOnce(&mut Config)) -> Env {
         registry,
         hf_base: hf,
         timings: test_timings(),
+        sandbox: SandboxConfig::default(),
     };
     tweak(&mut config);
     config.check_data_dir().unwrap();
@@ -435,9 +458,289 @@ pub async fn make_active_preset(e: &Env) -> i64 {
     id
 }
 
+/// Télécharge le dépôt de vision (GGUF + mmproj), active son preset et attend
+/// `ready`.
+pub async fn make_active_vision_preset(e: &Env) -> i64 {
+    let r = e
+        .send(
+            "POST",
+            "/api/downloads",
+            json!({"repo": VISION, "quant": "Q8_0", "mmproj": "mmproj-test.gguf"}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    e.until("/api/downloads", |v| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["repo"] == VISION && d["state"] == "done")
+    })
+    .await;
+    let presets = e
+        .until("/api/presets", |v| {
+            v.as_array().unwrap().iter().any(|p| p["settings"]["mmproj"] == true)
+        })
+        .await;
+    let id = presets
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["settings"]["mmproj"] == true)
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let r = e.send("POST", &format!("/api/presets/{id}/activate"), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    e.until("/api/engine", |v| {
+        v["state"]["state"] == "ready" && v["state"]["preset_id"] == id
+    })
+    .await;
+    e.until("/api/engine/versions", |v| v["job"]["finished"] == true).await;
+    id
+}
+
 /// Crée une clé d'API et renvoie sa valeur.
 pub async fn new_key(e: &Env, name: &str) -> String {
     let r = e.send("POST", "/api/api-keys", json!({"name": name})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     r.body["key"].as_str().unwrap().to_string()
+}
+
+// ---- Sessions ----
+
+/// Sert `router` sur `port` (choisi d'avance par `free_port`).
+pub async fn serve_on(router: Router, port: u16) -> String {
+    let l = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+    tokio::spawn(async move {
+        axum::serve(l, router.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap()
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+pub fn contract_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/contract")
+}
+
+/// Étapes de `appserver-<nom>.jsonl` ; `edit` insère des étapes de contrôle.
+pub fn script_with(name: &str, edit: impl FnOnce(&mut Vec<Value>)) -> Vec<Value> {
+    let raw = std::fs::read_to_string(contract_dir().join(format!("appserver-{name}.jsonl")))
+        .unwrap_or_else(|_| panic!("appserver-{name}.jsonl absent"));
+    let mut steps: Vec<Value> = raw
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    edit(&mut steps);
+    steps
+}
+
+/// Position de la `n`-ième étape (0 = première) qui vérifie `f`.
+pub fn step_pos(steps: &[Value], n: usize, f: impl Fn(&Value) -> bool) -> usize {
+    steps
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| f(s))
+        .nth(n)
+        .map(|(i, _)| i)
+        .unwrap_or_else(|| panic!("étape {n} introuvable"))
+}
+
+pub fn is_send(method: &str) -> impl Fn(&Value) -> bool + '_ {
+    move |s: &Value| s["send"]["method"] == method
+}
+
+pub fn is_expect(method: &str) -> impl Fn(&Value) -> bool + '_ {
+    move |s: &Value| s["expect"] == method
+}
+
+/// Fichiers du faux app-server d'un test.
+pub struct FakeAs {
+    pub script: PathBuf,
+    pub log: PathBuf,
+    pub state: PathBuf,
+}
+
+impl FakeAs {
+    pub fn log(&self) -> Vec<Value> {
+        std::fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// Requêtes reçues de cette méthode.
+    pub fn received(&self, method: &str) -> Vec<Value> {
+        self.log()
+            .into_iter()
+            .filter_map(|l| l.get("received").cloned())
+            .filter(|m| m["method"] == method)
+            .collect()
+    }
+
+    pub fn unexpected(&self) -> Vec<Value> {
+        self.log()
+            .into_iter()
+            .filter_map(|l| l.get("unexpected").cloned())
+            .collect()
+    }
+}
+
+/// EngineX avec sandboxes locales jouées par le faux app-server (`script`) ;
+/// `tweak` ajuste la configuration.
+pub async fn env_sessions_cfg(script: &[Value], fake_env: &str, tweak: impl FnOnce(&mut Config)) -> (Env, FakeAs) {
+    let files = tempfile::tempdir().unwrap().keep();
+    let fake = FakeAs {
+        script: files.join("script.jsonl"),
+        log: files.join("log.jsonl"),
+        state: files.join("state"),
+    };
+    let lines: Vec<String> = script.iter().map(Value::to_string).collect();
+    std::fs::write(&fake.script, lines.join("\n")).unwrap();
+    let extra = vec![
+        ("FAKE_APPSERVER_SCRIPT".to_string(), fake.script.display().to_string()),
+        ("FAKE_APPSERVER_LOG".to_string(), fake.log.display().to_string()),
+        ("FAKE_APPSERVER_STATE".to_string(), fake.state.display().to_string()),
+    ];
+    let e = env_cfg(fake_env, |c| {
+        c.sandbox.backend = enginex_server::config::SandboxBackend::Local;
+        c.sandbox.codex_bin = fake_bin();
+        c.sandbox.extra_env = extra;
+        tweak(c);
+    })
+    .await;
+    (e, fake)
+}
+
+pub async fn env_sessions(script: &[Value]) -> (Env, FakeAs) {
+    env_sessions_cfg(script, "", |_| {}).await
+}
+
+/// Id du topic `general/inbox`.
+pub async fn inbox(e: &Env) -> i64 {
+    let p = e.get("/api/projects").await.body;
+    p["projects"][0]["topics"][0]["id"].as_i64().unwrap()
+}
+
+pub async fn new_session(e: &Env, approval: &str) -> String {
+    let topic = inbox(e).await;
+    let r = e
+        .send(
+            "POST",
+            "/api/sessions",
+            json!({"topic_id": topic, "approval": approval}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    r.body["id"].as_str().unwrap().to_string()
+}
+
+/// Flux SSE ouvert : événements `(nom, données)`.
+pub struct Sse {
+    rx: tokio::sync::mpsc::UnboundedReceiver<(String, Value)>,
+    pub seen: Vec<(String, Value)>,
+}
+
+pub async fn sse(e: &Env, path: &str) -> Sse {
+    let req = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header(header::HOST, "enginex:8090")
+        .header(header::COOKIE, &e.cookie)
+        .body(Body::empty())
+        .unwrap();
+    let res = e.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let mut body = res.into_body().into_data_stream();
+        let mut buf = String::new();
+        use futures_util::StreamExt;
+        while let Some(Ok(chunk)) = body.next().await {
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(pos) = buf.find("\n\n") {
+                let block: String = buf.drain(..pos + 2).collect();
+                let mut name = String::new();
+                let mut data = String::new();
+                for line in block.lines() {
+                    if let Some(n) = line.strip_prefix("event: ") {
+                        name = n.to_string();
+                    } else if let Some(d) = line.strip_prefix("data: ") {
+                        data.push_str(d);
+                    }
+                }
+                if name.is_empty() {
+                    continue;
+                }
+                let v = serde_json::from_str(&data).unwrap_or(Value::Null);
+                if tx.send((name, v)).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    Sse { rx, seen: Vec::new() }
+}
+
+impl Sse {
+    /// Lit jusqu'à un événement `name` qui vérifie `f` (30 s au plus).
+    pub async fn until(&mut self, name: &str, f: impl Fn(&Value) -> bool) -> Value {
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(30), self.rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("événement {name} attendu ; vus : {:?}", self.names()))
+                .expect("flux SSE fermé");
+            self.seen.push(ev.clone());
+            if ev.0 == name && f(&ev.1) {
+                return ev.1;
+            }
+        }
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.seen
+            .iter()
+            .map(|(n, v)| match v["method"].as_str() {
+                Some(m) => format!("{n}:{m}"),
+                None => n.clone(),
+            })
+            .collect()
+    }
+}
+
+pub async fn turn(e: &Env, sid: &str, text: &str) -> Resp {
+    e.send("POST", &format!("/api/sessions/{sid}/turns"), json!({ "text": text }))
+        .await
+}
+
+/// Envoie des octets bruts avec un Content-Type.
+pub async fn upload(e: &Env, path: &str, ctype: &str, bytes: Vec<u8>) -> Resp {
+    let req = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header(header::HOST, "enginex:8090")
+        .header(header::COOKIE, &e.cookie)
+        .header(header::CONTENT_TYPE, ctype)
+        .body(Body::from(bytes))
+        .unwrap();
+    let res = e.router.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    Resp {
+        status,
+        body: serde_json::from_str(&text).unwrap_or(Value::Null),
+        text,
+        cookie: None,
+    }
+}
+
+pub fn png(w: u32, h: u32) -> Vec<u8> {
+    let mut buf = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(w, h, image::Rgb([200, 20, 20])))
+        .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .unwrap();
+    buf
 }

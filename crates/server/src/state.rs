@@ -70,6 +70,11 @@ pub(crate) struct Inner {
     pub v1_limiter: Mutex<Limiter>,
     /// Réponses de Hugging Face gardées un moment (clé → date, valeur).
     pub hf_cache: Mutex<HashMap<String, (Instant, serde_json::Value)>>,
+    pub vault: crate::vault::Vault,
+    pub masker: std::sync::RwLock<Arc<crate::mask::Masker>>,
+    pub sandboxes: crate::sandboxes::Sandboxes,
+    /// Hubs des sessions ouvertes depuis le démarrage.
+    pub hubs: Mutex<HashMap<String, Arc<crate::bridge::Hub>>>,
 }
 
 impl AppState {
@@ -108,6 +113,10 @@ impl AppState {
             last_done_ms: AtomicI64::new(0),
             auto: Default::default(),
             v1_limiter: Mutex::new(Limiter::new(V1_MAX_FAILURES, crate::limiter::WINDOW)),
+            vault: Default::default(),
+            masker: Default::default(),
+            sandboxes: Default::default(),
+            hubs: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -136,13 +145,30 @@ impl AppState {
         self.0.last_done_ms.load(Ordering::SeqCst)
     }
 
+    /// Masker courant (coffre + sandboxes vivantes).
+    pub fn masker(&self) -> Arc<crate::mask::Masker> {
+        self.0.masker.read().expect("verrou").clone()
+    }
+
+    pub fn vault_locked(&self) -> bool {
+        self.0.vault.locked()
+    }
+
     pub(crate) fn mark_done(&self) {
         self.0.last_done_ms.store(now_ms(), Ordering::SeqCst);
     }
 
     /// Tâches de fond : mesure de la VRAM, test du moteur, relance du preset
     /// actif, reprise des téléchargements. Appelée une fois par `main.rs`.
+    /// Arrêt : ponts fermés et sandboxes supprimées (8 s au plus).
+    pub async fn shutdown_sessions(&self) {
+        let _ = tokio::time::timeout(Duration::from_secs(8), crate::bridge::shutdown(self)).await;
+    }
+
     pub async fn start_background(&self) -> anyhow::Result<()> {
+        crate::vault::Vault::open(self).await?;
+        crate::workspace::boot(self).await?;
+        crate::sandboxes::boot(self).await?;
         crate::engine_api::measure_vram_others(self).await;
         crate::engine_api::boot(self).await?;
         crate::models::boot(self).await?;

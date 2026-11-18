@@ -2,14 +2,15 @@
   import { changePassword, logout, message } from '../lib/api';
   import { onDestroy } from 'svelte';
   import Models from './Models.svelte';
+  import Sessions from './Sessions.svelte';
   import Settings from './Settings.svelte';
   import System from './System.svelte';
 
   let { loggedOut }: { loggedOut: () => void } = $props();
-  const later = ['Projets', 'Mémoire'];
+  const later = ['Mémoire'];
 
-  // Routage par l'ancre : #system, #models/presets, #settings/engine...
-  const read = () => location.hash.replace(/^#/, '') || 'models';
+  // Routage par l'ancre : #sessions/<id>, #models/presets, #settings/engine...
+  const read = () => location.hash.replace(/^#/, '') || 'sessions';
   let route = $state(read());
   const onHash = () => (route = read());
   window.addEventListener('hashchange', onHash);
@@ -17,6 +18,7 @@
   let page = $derived(route.split('/')[0]);
   let sub = $derived(route.split('/')[1] ?? '');
   const pages = [
+    { id: 'sessions', label: 'Sessions' },
     { id: 'models', label: 'Modèles' },
     { id: 'system', label: 'Système' },
     { id: 'settings', label: 'Paramètres' },
@@ -75,8 +77,10 @@
       <System />
     {:else if page === 'settings'}
       <Settings {sub} />
-    {:else}
+    {:else if page === 'models'}
       <Models {sub} />
+    {:else}
+      <Sessions {sub} />
     {/if}
   </main>
 </div>

@@ -12,7 +12,7 @@ use std::{collections::BTreeMap, convert::Infallible, net::SocketAddr, time::Ins
 use axum::{
     Json, Router,
     body::{Body, Bytes},
-    extract::{ConnectInfo, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -33,13 +33,37 @@ use crate::{
     state::{AppState, now},
 };
 
+/// Corps maximal de `/v1` (une image en data: URL et un long contexte).
+pub const BODY_LIMIT: usize = 32 * 1024 * 1024;
+
 pub fn router(state: &AppState) -> Router<AppState> {
     Router::new()
         .route("/v1/responses", post(responses))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/models", get(list_models))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_api_key))
+        .layer(DefaultBodyLimit::max(BODY_LIMIT))
 }
+
+/// Masque les secrets dans chaque chaîne du corps JSON (les valeurs
+/// échappées sont comparées décodées). Corps illisible : rendu tel quel, la
+/// traduction le refusera.
+fn mask_body(state: &AppState, body: Bytes) -> Bytes {
+    let m = state.masker();
+    if m.is_empty() {
+        return body;
+    }
+    match serde_json::from_slice::<Value>(&body) {
+        Ok(mut v) => {
+            m.mask_json(&mut v);
+            Bytes::from(serde_json::to_vec(&v).expect("JSON"))
+        }
+        Err(_) => body,
+    }
+}
+
+/// Routes permises aux clés `internal` (sandboxes).
+const INTERNAL_ROUTES: &[&str] = &["/v1/responses", "/v1/models"];
 
 // ---- Clé d'API ----
 
@@ -78,8 +102,16 @@ pub async fn require_api_key(State(state): State<AppState>, req: Request, next: 
         _ => Ok(None),
     };
     match found {
-        Ok(Some(_)) => {
+        Ok(Some((_, internal))) => {
             state.0.v1_limiter.lock().expect("verrou").clear(&ip);
+            if internal && !INTERNAL_ROUTES.contains(&req.uri().path()) {
+                return V1Error::new(
+                    StatusCode::FORBIDDEN,
+                    "key_scope",
+                    "clé de sandbox : seules /v1/responses et /v1/models sont permises",
+                )
+                .into_response();
+            }
             next.run(req).await
         }
         Ok(None) => {
@@ -105,13 +137,15 @@ pub async fn require_api_key(State(state): State<AppState>, req: Request, next: 
 
 // ---- Preset actif ----
 
-struct Active {
-    name: String,
-    settings: PresetSettings,
-    vision: bool,
+pub(crate) struct Active {
+    pub id: i64,
+    pub name: String,
+    pub settings: PresetSettings,
+    pub vision: bool,
+    pub updated_at: i64,
 }
 
-async fn active(state: &AppState) -> Result<Option<Active>, V1Error> {
+pub(crate) async fn active(state: &AppState) -> Result<Option<Active>, V1Error> {
     let internal = |e: crate::error::ApiError| {
         tracing::error!("preset actif : {e}");
         V1Error::new(
@@ -132,6 +166,8 @@ async fn active(state: &AppState) -> Result<Option<Active>, V1Error> {
     let m = models::model(state, p.model_id).await.map_err(internal)?;
     let vision = settings.mmproj && m.mmproj.is_some();
     Ok(Some(Active {
+        id,
+        updated_at: p.updated_at,
         name: p.name,
         settings,
         vision,
@@ -159,7 +195,7 @@ impl Drop for Served {
     }
 }
 
-fn not_ready(st: &EngineState) -> Option<String> {
+pub(crate) fn not_ready(st: &EngineState) -> Option<String> {
     match st {
         EngineState::Ready { .. } => None,
         EngineState::Failed { cause, .. } => Some(format!("le moteur a échoué : {cause}")),
@@ -259,6 +295,7 @@ impl Log {
 
 pub async fn responses(State(state): State<AppState>, body: Bytes) -> Response {
     let started = Instant::now();
+    let body = mask_body(&state, body);
     let preset = match active(&state).await {
         Ok(p) => p,
         Err(e) => return e.into_response(),
@@ -460,7 +497,10 @@ async fn gate_for_chat(state: &AppState) -> Result<OwnedRwLockReadGuard<()>, V1E
 pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> Response {
     let started = Instant::now();
     let mut req: Value = match serde_json::from_slice(&body) {
-        Ok(v @ Value::Object(_)) => v,
+        Ok(mut v @ Value::Object(_)) => {
+            state.masker().mask_json(&mut v);
+            v
+        }
         _ => {
             return V1Error::new(StatusCode::BAD_REQUEST, "invalid_request_error", "JSON illisible").into_response();
         }

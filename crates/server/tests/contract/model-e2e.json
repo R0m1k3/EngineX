@@ -1,0 +1,4 @@
+[
+ {"tool_calls": [{"name": "exec_command", "arguments": "{\"cmd\": \"printenv E2E_SECRET; echo ok > ok.txt\"}", "id": "call_e2e"}]},
+ {"content": "Fichier ok.txt écrit."}
+]

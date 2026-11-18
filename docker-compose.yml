@@ -14,6 +14,13 @@ services:
     environment:
       # true seulement derrière un reverse proxy (voir README).
       ENGINEX_TRUST_PROXY: "false"
+      # Sandboxes de session : Docker par le proxy ci-dessous, image devbox.
+      ENGINEX_SANDBOX: docker
+      ENGINEX_DOCKER_HOST: tcp://docker-proxy:2375
+      ENGINEX_DEVBOX_IMAGE: ghcr.io/r0m1k3/enginex-devbox:latest
+      ENGINEX_SANDBOX_NETWORK: enginex-sandbox
+      ENGINEX_SANDBOX_API_URL: http://enginex:8090/v1
+      ENGINEX_SANDBOX_MEMORY: 8g
     volumes:
       - enginex-data:/data
       # Modèles GGUF (plusieurs dizaines de Go). Sur l'Unraid, un dossier du
@@ -26,8 +33,39 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    networks:
+      enginex-sandbox:
+        aliases: [enginex]
+      enginex-docker: {}
+    depends_on:
+      - docker-proxy
     labels:
       - com.centurylinklabs.watchtower.enable=true
+
+  # Accès Docker restreint pour EngineX (créer, démarrer, supprimer les
+  # sandboxes, tirer l'image) : pas d'exec, de volumes ni de réseaux. Sur un
+  # réseau interne que les sandboxes ne joignent pas.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: enginex-docker-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - enginex-docker
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+networks:
+  # Réseau des sandboxes (Internet ouvert) ; nom fixe, utilisé par EngineX.
+  enginex-sandbox:
+    name: enginex-sandbox
+  enginex-docker:
+    internal: true
 
 volumes:
   enginex-data:

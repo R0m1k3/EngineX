@@ -35,6 +35,7 @@ async fn env() -> Env {
         registry: "http://127.0.0.1:9".into(),
         hf_base: "http://127.0.0.1:9".into(),
         timings: Default::default(),
+        sandbox: Default::default(),
     };
     let pool = db::open(&config.data_dir).await.unwrap();
     let state = AppState::new(config, pool);

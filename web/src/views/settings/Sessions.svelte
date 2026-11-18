@@ -1,0 +1,96 @@
+<script lang="ts">
+  import {
+    sandboxStatus, sessionSettings, saveSessionSettings, message, type SandboxStatus,
+  } from '../../lib/api';
+
+  let status = $state<SandboxStatus | null>(null);
+  let idle = $state(10);
+  let max = $state(3);
+  let error = $state('');
+  let saved = $state(false);
+
+  async function load() {
+    try {
+      const s = await sessionSettings();
+      idle = s.idle_minutes;
+      max = s.max;
+      status = await sandboxStatus();
+      error = '';
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
+  async function save(e: SubmitEvent) {
+    e.preventDefault();
+    error = '';
+    saved = false;
+    try {
+      const s = await saveSessionSettings({ idle_minutes: idle, max });
+      idle = s.idle_minutes;
+      max = s.max;
+      saved = true;
+    } catch (err) {
+      error = message(err);
+    }
+  }
+
+  const date = (t: number | null) => (t ? new Date(t * 1000).toLocaleString('fr-FR') : 'jamais');
+  load();
+</script>
+
+{#if error}<p class="error">{error}</p>{/if}
+
+<section class="card">
+  <h3>Sandboxes</h3>
+  <p class="small muted">
+    Chaque session a sa sandbox Docker, où tourne Codex. Elle démarre au premier message et s’arrête après le délai
+    ci-dessous sans tour en cours. Le code et l’historique sont gardés.
+  </p>
+  <form class="fields" onsubmit={save}>
+    <label>Arrêt après inactivité (minutes, 5 à 1440)
+      <input class="num" type="number" min="5" max="1440" bind:value={idle} required />
+    </label>
+    <label>Sandboxes actives en même temps (1 à 10)
+      <input class="num" type="number" min="1" max="10" bind:value={max} required />
+    </label>
+    <div class="actions"><button type="submit">Enregistrer</button>{#if saved}<span class="ok small">Enregistré.</span>{/if}</div>
+  </form>
+</section>
+
+{#if status}
+  <section class="card">
+    <h3>État</h3>
+    <table>
+      <tbody>
+        <tr><th>Mode</th><td>{status.backend === 'docker' ? 'Docker' : 'Local, sans isolation (développement)'}</td></tr>
+        {#if status.backend === 'docker'}
+          <tr>
+            <th>Docker</th>
+            <td>
+              {#if status.docker.reachable}<span class="ok">joignable</span>{:else}<span class="error">injoignable</span>{/if}
+              {#if status.docker.error}<div class="small muted">{status.docker.error}</div>{/if}
+            </td>
+          </tr>
+          <tr>
+            <th>Dossier /data sur l’hôte</th>
+            <td>
+              {#if status.host_data.path}<code>{status.host_data.path}</code>{:else}<span class="error">introuvable</span>{/if}
+              {#if status.host_data.error}<div class="small muted">{status.host_data.error}</div>{/if}
+            </td>
+          </tr>
+          <tr>
+            <th>Image devbox</th>
+            <td>
+              <code>{status.image.name}</code>
+              {#if status.image.present}<span class="ok">présente</span>{:else}<span class="muted">pas encore téléchargée (au premier message)</span>{/if}
+              <div class="small muted">Dernière mise à jour : {date(status.image.last_pull_at)}</div>
+              {#if status.image.last_pull_error}<div class="small error">Échec de la mise à jour : {status.image.last_pull_error}</div>{/if}
+            </td>
+          </tr>
+        {/if}
+        <tr><th>Sandboxes actives</th><td>{status.live}</td></tr>
+      </tbody>
+    </table>
+  </section>
+{/if}

@@ -1,0 +1,46 @@
+{
+  "Cmd": [
+    "codex",
+    "app-server",
+    "--listen",
+    "ws://0.0.0.0:4500",
+    "--ws-auth",
+    "capability-token",
+    "--ws-token-file",
+    "/run/enginex/token"
+  ],
+  "Env": [
+    "GITHUB_TOKEN=ghp_x",
+    "ENGINEX_API_KEY=ex_k",
+    "CODEX_HOME=/home/dev/.codex"
+  ],
+  "HostConfig": {
+    "AutoRemove": false,
+    "Binds": [
+      "/mnt/user/appdata/enginex/workspace/projects/site/topics/front:/workspace:rw",
+      "/mnt/user/appdata/enginex/sessions/0123456789abcdef/codex:/home/dev/.codex:rw",
+      "/mnt/user/appdata/enginex/sessions/0123456789abcdef/run:/run/enginex:ro",
+      "/mnt/user/appdata/enginex/sessions/0123456789abcdef/attachments:/attachments:ro",
+      "/mnt/user/appdata/enginex/cache/site:/cache:rw"
+    ],
+    "CapDrop": [
+      "ALL"
+    ],
+    "Init": true,
+    "Memory": 8589934592,
+    "NetworkMode": "enginex-sandbox",
+    "PidsLimit": 4096,
+    "Privileged": false,
+    "SecurityOpt": [
+      "no-new-privileges:true"
+    ]
+  },
+  "Image": "ghcr.io/r0m1k3/enginex-devbox:latest",
+  "Labels": {
+    "enginex.owner": "instance-1",
+    "enginex.preset": "4:1795000000:deadbeef",
+    "enginex.session": "0123456789abcdef"
+  },
+  "User": "1000:1000",
+  "WorkingDir": "/workspace"
+}

@@ -404,7 +404,177 @@ export function message(e: unknown): string {
       return 'Ce nom est déjà pris.';
     case 'no_active_preset':
       return 'Aucun preset actif : activez-en un dans Modèles.';
+    case 'engine_not_ready':
+      return 'Le modèle n’est pas encore chargé : attendez la fin du chargement.';
+    case 'no_vision':
+      return 'Le preset actif ne lit pas les images (pas de fichier mmproj).';
+    case 'turn_in_progress':
+      return 'Un tour est déjà en cours dans cette session.';
+    case 'too_many_sandboxes':
+      return 'Trop de sandboxes actives : attendez qu’une session se termine ou montez la limite dans Paramètres → Sessions.';
+    case 'sandbox_unavailable':
+      return 'Sandboxes indisponibles : Docker injoignable ou dossier /data introuvable (voir Paramètres → Sessions).';
+    case 'sandbox_timeout':
+      return 'La sandbox n’a pas démarré à temps.';
+    case 'vault_locked':
+      return 'Coffre verrouillé : restaurez /data/master.key ou supprimez les secrets.';
+    case 'invalid_name':
+      return 'Nom refusé (majuscules, chiffres et _, sans ENGINEX_ ni CODEX_ au début).';
+    case 'not_empty':
+      return 'Pas vide : supprimez d’abord ce qu’il contient.';
+    case 'attachment_invalid':
+      return e.status === 413 ? 'Image trop lourde (20 Mo au plus).' : 'Image refusée (PNG, JPEG, WebP ou GIF).';
     default:
       return `Erreur : ${e.code}`;
   }
 }
+
+// ---- Projets, sessions, coffre ----
+
+export interface Topic {
+  id: number;
+  slug: string;
+  name: string;
+  sessions: number;
+}
+
+export interface Project {
+  id: number;
+  slug: string;
+  name: string;
+  topics: Topic[];
+}
+
+export type Approval = 'auto' | 'prudent';
+
+export interface Session {
+  id: string;
+  topic_id: number;
+  title: string;
+  thread_id: string | null;
+  approval: Approval;
+  archived: boolean;
+  created_at: number;
+  updated_at: number;
+  running: boolean;
+}
+
+/** Élément d'un fil (forme Codex : `type`, `id` et les champs du type). */
+export type ItemData = Record<string, any>;
+
+export interface StoredItem {
+  turn_id: string | null;
+  item_id: string;
+  seq: number;
+  kind: string;
+  data: ItemData;
+}
+
+export interface TurnInfo {
+  id: string;
+  status: 'completed' | 'interrupted' | 'failed' | 'inProgress';
+  error: string | null;
+  usage: Usage | null;
+  started_at?: number;
+  completed_at?: number | null;
+}
+
+export interface Usage {
+  last?: { inputTokens: number; outputTokens: number; cachedInputTokens: number; totalTokens: number };
+  total?: { totalTokens: number };
+  modelContextWindow?: number | null;
+}
+
+export interface SessionDetail {
+  session: Session;
+  turns: TurnInfo[];
+  items: StoredItem[];
+  more: boolean;
+}
+
+export interface PendingRequest {
+  rid: string;
+  method: string;
+  params: Record<string, any>;
+}
+
+export interface Attachment {
+  id: string;
+  name: string;
+  url: string;
+  width: number;
+  height: number;
+}
+
+export interface Secret {
+  id: number;
+  scope: string;
+  name: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SandboxStatus {
+  backend: 'docker' | 'local';
+  available: boolean;
+  docker: { reachable: boolean; error: string | null };
+  host_data: { path: string | null; error: string | null };
+  image: { name: string; present: boolean; last_pull_at: number | null; last_pull_error: string | null };
+  live: number;
+}
+
+export interface SessionSettings {
+  idle_minutes: number;
+  max: number;
+}
+
+export const projects = () => request<{ projects: Project[] }>('GET', '/api/projects').then((r) => r.projects);
+export const createProject = (name: string) => request<{ id: number }>('POST', '/api/projects', { name });
+export const deleteProject = (id: number) => request('DELETE', `/api/projects/${id}`);
+export const createTopic = (project: number, name: string) =>
+  request<{ id: number }>('POST', `/api/projects/${project}/topics`, { name });
+export const deleteTopic = (id: number) => request('DELETE', `/api/topics/${id}`);
+
+export function sessions(f: { topic?: number; q?: string; archived?: boolean }) {
+  const p = new URLSearchParams();
+  if (f.topic !== undefined) p.set('topic', String(f.topic));
+  if (f.q) p.set('q', f.q);
+  if (f.archived) p.set('archived', '1');
+  return request<{ sessions: Session[] }>('GET', `/api/sessions?${p}`).then((r) => r.sessions);
+}
+export const createSession = (topic_id: number, approval: Approval = 'auto') =>
+  request<{ id: string }>('POST', '/api/sessions', { topic_id, approval });
+export const sessionDetail = (id: string, before?: number) =>
+  request<SessionDetail>('GET', `/api/sessions/${id}${before === undefined ? '' : `?before=${before}`}`);
+export const patchSession = (id: string, patch: { title?: string; approval?: Approval; archived?: boolean }) =>
+  request('PATCH', `/api/sessions/${id}`, patch);
+export const deleteSession = (id: string) => request('DELETE', `/api/sessions/${id}`);
+export const postTurn = (id: string, text: string, attachments: string[]) =>
+  request('POST', `/api/sessions/${id}/turns`, { text, attachments });
+export const interruptTurn = (id: string) => request('POST', `/api/sessions/${id}/interrupt`);
+export const answerRequest = (id: string, rid: string, body: { decision?: string; answers?: unknown }) =>
+  request('POST', `/api/sessions/${id}/requests/${q(rid)}`, body);
+
+/** Envoie une image (corps brut, type MIME du fichier). */
+export async function uploadAttachment(id: string, file: Blob): Promise<Attachment> {
+  const res = await fetch(`/api/sessions/${id}/attachments`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, data.error ?? 'internal', null);
+  return data as Attachment;
+}
+
+/** Image produite dans le topic (élément imageView). */
+export const fileUrl = (id: string, path: string) => `/api/sessions/${id}/file?path=${q(path)}`;
+
+export const vault = () => request<{ secrets: Secret[]; locked: boolean }>('GET', '/api/vault');
+export const putSecret = (scope: string, name: string, value: string) =>
+  request<{ id: number }>('PUT', '/api/vault', { scope, name, value });
+export const deleteSecret = (id: number) => request('DELETE', `/api/vault/${id}`);
+export const sandboxStatus = () => request<SandboxStatus>('GET', '/api/sandbox/status');
+export const sessionSettings = () => request<SessionSettings>('GET', '/api/settings/sessions');
+export const saveSessionSettings = (s: SessionSettings) => request<SessionSettings>('PUT', '/api/settings/sessions', s);

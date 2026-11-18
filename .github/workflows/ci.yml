@@ -34,6 +34,8 @@ jobs:
   # N'empêche pas la publication de l'image.
   contract:
     runs-on: ubuntu-latest
+    outputs:
+      codex_version: ${{ steps.contract.outputs.codex_version }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -41,7 +43,78 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: scripts/contract-codex.sh
+      - id: contract
+        run: scripts/contract-codex.sh
+
+  # Bout en bout Docker : vraie devbox (Codex validé par `contract`), vrai
+  # docker-socket-proxy, EngineX dans le processus du test, faux llama-server.
+  sandbox-e2e:
+    needs: contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: docker/setup-buildx-action@v3
+      - name: Devbox (locale)
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/devbox
+          load: true
+          tags: enginex-devbox:ci
+          build-args: CODEX_VERSION=${{ needs.contract.outputs.codex_version }}
+          cache-from: type=gha,scope=devbox
+          cache-to: type=gha,scope=devbox,mode=max
+      - name: Réseau et proxy Docker
+        run: |
+          docker network create enginex-sandbox-test
+          docker run -d --name proxy -p 127.0.0.1:23750:2375 \
+            -e CONTAINERS=1 -e IMAGES=1 -e POST=1 \
+            -v /var/run/docker.sock:/var/run/docker.sock:ro \
+            tecnativa/docker-socket-proxy:latest
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:23750/_ping && break; sleep 1; done
+      - run: cargo build -p enginex-fake-llama
+      # Le test tourne en uid 1000, comme EngineX en production : la sandbox
+      # (uid 1000) lit le jeton et écrit dans le topic.
+      - name: Test bout en bout
+        run: |
+          bin=$(cargo test -p enginex-server --test sandbox_docker --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .target.name == "sandbox_docker") | .executable')
+          sudo chmod o+rx "$HOME" "$HOME/work"
+          sudo env ENGINEX_TEST_DOCKER=1 ENGINEX_DEVBOX_IMAGE=enginex-devbox:ci HOME=/tmp \
+            setpriv --reuid=1000 --regid=1000 --clear-groups "$bin" --ignored --nocapture
+      - name: Journaux en cas d'échec
+        if: failure()
+        run: |
+          docker ps -a
+          docker logs proxy 2>&1 | tail -50
+          for c in $(docker ps -aq --filter label=enginex.session); do docker logs "$c" 2>&1 | tail -50; done
+
+  # Publie la devbox avec le Codex validé par `contract` (un contrat rouge
+  # bloque la devbox, pas l'image EngineX).
+  devbox:
+    needs: contract
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: docker/devbox
+          push: true
+          tags: ghcr.io/r0m1k3/enginex-devbox:latest
+          build-args: CODEX_VERSION=${{ needs.contract.outputs.codex_version }}
+          labels: org.opencontainers.image.source=https://github.com/R0m1k3/EngineX
+          cache-from: type=gha,scope=devbox
 
   image:
     needs: test
