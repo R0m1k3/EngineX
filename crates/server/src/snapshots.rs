@@ -255,6 +255,11 @@ async fn run(
     script: &'static str,
     env: Vec<(&str, String)>,
 ) -> anyhow::Result<Vec<u8>> {
+    // Session supprimée entre-temps : ni dossier recréé, ni montage absent
+    // (Docker le créerait).
+    if !f.work.is_dir() {
+        anyhow::bail!("dossier de travail absent : {}", f.work.display());
+    }
     std::fs::create_dir_all(&f.snap)?;
     let backend = state
         .0
@@ -489,6 +494,10 @@ pub fn gc_later(state: &AppState, f: &Folder) {
     let (state, f) = (state.clone(), f.clone());
     tokio::spawn(async move {
         let g = lock(&state, &f).await;
+        // Session supprimée entre-temps : rien à compacter (ni à recréer).
+        if !f.snap.join("HEAD").exists() {
+            return;
+        }
         if let Err(e) = run(&state, &g, &f, GC, vec![]).await {
             tracing::debug!("git gc : {e}");
         }

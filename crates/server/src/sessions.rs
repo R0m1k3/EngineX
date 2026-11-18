@@ -454,8 +454,12 @@ pub async fn patch(
 
 pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<String>) -> Result<Json<Value>, ApiError> {
     let r = row(&state, &id).await?;
+    // Copie : verrou tenu jusqu'à la fin (aucun conteneur d'aide sur un
+    // dossier en cours de suppression).
+    let mut _guard = None;
     if let Ok(f) = snapshots::folder(&state, &r).await {
         if r.copy_branch.is_some() {
+            _guard = Some(snapshots::lock(&state, &f).await);
             let _ = std::fs::remove_dir_all(&f.snap);
         } else if let Err(e) = snapshots::drop_refs(&state, &f).await {
             tracing::warn!("refs de la session {id} : {e:#}");
