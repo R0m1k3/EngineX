@@ -145,6 +145,9 @@ pub async fn boot(state: &AppState) -> anyhow::Result<()> {
             }
             Err(e) => tracing::warn!("liste des sandboxes : {e}"),
         }
+        if let Err(e) = b.remove_helpers(&instance).await {
+            tracing::warn!("conteneurs d'aide restants : {e}");
+        }
     }
     sqlx::query("DELETE FROM api_keys WHERE internal = 1")
         .execute(state.db())
@@ -153,6 +156,13 @@ pub async fn boot(state: &AppState) -> anyhow::Result<()> {
         .bind(crate::state::now())
         .execute(state.db())
         .await?;
+    sqlx::query(
+        "UPDATE verifications SET status = 'error', completed_at = ?, \
+         steps = json_insert(steps, '$[#]', json_object('error', 'arrêt d''EngineX')) WHERE status = 'running'",
+    )
+    .bind(crate::state::now())
+    .execute(state.db())
+    .await?;
     rebuild_masker(state).await;
     let st = state.clone();
     tokio::spawn(async move { idle_loop(st).await });
@@ -289,7 +299,7 @@ pub async fn logs(state: &AppState, session_id: &str) -> String {
     }
 }
 
-async fn setting_num(state: &AppState, key: &str, d: i64, lo: i64, hi: i64) -> i64 {
+pub(crate) async fn setting_num(state: &AppState, key: &str, d: i64, lo: i64, hi: i64) -> i64 {
     setting(state, key)
         .await
         .ok()
@@ -387,27 +397,79 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
     })))
 }
 
+/// Identité git de la copie séparée (défaut : EngineX).
+pub async fn git_identity(state: &AppState) -> (String, String) {
+    let name = setting(state, "git.name")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "EngineX".into());
+    let email = setting(state, "git.email")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "enginex@localhost".into());
+    (name, email)
+}
+
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let (git_name, git_email) = git_identity(&state).await;
     Ok(Json(json!({
         "idle_minutes": idle_minutes(&state).await,
         "max": max_live(&state).await,
+        "verify_enabled": crate::verify::enabled(&state).await,
+        "verify_max_fixes": crate::verify::max_fixes(&state).await,
+        "git_name": git_name,
+        "git_email": git_email,
     })))
 }
 
+/// Champ absent = inchangé.
 #[derive(Deserialize)]
 pub struct SettingsBody {
-    idle_minutes: i64,
-    max: i64,
+    idle_minutes: Option<i64>,
+    max: Option<i64>,
+    verify_enabled: Option<bool>,
+    verify_max_fixes: Option<i64>,
+    git_name: Option<String>,
+    git_email: Option<String>,
 }
 
 pub async fn put_settings(
     State(state): State<AppState>,
     ApiJson(b): ApiJson<SettingsBody>,
 ) -> Result<Json<Value>, ApiError> {
-    if !(5..=1440).contains(&b.idle_minutes) || !(1..=10).contains(&b.max) {
+    let ok = b.idle_minutes.is_none_or(|v| (5..=1440).contains(&v))
+        && b.max.is_none_or(|v| (1..=10).contains(&v))
+        && b.verify_max_fixes.is_none_or(|v| (0..=10).contains(&v))
+        && b.git_name.as_deref().is_none_or(|v| {
+            let n = v.trim().chars().count();
+            (1..=100).contains(&n) && !v.contains(['\n', '\r', '\0'])
+        })
+        && b.git_email.as_deref().is_none_or(|v| {
+            let n = v.trim().chars().count();
+            (1..=200).contains(&n) && v.contains('@') && !v.contains(['\n', '\r', '\0', '<', '>'])
+        });
+    if !ok {
         return Err(ApiError::BadRequest);
     }
-    set_setting(&state, "sandbox.idle_minutes", Some(&b.idle_minutes.to_string())).await?;
-    set_setting(&state, "sandbox.max", Some(&b.max.to_string())).await?;
+    if let Some(v) = b.idle_minutes {
+        set_setting(&state, "sandbox.idle_minutes", Some(&v.to_string())).await?;
+    }
+    if let Some(v) = b.max {
+        set_setting(&state, "sandbox.max", Some(&v.to_string())).await?;
+    }
+    if let Some(v) = b.verify_enabled {
+        set_setting(&state, "verify.enabled", Some(if v { "1" } else { "0" })).await?;
+    }
+    if let Some(v) = b.verify_max_fixes {
+        set_setting(&state, "verify.max_fixes", Some(&v.to_string())).await?;
+    }
+    if let Some(v) = &b.git_name {
+        set_setting(&state, "git.name", Some(v.trim())).await?;
+    }
+    if let Some(v) = &b.git_email {
+        set_setting(&state, "git.email", Some(v.trim())).await?;
+    }
     get_settings(State(state)).await
 }

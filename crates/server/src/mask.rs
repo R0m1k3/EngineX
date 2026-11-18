@@ -70,21 +70,33 @@ impl Masker {
         }
     }
 
-    /// Point de coupe sûr de `s` (octets) : avant la plus longue fin qui est
-    /// le début d'une valeur, et jamais au milieu d'une valeur trouvée.
-    fn safe_cut(&self, s: &str) -> usize {
+    /// Masque des octets (sortie d'un terminal, peut ne pas être de l'UTF-8).
+    pub fn mask_bytes<'a>(&self, b: &'a [u8]) -> Cow<'a, [u8]> {
+        let Some(ac) = &self.ac else {
+            return Cow::Borrowed(b);
+        };
+        if !ac.is_match(b) {
+            return Cow::Borrowed(b);
+        }
+        let reps = vec![MASK.as_bytes(); self.values.len()];
+        Cow::Owned(ac.replace_all_bytes(b, &reps))
+    }
+
+    /// Point de coupe sûr de `s` : avant la plus longue fin qui est le début
+    /// d'une valeur, et jamais au milieu d'une valeur trouvée. Sur un texte
+    /// UTF-8 valide, la coupe tombe toujours entre deux caractères (les
+    /// valeurs sont de l'UTF-8 valide).
+    fn safe_cut(&self, s: &[u8]) -> usize {
         let Some(ac) = &self.ac else {
             return s.len();
         };
         let mut cut = s.len();
         for v in &self.values {
+            let v = v.as_bytes();
             // Fins de `s` qui sont un début strict de `v`, de la plus longue à
             // la plus courte.
             let max = v.len().saturating_sub(1).min(s.len());
             for k in (1..=max).rev() {
-                if !v.is_char_boundary(k) || !s.is_char_boundary(s.len() - k) {
-                    continue;
-                }
                 if s.ends_with(&v[..k]) {
                     cut = cut.min(s.len() - k);
                     break;
@@ -100,27 +112,46 @@ impl Masker {
     }
 }
 
-/// État d'un flux de deltas (un par élément et par champ).
+/// État d'un flux d'octets (terminal) : cœur du masquage en flux.
 #[derive(Default, Debug)]
-pub struct Stream {
-    pending: String,
+pub struct ByteStream {
+    pending: Vec<u8>,
 }
 
-impl Stream {
-    /// Ajoute `delta` ; rend le texte masqué à diffuser maintenant.
-    pub fn push(&mut self, m: &Masker, delta: &str) -> String {
-        self.pending.push_str(delta);
+impl ByteStream {
+    /// Ajoute `delta` ; rend les octets masqués à diffuser maintenant.
+    pub fn push(&mut self, m: &Masker, delta: &[u8]) -> Vec<u8> {
+        self.pending.extend_from_slice(delta);
         let cut = m.safe_cut(&self.pending);
         let rest = self.pending.split_off(cut);
-        let out = m.mask(&self.pending).into_owned();
+        let out = m.mask_bytes(&self.pending).into_owned();
         self.pending = rest;
         out
     }
 
     /// Fin du flux : tout ce qui reste, masqué.
-    pub fn flush(&mut self, m: &Masker) -> String {
-        let out = m.mask(&self.pending).into_owned();
+    pub fn flush(&mut self, m: &Masker) -> Vec<u8> {
+        let out = m.mask_bytes(&self.pending).into_owned();
         self.pending.clear();
         out
+    }
+}
+
+/// État d'un flux de deltas texte (un par élément et par champ), au-dessus
+/// de `ByteStream`.
+#[derive(Default, Debug)]
+pub struct Stream {
+    inner: ByteStream,
+}
+
+impl Stream {
+    /// Ajoute `delta` ; rend le texte masqué à diffuser maintenant.
+    pub fn push(&mut self, m: &Masker, delta: &str) -> String {
+        String::from_utf8_lossy(&self.inner.push(m, delta.as_bytes())).into_owned()
+    }
+
+    /// Fin du flux : tout ce qui reste, masqué.
+    pub fn flush(&mut self, m: &Masker) -> String {
+        String::from_utf8_lossy(&self.inner.flush(m)).into_owned()
     }
 }

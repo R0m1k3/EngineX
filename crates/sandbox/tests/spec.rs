@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use enginex_sandbox::{
-    Mounts, Spec,
-    spec::{DockerOpts, container_name, container_spec},
+    HelperSpec, Mounts, Spec,
+    spec::{DockerOpts, container_name, container_spec, helper_name, helper_spec},
 };
 
 fn spec() -> (Spec, DockerOpts) {
@@ -61,4 +61,50 @@ fn paths_outside_the_data_dir_are_refused() {
     let (mut s, o) = spec();
     s.mounts.topic = "/etc".into();
     assert!(container_spec(&s, &o).is_err());
+}
+
+#[test]
+fn helper_spec_snapshot() {
+    let (_, o) = spec();
+    let h = HelperSpec {
+        session_id: "0123456789abcdef".into(),
+        owner: "instance-1".into(),
+        binds: vec![
+            (
+                PathBuf::from("/data/workspace/projects/site/topics/front"),
+                "WORK",
+                true,
+            ),
+            (PathBuf::from("/data/snapshots/topic-7.git"), "SNAP", true),
+        ],
+        script: "git --version",
+        env: vec![("REF".into(), "refs/enginex/x/pre".into())],
+    };
+    let body = serde_json::to_value(helper_spec(&h, &o).unwrap()).unwrap();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/helper-spec.json");
+    let text = serde_json::to_string_pretty(&body).unwrap() + "\n";
+    if std::env::var("UPDATE_FIXTURES").as_deref() == Ok("1") {
+        std::fs::write(&path, &text).unwrap();
+    }
+    let want = std::fs::read_to_string(&path).expect("instantané absent : UPDATE_FIXTURES=1");
+    assert_eq!(text, want, "spec changée : relire puis UPDATE_FIXTURES=1");
+    let hc = &body["HostConfig"];
+    assert_eq!(hc["NetworkMode"], "none");
+    assert_eq!(body["NetworkDisabled"], true);
+    assert_eq!(
+        hc["Binds"].as_array().unwrap().len(),
+        2,
+        "seuls les deux montages demandés"
+    );
+    assert_eq!(
+        body["Env"],
+        serde_json::json!(["REF=refs/enginex/x/pre", "WORK=/mnt/work", "SNAP=/mnt/snap"]),
+        "aucune autre variable"
+    );
+    assert_eq!(hc["CapDrop"], serde_json::json!(["ALL"]));
+    assert_eq!(hc["SecurityOpt"], serde_json::json!(["no-new-privileges:true"]));
+    assert_eq!(body["User"], "1000:1000");
+    assert!(hc.get("PortBindings").is_none() && body.get("ExposedPorts").is_none());
+    assert!(body["Labels"].get("enginex.session").is_none());
+    assert_eq!(helper_name("0123456789abcdef", "a1b2"), "enginex-helper-01234567-a1b2");
 }

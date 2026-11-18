@@ -11,16 +11,20 @@ pub mod config;
 pub mod db;
 pub mod engine_api;
 pub mod error;
+pub mod files;
 pub mod limiter;
 pub mod mask;
 pub mod models;
 pub mod presets;
 pub mod sandboxes;
 pub mod sessions;
+pub mod snapshots;
 pub mod state;
 pub mod system;
+pub mod terminal;
 pub mod v1;
 pub mod vault;
+pub mod verify;
 pub mod web;
 pub mod workspace;
 
@@ -116,7 +120,18 @@ pub fn app(state: AppState) -> Router {
             post(attachments::upload).layer(DefaultBodyLimit::max(attachments::BODY_LIMIT)),
         )
         .route("/api/sessions/{id}/attachments/{name}", get(attachments::serve))
-        .route("/api/sessions/{id}/file", get(attachments::file))
+        .route("/api/sessions/{id}/file", get(files::file))
+        .route("/api/sessions/{id}/file/text", get(files::text))
+        .route("/api/sessions/{id}/tree", get(files::tree))
+        .route("/api/sessions/{id}/turns/{tid}/diff", get(sessions::turn_diff))
+        .route("/api/sessions/{id}/turns/{tid}/undo-file", post(sessions::undo_file))
+        .route("/api/sessions/{id}/turns/{tid}/revert", post(sessions::revert))
+        .route("/api/sessions/{id}/restore-undo", post(sessions::restore_undo))
+        .route("/api/sessions/{id}/restore-green", post(sessions::restore_green))
+        .route("/api/sessions/{id}/terminal", get(terminal::ws))
+        .route("/api/sessions/{id}/verify", get(verify::get))
+        .route("/api/sessions/{id}/verify/save", post(verify::save))
+        .route("/api/sessions/{id}/verify/run", post(verify::run_now))
         .route("/api/sessions/{id}/events", get(sessions::events))
         .route("/api/sandbox/status", get(sandboxes::status))
         .route(

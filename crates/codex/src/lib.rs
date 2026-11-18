@@ -178,6 +178,17 @@ impl Client {
 
     /// Envoie une requête et attend sa réponse (délai du client).
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, Error> {
+        self.request_with_timeout(method, params, Some(self.timeout)).await
+    }
+
+    /// Comme `request`, avec un autre délai (`None` : pas de délai, pour
+    /// `command/exec` qui ne répond qu'à la fin du processus).
+    pub async fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Option<Duration>,
+    ) -> Result<Value, Error> {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending
@@ -191,7 +202,10 @@ impl Client {
             self.pending.lock().expect("verrou").remove(&id);
             return Err(e);
         }
-        match tokio::time::timeout(self.timeout, rx).await {
+        let Some(timeout) = timeout else {
+            return rx.await.unwrap_or(Err(Error::Closed));
+        };
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(r)) => r,
             Ok(Err(_)) => Err(Error::Closed),
             Err(_) => {

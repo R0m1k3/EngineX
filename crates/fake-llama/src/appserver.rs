@@ -4,7 +4,10 @@
 //! script :
 //! - `FAKE_APPSERVER_SCRIPT` : fichier JSONL, une étape par ligne
 //!   (`expect`/`result`, `send`, `expect_reply`, `sleep_ms`, `close`,
-//!   `wait_interrupt`, `launch`) ; repères `$thread`, `$turn:N`, `$item:N`,
+//!   `wait_interrupt`, `launch`) ; une étape `expect` avec `error {code,
+//!   message}` répond une erreur JSON-RPC au lieu de `result`, avec `defer`
+//!   elle ne répond pas (réponse plus tard par `{"answer": méthode, "result"}`) ;
+//!   repères `$thread`, `$turn:N`, `$item:N`,
 //!   `$req:N`, `$now`, `$cwd`, `$home` remplacés à l'envoi ;
 //! - `FAKE_APPSERVER_STATE` : compteur de lancements (segment joué) ;
 //! - `FAKE_APPSERVER_LOG` : chaque message reçu (`received`), chaque réponse à
@@ -148,8 +151,16 @@ async fn play(socket: WebSocket, fake: Arc<Fake>) {
             append_line(l, &json!({ kind: v }).to_string());
         }
     };
+    let mut deferred: std::collections::HashMap<String, Value> = Default::default();
     for step in &fake.steps {
-        if let Some(ms) = step.get("sleep_ms").and_then(Value::as_u64) {
+        if let Some(method) = step.get("answer").and_then(Value::as_str) {
+            if let Some(id) = deferred.remove(method) {
+                let reply = json!({"id": id, "result": sub(step.get("result").unwrap_or(&json!({})))});
+                if sink.send(write(reply)).await.is_err() {
+                    return;
+                }
+            }
+        } else if let Some(ms) = step.get("sleep_ms").and_then(Value::as_u64) {
             tokio::time::sleep(Duration::from_millis(ms)).await;
         } else if step.get("close").is_some() {
             let _ = sink.send(Message::Close(None)).await;
@@ -182,8 +193,17 @@ async fn play(socket: WebSocket, fake: Arc<Fake>) {
             loop {
                 let Some(m) = rx.recv().await else { return };
                 if m.get("method").and_then(Value::as_str) == Some(&method) {
+                    if step.get("defer").is_some() {
+                        if let Some(id) = m.get("id") {
+                            deferred.insert(method.clone(), id.clone());
+                        }
+                        break;
+                    }
                     if let Some(id) = m.get("id") {
-                        let reply = json!({"id": id, "result": sub(&result)});
+                        let reply = match step.get("error") {
+                            Some(err) => json!({"id": id, "error": err}),
+                            None => json!({"id": id, "result": sub(&result)}),
+                        };
                         if sink.send(write(reply)).await.is_err() {
                             return;
                         }

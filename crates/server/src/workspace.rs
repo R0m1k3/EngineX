@@ -228,6 +228,7 @@ pub async fn delete_topic(State(state): State<AppState>, UrlPath(id): UrlPath<i6
         .execute(state.db())
         .await?;
     let _ = std::fs::remove_dir(&t.dir);
+    let _ = std::fs::remove_dir_all(crate::snapshots::topic_repo(&state, id));
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -267,6 +268,7 @@ pub async fn delete_project(State(state): State<AppState>, UrlPath(id): UrlPath<
         .await?;
     for t in topics {
         let _ = std::fs::remove_dir(&t.dir);
+        let _ = std::fs::remove_dir_all(crate::snapshots::topic_repo(&state, t.id));
     }
     let dir = project_dir(&state, &slug);
     let _ = std::fs::remove_dir(dir.join("topics"));

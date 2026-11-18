@@ -72,6 +72,21 @@ pub enum ApiError {
     SandboxTimeout,
     #[error("too_many_sandboxes")]
     TooManySandboxes,
+    #[error("folder_busy")]
+    FolderBusy,
+    #[error("changed_since")]
+    ChangedSince,
+    #[error("no_snapshot")]
+    NoSnapshot,
+    #[error("not_git")]
+    NotGit,
+    /// Création de la copie séparée impossible (fin du journal en `detail`).
+    #[error("copy_failed")]
+    CopyFailed(String),
+    #[error("recipe_exists")]
+    RecipeExists,
+    #[error("no_recipe")]
+    NoRecipe,
     /// `true` : trop gros (413), sinon type refusé (400).
     #[error("attachment_invalid")]
     AttachmentInvalid(bool),
@@ -104,7 +119,14 @@ impl ApiError {
             | Self::NotEmpty
             | Self::NoVision
             | Self::TurnInProgress
-            | Self::TooManySandboxes => StatusCode::CONFLICT,
+            | Self::TooManySandboxes
+            | Self::FolderBusy
+            | Self::ChangedSince
+            | Self::NoSnapshot
+            | Self::RecipeExists
+            | Self::NoRecipe => StatusCode::CONFLICT,
+            Self::NotGit => StatusCode::BAD_REQUEST,
+            Self::CopyFailed(_) => StatusCode::BAD_GATEWAY,
             Self::InvalidName | Self::AttachmentInvalid(false) => StatusCode::BAD_REQUEST,
             Self::AttachmentInvalid(true) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::EngineNotReady | Self::SandboxUnavailable => StatusCode::SERVICE_UNAVAILABLE,
@@ -160,7 +182,11 @@ impl IntoResponse for ApiError {
             Self::Busy => Some(1),
             _ => None,
         };
-        let mut res = (self.status(), Json(serde_json::json!({ "error": self.to_string() }))).into_response();
+        let mut body = serde_json::json!({ "error": self.to_string() });
+        if let Self::CopyFailed(d) = &self {
+            body["detail"] = serde_json::json!(d);
+        }
+        let mut res = (self.status(), Json(body)).into_response();
         if let Some(s) = retry
             && let Ok(v) = HeaderValue::from_str(&s.to_string())
         {

@@ -509,12 +509,17 @@ async fn file_route_refuses_escapes_symlinks_and_svg() {
         ("/workspace/ok.png", StatusCode::OK),
         ("../../../../outside.png", StatusCode::NOT_FOUND),
         ("link.png", StatusCode::NOT_FOUND),
-        ("x.svg", StatusCode::NOT_FOUND),
+        ("x.svg", StatusCode::OK),
         ("/etc/passwd", StatusCode::NOT_FOUND),
     ] {
         let r = e.get(&format!("/api/sessions/{sid}/file?path={p}")).await;
         assert_eq!(r.status, want, "{p}");
     }
+    // Le svg est servi isolé : CSP `sandbox`, aucun script.
+    let r = e.get(&format!("/api/sessions/{sid}/file?path=x.svg")).await;
+    let csp = r.headers["content-security-policy"].to_str().unwrap();
+    assert!(csp.contains("sandbox"), "{csp}");
+    assert_eq!(r.headers["x-content-type-options"], "nosniff");
 }
 
 #[tokio::test]
@@ -536,4 +541,520 @@ async fn attachment_limits() {
     assert!(r.body["id"].as_str().unwrap().ends_with(".jpg"));
     let got = e.get(r.body["url"].as_str().unwrap()).await;
     assert_eq!(got.status, 200);
+}
+
+// ---- Étape 4b : instantanés, retours arrière, vérification ----
+
+fn topic_dir(e: &Env) -> std::path::PathBuf {
+    e.dir.path().join("data/workspace/projects/general/topics/inbox")
+}
+
+/// Le script `name` avec une pause avant `turn/completed` (le test écrit des
+/// fichiers pendant le tour).
+fn slow(steps: Vec<Value>) -> Vec<Value> {
+    let mut steps = steps;
+    let i = step_pos(&steps, 0, is_send("turn/completed"));
+    steps.insert(i, json!({"sleep_ms": 700}));
+    steps
+}
+
+async fn session_body(e: &Env, sid: &str) -> Value {
+    e.get(&format!("/api/sessions/{sid}")).await.body
+}
+
+/// Lance un tour et écrit `files` pendant qu'il tourne ; rend l'id du tour
+/// une fois ses modifications stockées.
+async fn turn_writing(e: &Env, ev: &mut Sse, sid: &str, text: &str, files: &[(&str, &str)]) -> String {
+    let r = turn(e, sid, text).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+    ev.until("codex", |v| v["method"] == "turn/started").await;
+    for (p, c) in files {
+        std::fs::write(topic_dir(e).join(p), c).unwrap();
+    }
+    let ch = ev.until("changes", |_| true).await;
+    ch["turn_id"].as_str().unwrap().to_string()
+}
+
+async fn wait_for(f: impl Fn() -> bool) {
+    for _ in 0..100 {
+        if f() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("condition jamais vraie");
+}
+
+#[tokio::test]
+async fn files_only_revert_adds_a_note_and_redo_works() {
+    let mut script = slow(text_script());
+    script.extend(slow(second_turn("text")));
+    let (e, fake) = env_sessions(&script).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    let tid = turn_writing(&e, &mut ev, &sid, "Écris a.txt", &[("a.txt", "v1")]).await;
+    let s = session_body(&e, &sid).await;
+    let n_items = s["items"].as_array().unwrap().len();
+    let t = &s["turns"][0];
+    assert_eq!(t["has_snapshot"], true);
+    assert_eq!(t["changes"]["files"][0]["path"], "a.txt");
+    assert_eq!(t["changes"]["files"][0]["status"], "A");
+    let d = e.get(&format!("/api/sessions/{sid}/turns/{tid}/diff?path=a.txt")).await;
+    assert_eq!(d.status, 200, "{}", d.text);
+    assert!(d.body["diff"].as_str().unwrap().contains("+v1"), "{}", d.text);
+    let r = e
+        .send(
+            "POST",
+            &format!("/api/sessions/{sid}/turns/{tid}/revert"),
+            json!({"conversation": false}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    assert!(!topic_dir(&e).join("a.txt").exists());
+    let s = session_body(&e, &sid).await;
+    assert_eq!(s["session"]["undo"], true);
+    assert!(s["session"]["pending_note"].as_str().unwrap().contains("Écris a.txt"));
+    assert_eq!(s["items"].as_array().unwrap().len(), n_items, "la conversation reste");
+    // « Rétablir ».
+    let r = e
+        .send("POST", &format!("/api/sessions/{sid}/restore-undo"), json!({}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    assert_eq!(std::fs::read_to_string(topic_dir(&e).join("a.txt")).unwrap(), "v1");
+    // La note part en tête du tour suivant, puis est vidée ; le bandeau aussi.
+    turn(&e, &sid, "Suite").await;
+    ev.until("turn_stored", |_| true).await;
+    let starts = fake.received("turn/start");
+    let first = starts[1]["params"]["input"][0]["text"].as_str().unwrap();
+    assert!(first.starts_with("Note d'EngineX"), "{first}");
+    let s = session_body(&e, &sid).await;
+    assert!(s["session"]["pending_note"].is_null());
+    assert_eq!(s["session"]["undo"], false);
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+#[tokio::test]
+async fn conversation_revert_with_a_live_sandbox() {
+    let mut script = slow(text_script());
+    script.push(json!({"expect": "thread/revert", "result": {}}));
+    // Conversation vidée : le message suivant redonne son titre à la session.
+    let mut next = second_turn("text");
+    let i = step_pos(&next, 0, is_expect("turn/start"));
+    next.insert(i, json!({"expect": "thread/name/set", "result": {}}));
+    script.extend(next);
+    let (e, fake) = env_sessions(&script).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    let tid = turn_writing(&e, &mut ev, &sid, "Premier", &[("b.txt", "x")]).await;
+    let r = e
+        .send(
+            "POST",
+            &format!("/api/sessions/{sid}/turns/{tid}/revert"),
+            json!({"conversation": true}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    assert_eq!(r.body["user"]["text"], "Premier");
+    assert!(!topic_dir(&e).join("b.txt").exists());
+    let s = session_body(&e, &sid).await;
+    assert!(s["items"].as_array().unwrap().is_empty(), "{}", s["items"]);
+    assert!(s["turns"].as_array().unwrap().is_empty());
+    wait_for(|| fake.received("thread/revert").len() == 1).await;
+    assert_eq!(
+        fake.received("thread/revert")[0]["params"]["beforeTurnId"],
+        tid.as_str()
+    );
+    e.until(&format!("/api/sessions/{sid}"), |v| {
+        v["session"]["pending_revert"] == false
+    })
+    .await;
+    turn(&e, &sid, "Deuxième").await;
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}");
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+#[tokio::test]
+async fn refused_revert_is_shown_and_the_turn_goes_on() {
+    let mut script = slow(text_script());
+    script.push(json!({"expect": "thread/revert", "error": {"code": -32602, "message": "tour inconnu"}}));
+    script.extend(second_turn("text"));
+    let (e, fake) = env_sessions(&script).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    let tid = turn_writing(&e, &mut ev, &sid, "Premier", &[("c.txt", "x")]).await;
+    e.send(
+        "POST",
+        &format!("/api/sessions/{sid}/turns/{tid}/revert"),
+        json!({"conversation": true}),
+    )
+    .await;
+    let n = ev.until("notice", |_| true).await;
+    assert!(n["item"]["text"].as_str().unwrap().contains("tour inconnu"), "{n}");
+    let s = session_body(&e, &sid).await;
+    assert_eq!(s["session"]["pending_revert"], false);
+    assert_eq!(s["items"][0]["kind"], "notice");
+    turn(&e, &sid, "Deuxième").await;
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}");
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+/// Script `resume` : segment 1 (premier lancement), segment 2 (relance).
+fn resume_segments() -> (Vec<Value>, Vec<Value>) {
+    let steps = script_with("resume", |_| {});
+    let i = steps.iter().position(|s| s.get("launch").is_some()).unwrap();
+    (steps[..i].to_vec(), steps[i + 1..].to_vec())
+}
+
+fn with_revert_after_resume(mut seg: Vec<Value>) -> Vec<Value> {
+    let i = step_pos(&seg, 0, is_expect("thread/resume"));
+    seg.insert(i + 1, json!({"expect": "thread/revert", "result": {}}));
+    seg
+}
+
+#[tokio::test]
+async fn conversation_revert_while_stopped_is_sent_before_catch_up() {
+    let (seg1, seg2) = resume_segments();
+    let mut script = slow(seg1);
+    script.push(json!({"launch": true}));
+    script.extend(with_revert_after_resume(seg2));
+    let (e, fake) = env_sessions(&script).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    let tid = turn_writing(&e, &mut ev, &sid, "Premier", &[("d.txt", "x")]).await;
+    enginex_server::bridge::hub(&e.state, &sid)
+        .stop_conn(&e.state, "test")
+        .await;
+    let r = e
+        .send(
+            "POST",
+            &format!("/api/sessions/{sid}/turns/{tid}/revert"),
+            json!({"conversation": true}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        std::fs::read_to_string(&fake.state).unwrap().trim(),
+        "1",
+        "aucune sandbox démarrée"
+    );
+    assert_eq!(session_body(&e, &sid).await["session"]["pending_revert"], true);
+    turn(&e, &sid, "Deuxième").await;
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}");
+    let methods: Vec<String> = fake
+        .log()
+        .iter()
+        .filter_map(|l| l["received"]["method"].as_str().map(str::to_string))
+        .collect();
+    let rv = methods.iter().position(|m| m == "thread/revert").unwrap();
+    let tl = methods.iter().position(|m| m == "thread/turns/list").unwrap();
+    assert!(rv < tl, "{methods:?}");
+    // `thread/turns/list` rend encore le tour retiré : il ne revient pas.
+    let s = session_body(&e, &sid).await;
+    assert!(
+        s["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["turn_id"] != tid.as_str()),
+        "{}",
+        s["items"]
+    );
+    assert!(s["turns"].as_array().unwrap().iter().all(|t| t["id"] != tid.as_str()));
+    assert_eq!(s["session"]["pending_revert"], false);
+}
+
+#[tokio::test]
+async fn revert_lost_with_the_connection_is_kept_and_retried() {
+    let (seg1, seg2) = resume_segments();
+    let mut script = slow(seg1);
+    script.push(json!({"launch": true}));
+    script.extend(seg2[..=step_pos(&seg2, 0, is_expect("thread/resume"))].to_vec());
+    script.push(json!({"close": true}));
+    script.push(json!({"launch": true}));
+    script.extend(with_revert_after_resume(seg2));
+    let (e, fake) = env_sessions(&script).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    let tid = turn_writing(&e, &mut ev, &sid, "Premier", &[("e.txt", "x")]).await;
+    enginex_server::bridge::hub(&e.state, &sid)
+        .stop_conn(&e.state, "test")
+        .await;
+    e.send(
+        "POST",
+        &format!("/api/sessions/{sid}/turns/{tid}/revert"),
+        json!({"conversation": true}),
+    )
+    .await;
+    turn(&e, &sid, "Deuxième").await;
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "failed");
+    assert!(
+        t["turn"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("retour de conversation non appliqué"),
+        "{t}"
+    );
+    assert_eq!(session_body(&e, &sid).await["session"]["pending_revert"], true);
+    turn(&e, &sid, "Troisième").await;
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}");
+    assert_eq!(session_body(&e, &sid).await["session"]["pending_revert"], false);
+    assert_eq!(fake.received("thread/revert").len(), 1);
+}
+
+#[tokio::test]
+async fn revert_timed_out_while_connected_is_resent_before_the_next_turn() {
+    let mut script = slow(text_script());
+    script.push(json!({"expect": "thread/revert", "defer": true}));
+    script.push(json!({"expect": "thread/revert", "result": {}}));
+    script.extend(second_turn("text"));
+    let (e, fake) = env_sessions(&script).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    let tid = turn_writing(&e, &mut ev, &sid, "Premier", &[("f.txt", "x")]).await;
+    e.send(
+        "POST",
+        &format!("/api/sessions/{sid}/turns/{tid}/revert"),
+        json!({"conversation": true}),
+    )
+    .await;
+    wait_for(|| fake.received("thread/revert").len() == 1).await;
+    // Délai du client (5 s en test) : le retour reste en attente.
+    tokio::time::sleep(std::time::Duration::from_millis(5500)).await;
+    assert_eq!(session_body(&e, &sid).await["session"]["pending_revert"], true);
+    turn(&e, &sid, "Deuxième").await;
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}");
+    assert_eq!(fake.received("thread/revert").len(), 2);
+    assert_eq!(session_body(&e, &sid).await["session"]["pending_revert"], false);
+}
+
+#[tokio::test]
+async fn folder_busy_and_no_snapshot() {
+    let mut script = slow(text_script());
+    script.push(json!({"launch": true}));
+    script.extend(slow(text_script()));
+    let (e, _fake) = env_sessions(&script).await;
+    make_active_preset(&e).await;
+    let a = new_session(&e, "auto").await;
+    let b = new_session(&e, "auto").await;
+    let mut ev_a = sse(&e, &format!("/api/sessions/{a}/events")).await;
+    let mut ev_b = sse(&e, &format!("/api/sessions/{b}/events")).await;
+    let tid = turn_writing(&e, &mut ev_a, &a, "Premier", &[("g.txt", "x")]).await;
+    // Un tour d'une autre session du même topic : refus.
+    turn(&e, &b, "Autre").await;
+    ev_b.until("codex", |v| v["method"] == "turn/started").await;
+    let r = e
+        .send(
+            "POST",
+            &format!("/api/sessions/{a}/turns/{tid}/revert"),
+            json!({"conversation": false}),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(r.body["error"], "folder_busy");
+    let r = e
+        .send(
+            "POST",
+            &format!("/api/sessions/{a}/turns/{tid}/undo-file"),
+            json!({"path": "g.txt"}),
+        )
+        .await;
+    assert_eq!(r.body["error"], "folder_busy");
+    ev_b.until("turn_stored", |_| true).await;
+    ev_b.until("changes", |_| true).await;
+    // Plus d'état vert, plus d'instantané.
+    let r = e
+        .send("POST", &format!("/api/sessions/{a}/restore-green"), json!({}))
+        .await;
+    assert_eq!(r.body["error"], "no_snapshot");
+    let r = e
+        .send("POST", &format!("/api/sessions/{a}/restore-undo"), json!({}))
+        .await;
+    assert_eq!(r.body["error"], "no_snapshot");
+    sqlx::query("UPDATE chat_turns SET snap_pre = NULL WHERE id = ?")
+        .bind(&tid)
+        .execute(e.state.db())
+        .await
+        .unwrap();
+    let r = e
+        .send(
+            "POST",
+            &format!("/api/sessions/{a}/turns/{tid}/revert"),
+            json!({"conversation": false}),
+        )
+        .await;
+    assert_eq!(r.body["error"], "no_snapshot");
+    let r = e
+        .send("POST", &format!("/api/sessions/{a}/verify/run"), json!({}))
+        .await;
+    assert_eq!(r.body["error"], "no_recipe");
+}
+
+#[tokio::test]
+async fn a_turn_waits_for_a_restore_on_the_same_folder() {
+    let (e, fake) = env_sessions(&text_script()).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let row = enginex_server::sessions::row(&e.state, &sid).await.unwrap();
+    let f = enginex_server::snapshots::folder(&e.state, &row).await.unwrap();
+    let guard = enginex_server::snapshots::lock(&e.state, &f).await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "Premier").await;
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    assert!(
+        fake.received("turn/start").is_empty(),
+        "le tour est parti pendant le retour arrière"
+    );
+    drop(guard);
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}");
+}
+
+fn exec_result(code: i64, out: &str) -> Value {
+    json!({"exitCode": code, "stdout": out, "stderr": ""})
+}
+
+#[tokio::test]
+async fn failed_verification_starts_a_fix_turn_then_goes_green() {
+    let mut script = slow(text_script());
+    script.push(json!({"expect": "command/exec", "result": exec_result(1, "ok.txt absent")}));
+    script.extend(second_turn("text"));
+    script.push(json!({"expect": "command/exec", "result": exec_result(0, "")}));
+    let (e, fake) = env_sessions(&script).await;
+    make_active_preset(&e).await;
+    std::fs::create_dir_all(topic_dir(&e).join(".enginex")).unwrap();
+    std::fs::write(
+        topic_dir(&e).join(".enginex/verify.toml"),
+        "[[step]]\nname = \"fichier\"\nrun = \"test -f ok.txt\"\n",
+    )
+    .unwrap();
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    let t1 = turn_writing(&e, &mut ev, &sid, "Fais-le", &[("h.txt", "x")]).await;
+    let v = ev.until("verify", |v| v["status"] == "failed").await;
+    assert_eq!(v["attempt"], 1);
+    assert_eq!(v["steps"][0]["exit_code"], 1);
+    let v = ev.until("verify", |v| v["status"] == "passed").await;
+    assert_eq!(v["attempt"], 2);
+    let exec = &fake.received("command/exec")[0]["params"];
+    assert_eq!(exec["command"], json!(["bash", "-lc", "test -f ok.txt"]));
+    assert_eq!(exec["timeoutMs"], 600_000);
+    let starts = fake.received("turn/start");
+    let fix = starts[1]["params"]["input"][0]["text"].as_str().unwrap();
+    assert!(
+        fix.starts_with("La vérification automatique d'EngineX a échoué (essai 1, correction 1/3)"),
+        "{fix}"
+    );
+    assert!(fix.contains("ok.txt absent"));
+    let s = session_body(&e, &sid).await;
+    let turns = s["turns"].as_array().unwrap();
+    assert_eq!(turns[0]["id"], t1.as_str());
+    assert_eq!(turns[0]["verifications"][0]["status"], "failed");
+    assert_eq!(turns[1]["origin"], "verify");
+    assert_eq!(turns[1]["verifications"][0]["status"], "passed");
+    assert_eq!(s["green_turn"], turns[1]["id"]);
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+#[tokio::test]
+async fn a_message_cancels_a_running_verification() {
+    let mut script = slow(text_script());
+    script.push(json!({"expect": "command/exec", "defer": true}));
+    script.push(json!({"expect": "command/exec/terminate"}));
+    script.push(json!({"answer": "command/exec", "result": exec_result(-1, "")}));
+    script.extend(second_turn("text"));
+    let (e, fake) = env_sessions(&script).await;
+    make_active_preset(&e).await;
+    std::fs::create_dir_all(topic_dir(&e).join(".enginex")).unwrap();
+    std::fs::write(
+        topic_dir(&e).join(".enginex/verify.toml"),
+        "[[step]]\nname = \"long\"\nrun = \"sleep 100\"\n",
+    )
+    .unwrap();
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn_writing(&e, &mut ev, &sid, "Premier", &[("i.txt", "x")]).await;
+    ev.until("verify", |v| v["status"] == "running").await;
+    wait_for(|| fake.received("command/exec").len() == 1).await;
+    let r = turn(&e, &sid, "Deuxième").await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+    let v = ev.until("verify", |v| v["status"] == "cancelled").await;
+    assert_eq!(v["attempt"], 1);
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}");
+    assert_eq!(t["turn"]["origin"], "user");
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+#[tokio::test]
+async fn interrupt_cancels_a_verification_and_boot_marks_running_ones_as_errors() {
+    let mut script = slow(text_script());
+    script.push(json!({"expect": "command/exec", "defer": true}));
+    script.push(json!({"expect": "command/exec/terminate"}));
+    script.push(json!({"answer": "command/exec", "result": exec_result(-1, "")}));
+    let (e, fake) = env_sessions(&script).await;
+    make_active_preset(&e).await;
+    std::fs::create_dir_all(topic_dir(&e).join(".enginex")).unwrap();
+    std::fs::write(
+        topic_dir(&e).join(".enginex/verify.toml"),
+        "[[step]]\nname = \"long\"\nrun = \"sleep 100\"\n",
+    )
+    .unwrap();
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn_writing(&e, &mut ev, &sid, "Premier", &[("j.txt", "x")]).await;
+    wait_for(|| fake.received("command/exec").len() == 1).await;
+    let r = e
+        .send("POST", &format!("/api/sessions/{sid}/interrupt"), json!({}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    ev.until("verify", |v| v["status"] == "cancelled").await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(fake.received("turn/start").len(), 1, "aucun tour de correction");
+    // Une vérification restée `running` passe en `error` au démarrage.
+    sqlx::query(
+        "INSERT INTO verifications (session_id, turn_id, attempt, status, steps, started_at) \
+         VALUES (?, 'x', 1, 'running', '[]', 0)",
+    )
+    .bind(&sid)
+    .execute(e.state.db())
+    .await
+    .unwrap();
+    enginex_server::sandboxes::boot(&e.state).await.unwrap();
+    let st: String = sqlx::query_scalar("SELECT status FROM verifications WHERE turn_id = 'x'")
+        .fetch_one(e.state.db())
+        .await
+        .unwrap();
+    assert_eq!(st, "error");
+}
+
+#[tokio::test]
+async fn terminal_requires_the_same_origin() {
+    let (e, _fake) = env_sessions(&text_script()).await;
+    let sid = new_session(&e, "auto").await;
+    let base = serve_tcp(e.router.clone()).await;
+    let path = format!("/api/sessions/{sid}/terminal");
+    assert_eq!(ws_connect(&base, &e.cookie, &path, None).await.err(), Some(403));
+    assert_eq!(
+        ws_connect(&base, &e.cookie, &path, Some("http://evil.example"))
+            .await
+            .err(),
+        Some(403)
+    );
+    assert_eq!(
+        ws_connect(&base, "enginex_session=x", &path, Some(&base)).await.err(),
+        Some(401)
+    );
 }

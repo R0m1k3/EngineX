@@ -1,0 +1,4 @@
+[
+ {"tool_calls": [{"name": "exec_command", "arguments": "{\"cmd\": \"echo un > un.txt\"}", "id": "call_un"}]},
+ {"content": "Écrit."}
+]

@@ -28,9 +28,9 @@ async fn until_long(ev: &mut Sse, name: &str, secs: u64) -> Value {
     }
 }
 
-#[tokio::test]
-#[ignore = "lancé par la CI (job sandbox-e2e, ENGINEX_TEST_DOCKER=1)"]
-async fn session_in_a_real_docker_sandbox() {
+/// EngineX avec le backend Docker, servi sur `0.0.0.0:port` (joignable depuis
+/// la sandbox par la passerelle de l'hôte).
+async fn docker_env(model: &str) -> (Env, u16, PathBuf, tempfile::TempDir) {
     assert_eq!(
         std::env::var("ENGINEX_TEST_DOCKER").as_deref(),
         Ok("1"),
@@ -40,7 +40,7 @@ async fn session_in_a_real_docker_sandbox() {
     let tmp = tempfile::tempdir().unwrap();
     let chat_log = tmp.path().join("chat.log");
     let port = free_port();
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/contract/model-e2e.json");
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/contract/{model}.json"));
     let e = env_cfg(
         &format!(
             "FAKE_CHAT_SCRIPT={} FAKE_CHAT_LOG={}",
@@ -72,6 +72,13 @@ async fn session_in_a_real_docker_sandbox() {
             .await
             .unwrap()
     });
+    (e, port, chat_log, tmp)
+}
+
+#[tokio::test]
+#[ignore = "lancé par la CI (job sandbox-e2e, ENGINEX_TEST_DOCKER=1)"]
+async fn session_in_a_real_docker_sandbox() {
+    let (e, _port, chat_log, _tmp) = docker_env("model-e2e").await;
     let r = e
         .send(
             "PUT",
@@ -159,4 +166,164 @@ async fn session_in_a_real_docker_sandbox() {
         .await
         .unwrap();
     assert_eq!(keys, 0);
+}
+
+async fn term_read_until(ws: &mut Ws, out: &mut String, want: &str) {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    while !out.contains(want) {
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Binary(b)))) => out.push_str(&String::from_utf8_lossy(&b)),
+            Ok(Some(Ok(_))) => {}
+            r => panic!("{want:?} attendu ({r:?}) ; reçu : {out:?}"),
+        }
+    }
+}
+
+async fn term_write(ws: &mut Ws, s: &str) {
+    use futures_util::SinkExt;
+    ws.send(tokio_tungstenite::tungstenite::Message::Binary(
+        s.as_bytes().to_vec().into(),
+    ))
+    .await
+    .unwrap();
+}
+
+fn git(repo: &std::path::Path, args: &[&str]) -> String {
+    let o = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(repo)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success(),
+        "git {args:?} : {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+/// Étape 4b dans le conteneur : vérification, terminal PTY (V8), retour
+/// arrière d'un fichier écrit par la sandbox, course lien symbolique.
+#[tokio::test]
+#[ignore = "lancé par la CI (job sandbox-e2e, ENGINEX_TEST_DOCKER=1)"]
+async fn code_session_in_a_real_docker_sandbox() {
+    let (e, port, _chat_log, _tmp) = docker_env("model-e2e-4b").await;
+    let r = e
+        .send(
+            "PUT",
+            "/api/vault",
+            json!({"scope": "global", "name": "E2E_SECRET", "value": SECRET}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    let topic = e.dir.path().join("data/workspace/projects/general/topics/inbox");
+    std::fs::create_dir_all(topic.join(".enginex")).unwrap();
+    std::fs::write(
+        topic.join(".enginex/verify.toml"),
+        "[[step]]\nname = \"fichier\"\nrun = \"grep -qx un un.txt && test \\\"$(id -u)\\\" = 1000\"\ntimeout = 60\n",
+    )
+    .unwrap();
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+
+    // Tour, instantané, vérification dans le conteneur.
+    turn(&e, &sid, "Écris un.txt").await;
+    let t = until_long(&mut ev, "turn_stored", 300).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}\n{:?}", ev.names());
+    let tid = t["turn"]["id"].as_str().unwrap().to_string();
+    let ch = until_long(&mut ev, "changes", 120).await;
+    assert_eq!(ch["changes"]["files"][0]["path"], "un.txt", "{ch}");
+    let v = loop {
+        let v = until_long(&mut ev, "verify", 300).await;
+        if v["status"] != "running" {
+            break v;
+        }
+    };
+    assert_eq!(v["status"], "passed", "{v}");
+
+    // Terminal PTY dans le conteneur (V8).
+    let base = format!("http://127.0.0.1:{port}");
+    let mut ws = ws_connect(&base, &e.cookie, &format!("/api/sessions/{sid}/terminal"), Some(&base))
+        .await
+        .expect("terminal ouvert");
+    let mut out = String::new();
+    term_write(&mut ws, "echo \"u=$(id -u) s=$E2E_SECRET t=$(tty)\"\n").await;
+    term_read_until(&mut ws, &mut out, "s=*** t=/dev/pts/").await;
+    assert!(out.contains("u=1000"), "{out}");
+    assert!(!out.contains(SECRET), "{out}");
+
+    // Retour arrière des fichiers puis « Rétablir » : propriétaire 1000 gardé.
+    let r = e
+        .send(
+            "POST",
+            &format!("/api/sessions/{sid}/turns/{tid}/revert"),
+            json!({"conversation": false}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    assert!(!topic.join("un.txt").exists());
+    let r = e
+        .send("POST", &format!("/api/sessions/{sid}/restore-undo"), json!({}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    assert_eq!(std::fs::metadata(topic.join("un.txt")).unwrap().uid(), 1000);
+
+    // Course lien symbolique : la sandbox alterne `piege` pendant 20 instantanés.
+    term_write(
+        &mut ws,
+        "while :; do rm -f piege; echo PIEGE > piege; rm -f piege; ln -s /etc/hostname piege; done &\n",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let row = enginex_server::sessions::row(&e.state, &sid).await.unwrap();
+    let f = enginex_server::snapshots::folder(&e.state, &row).await.unwrap();
+    let mut seen = std::collections::HashSet::new();
+    for i in 0..20 {
+        let s = enginex_server::snapshots::snapshot(&e.state, &f, &format!("course {i}"), Default::default())
+            .await
+            .unwrap();
+        let entry = git(&f.snap, &["ls-tree", &s.sha, "piege"]);
+        if entry.trim().is_empty() {
+            seen.insert("absent");
+            continue;
+        }
+        let mode = entry.split_whitespace().next().unwrap().to_string();
+        let blob = git(&f.snap, &["cat-file", "-p", &format!("{}:piege", s.sha)]);
+        match mode.as_str() {
+            "100644" => {
+                // Vide si saisi entre la création et l'écriture ; jamais la cible.
+                assert!(
+                    "PIEGE\n".starts_with(&blob),
+                    "contenu suivi à travers un lien : {blob:?}"
+                );
+                seen.insert("fichier");
+            }
+            "120000" => {
+                assert_eq!(blob, "/etc/hostname");
+                seen.insert("lien");
+            }
+            m => panic!("mode {m}"),
+        }
+    }
+    eprintln!("course : {seen:?}");
+    term_write(&mut ws, "kill %1\nexit\n").await;
+    drop(ws);
+
+    // Suppression : aucun conteneur d'aide restant.
+    let r = e.send("DELETE", &format!("/api/sessions/{sid}"), json!({})).await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    let filters = r#"{"label":["enginex.helper=1"]}"#;
+    let left: Value = reqwest::Client::new()
+        .get(format!("{PROXY}/containers/json"))
+        .query(&[("all", "1"), ("filters", filters)])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(left.as_array().unwrap().len(), 0, "{left}");
 }

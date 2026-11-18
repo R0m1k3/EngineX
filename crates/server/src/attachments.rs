@@ -7,15 +7,14 @@ use std::{io::Cursor, path::PathBuf};
 use axum::{
     Json,
     body::Bytes,
-    extract::{Path as UrlPath, Query, State},
+    extract::{Path as UrlPath, State},
     http::{HeaderMap, header},
     response::{IntoResponse, Response},
 };
 use image::{GenericImageView, ImageFormat, codecs::jpeg::JpegEncoder};
-use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{error::ApiError, sandboxes, sessions, state::AppState, workspace};
+use crate::{error::ApiError, sandboxes, sessions, state::AppState};
 
 /// Taille maximale acceptée (l'UI refuse au-delà).
 pub const MAX_BYTES: usize = 20 * 1024 * 1024;
@@ -131,41 +130,4 @@ pub async fn serve(
     }
     let p = dir(&state, &id).join(&name);
     send_file(&p, image_type(&p).ok_or(ApiError::NotFound)?)
-}
-
-#[derive(Deserialize)]
-pub struct FileQuery {
-    path: String,
-}
-
-/// Image sous le topic (chemin relatif, `/workspace/…` ou chemin du topic),
-/// liens symboliques résolus, rien hors du topic.
-pub async fn file(
-    State(state): State<AppState>,
-    UrlPath(id): UrlPath<String>,
-    Query(q): Query<FileQuery>,
-) -> Result<Response, ApiError> {
-    let r = sessions::row(&state, &id).await?;
-    let topic = workspace::topic(&state, r.topic_id).await?;
-    let root = topic.dir.canonicalize().map_err(|_| ApiError::NotFound)?;
-    let raw = q.path.trim();
-    let rel = raw
-        .strip_prefix("/workspace/")
-        .map(str::to_string)
-        .or_else(|| {
-            std::path::Path::new(raw)
-                .strip_prefix(&topic.dir)
-                .ok()
-                .map(|p| p.display().to_string())
-        })
-        .unwrap_or_else(|| raw.to_string());
-    if std::path::Path::new(&rel).is_absolute() {
-        return Err(ApiError::NotFound);
-    }
-    let p = root.join(rel).canonicalize().map_err(|_| ApiError::NotFound)?;
-    if !p.starts_with(&root) || !p.is_file() {
-        return Err(ApiError::NotFound);
-    }
-    let ctype = image_type(&p).ok_or(ApiError::NotFound)?;
-    send_file(&p, ctype)
 }

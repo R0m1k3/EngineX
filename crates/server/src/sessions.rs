@@ -18,9 +18,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{
     attachments, bridge,
     error::{ApiError, ApiJson},
-    presets, sandboxes,
+    presets, sandboxes, snapshots,
     state::{AppState, now},
-    v1, workspace,
+    v1, verify, workspace,
 };
 
 #[derive(sqlx::FromRow, Clone, Debug)]
@@ -33,11 +33,27 @@ pub struct SessionRow {
     pub archived: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    pub copy_branch: Option<String>,
+    pub pending_note: Option<String>,
+    pub pending_revert: Option<String>,
+    pub undo_snap: Option<String>,
 }
 
-const COLS: &str = "id, topic_id, title, thread_id, approval, archived, created_at, updated_at";
-/// id, statut, erreur, usage, début, fin.
-type TurnRow = (String, String, Option<String>, Option<String>, i64, Option<i64>);
+const COLS: &str = "id, topic_id, title, thread_id, approval, archived, created_at, updated_at, copy_branch, \
+                    pending_note, pending_revert, undo_snap";
+/// id, statut, erreur, usage, début, fin, origine, pre, post, modifications.
+type TurnRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    i64,
+    Option<i64>,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 pub const DEFAULT_TITLE: &str = "Nouvelle session";
 
@@ -95,14 +111,23 @@ pub async fn set_item_turn(state: &AppState, sid: &str, item_id: &str, turn_id: 
         .map(|_| ())
 }
 
-pub async fn insert_turn(state: &AppState, sid: &str, tid: &str, started: i64) -> Result<(), sqlx::Error> {
+pub async fn insert_turn(
+    state: &AppState,
+    sid: &str,
+    tid: &str,
+    started: i64,
+    origin: &str,
+    snap_pre: Option<&str>,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO chat_turns (id, session_id, status, started_at) VALUES (?, ?, 'inProgress', ?) \
-         ON CONFLICT(session_id, id) DO NOTHING",
+        "INSERT INTO chat_turns (id, session_id, status, started_at, origin, snap_pre) \
+         VALUES (?, ?, 'inProgress', ?, ?, ?) ON CONFLICT(session_id, id) DO NOTHING",
     )
     .bind(tid)
     .bind(sid)
     .bind(started)
+    .bind(origin)
+    .bind(snap_pre)
     .execute(state.db())
     .await
     .map(|_| ())
@@ -148,6 +173,55 @@ pub async fn finish_turn(
     .execute(state.db())
     .await
     .map(|_| ())
+}
+
+/// Instantanés et modifications d'un tour (après son `post`).
+pub async fn set_turn_snaps(
+    state: &AppState,
+    sid: &str,
+    tid: &str,
+    pre: Option<&str>,
+    post: Option<&str>,
+    changes: Option<&Value>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE chat_turns SET snap_pre = COALESCE(?, snap_pre), snap_post = ?, changes = ? \
+         WHERE session_id = ? AND id = ?",
+    )
+    .bind(pre)
+    .bind(post)
+    .bind(changes.map(Value::to_string))
+    .bind(sid)
+    .bind(tid)
+    .execute(state.db())
+    .await
+    .map(|_| ())
+}
+
+/// Colonne texte facultative de `chat_sessions` (`pending_note`,
+/// `pending_revert`, `undo_snap`).
+pub async fn set_session_field(state: &AppState, sid: &str, field: &str, v: Option<&str>) -> Result<(), sqlx::Error> {
+    let col = match field {
+        "pending_note" => "pending_note",
+        "pending_revert" => "pending_revert",
+        "undo_snap" => "undo_snap",
+        _ => return Ok(()),
+    };
+    sqlx::query(&format!("UPDATE chat_sessions SET {col} = ? WHERE id = ?"))
+        .bind(v)
+        .bind(sid)
+        .execute(state.db())
+        .await
+        .map(|_| ())
+}
+
+/// Tours retirés par un retour de conversation (jamais restockés).
+pub async fn reverted(state: &AppState, sid: &str) -> Result<std::collections::HashSet<String>, sqlx::Error> {
+    let v: Vec<(String,)> = sqlx::query_as("SELECT turn_id FROM chat_reverted WHERE session_id = ?")
+        .bind(sid)
+        .fetch_all(state.db())
+        .await?;
+    Ok(v.into_iter().map(|(t,)| t).collect())
 }
 
 pub async fn set_thread(state: &AppState, sid: &str, thread: &str) -> Result<(), sqlx::Error> {
@@ -283,17 +357,29 @@ pub async fn get(
     items.truncate(limit as usize);
     items.reverse();
     let turns: Vec<TurnRow> = sqlx::query_as(
-        "SELECT id, status, error, usage, started_at, completed_at FROM chat_turns WHERE session_id = ? ORDER BY started_at",
+        "SELECT id, status, error, usage, started_at, completed_at, origin, snap_pre, snap_post, changes \
+         FROM chat_turns WHERE session_id = ? ORDER BY started_at, rowid",
     )
     .bind(&id)
     .fetch_all(state.db())
     .await?;
+    let mut verifs = verify::by_turn(&state, &id).await?;
+    let green: Option<String> = sqlx::query_scalar(
+        "SELECT turn_id FROM verifications WHERE session_id = ? AND status = 'passed' ORDER BY id DESC LIMIT 1",
+    )
+    .bind(&id)
+    .fetch_optional(state.db())
+    .await?;
     let turns: Vec<Value> = turns
         .into_iter()
-        .map(|(tid, st, err, usage, s, c)| {
+        .map(|(tid, st, err, usage, s, c, origin, pre, post, changes)| {
+            let v = verifs.remove(&tid).unwrap_or_default();
             json!({"id": tid, "status": st, "error": err,
                 "usage": usage.and_then(|u| serde_json::from_str::<Value>(&u).ok()),
-                "started_at": s, "completed_at": c})
+                "started_at": s, "completed_at": c, "origin": origin,
+                "has_snapshot": pre.is_some(), "has_post": post.is_some(),
+                "changes": changes.and_then(|c| serde_json::from_str::<Value>(&c).ok()),
+                "verifications": v})
         })
         .collect();
     let items: Vec<Value> = items
@@ -304,7 +390,8 @@ pub async fn get(
         })
         .collect();
     Ok(Json(
-        json!({"session": session_json(&state, &r), "turns": turns, "items": items, "more": more}),
+        json!({"session": session_json(&state, &r), "turns": turns, "items": items, "more": more,
+        "green_turn": green}),
     ))
 }
 
@@ -356,7 +443,14 @@ pub async fn patch(
 }
 
 pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<String>) -> Result<Json<Value>, ApiError> {
-    row(&state, &id).await?;
+    let r = row(&state, &id).await?;
+    if let Ok(f) = snapshots::folder(&state, &r).await {
+        if r.copy_branch.is_some() {
+            let _ = std::fs::remove_dir_all(&f.snap);
+        } else if let Err(e) = snapshots::drop_refs(&state, &f).await {
+            tracing::warn!("refs de la session {id} : {e:#}");
+        }
+    }
     bridge::hub(&state, &id).stop_conn(&state, "session supprimée").await;
     bridge::forget(&state, &id);
     sqlx::query("DELETE FROM chat_sessions WHERE id = ?")
@@ -394,6 +488,15 @@ pub async fn post_turn(
     if hub.running() {
         return Err(ApiError::TurnInProgress);
     }
+    if hub.verifying() {
+        hub.cancel_verify().await;
+        for _ in 0..50 {
+            if !hub.verifying() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
     state.0.sandboxes.backend()?;
     presets::active_id(&state).await?.ok_or(ApiError::NoActivePreset)?;
     let active = v1::active(&state)
@@ -426,7 +529,7 @@ pub async fn post_turn(
         "text": masker.mask(&text),
         "images": images,
     });
-    hub.begin(user)?;
+    hub.begin(user, "user")?;
     let _ = r;
     tokio::spawn(hub.run_turn(state.clone(), text, b.attachments));
     Ok((StatusCode::ACCEPTED, Json(json!({ "accepted": true }))).into_response())
@@ -459,7 +562,12 @@ async fn make_room(state: &AppState, for_id: &str) -> Result<(), ApiError> {
 
 pub async fn interrupt(State(state): State<AppState>, UrlPath(id): UrlPath<String>) -> Result<Json<Value>, ApiError> {
     row(&state, &id).await?;
-    bridge::hub(&state, &id).interrupt().await?;
+    let hub = bridge::hub(&state, &id);
+    if hub.verifying() && !hub.running() {
+        hub.cancel_verify().await;
+        return Ok(Json(json!({ "ok": true })));
+    }
+    hub.interrupt().await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -540,4 +648,273 @@ pub async fn events(State(state): State<AppState>, UrlPath(id): UrlPath<String>)
         .header("x-accel-buffering", "no")
         .body(Body::from_stream(ReceiverStream::new(out)))
         .expect("réponse SSE"))
+}
+
+// ---- Instantanés et retours arrière ----
+
+/// 409 `folder_busy` si un tour ou une vérification tourne dans une session
+/// qui partage ce dossier de travail.
+async fn ensure_folder_free(state: &AppState, f: &snapshots::Folder) -> Result<(), ApiError> {
+    let want = std::fs::canonicalize(&f.work).unwrap_or_else(|_| f.work.clone());
+    for h in bridge::hubs(state) {
+        if !h.busy() {
+            continue;
+        }
+        let Ok(r) = row(state, &h.id).await else { continue };
+        let Ok(o) = snapshots::folder(state, &r).await else {
+            continue;
+        };
+        if std::fs::canonicalize(&o.work).unwrap_or(o.work) == want {
+            return Err(ApiError::FolderBusy);
+        }
+    }
+    Ok(())
+}
+
+/// `(snap_pre, snap_post)` d'un tour.
+async fn turn_snaps(state: &AppState, sid: &str, tid: &str) -> Result<(Option<String>, Option<String>), ApiError> {
+    sqlx::query_as("SELECT snap_pre, snap_post FROM chat_turns WHERE session_id = ? AND id = ?")
+        .bind(sid)
+        .bind(tid)
+        .fetch_optional(state.db())
+        .await?
+        .ok_or(ApiError::NotFound)
+}
+
+fn internal(e: anyhow::Error) -> ApiError {
+    ApiError::Internal(e)
+}
+
+#[derive(Deserialize)]
+pub struct DiffQuery {
+    path: String,
+}
+
+pub async fn turn_diff(
+    State(state): State<AppState>,
+    UrlPath((id, tid)): UrlPath<(String, String)>,
+    Query(q): Query<DiffQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let r = row(&state, &id).await?;
+    if !snapshots::valid_rel(&q.path) {
+        return Err(ApiError::BadRequest);
+    }
+    let (Some(pre), Some(post)) = turn_snaps(&state, &id, &tid).await? else {
+        return Err(ApiError::NoSnapshot);
+    };
+    let f = snapshots::folder(&state, &r).await?;
+    let (diff, truncated, binary) = snapshots::diff(&state, &f, &pre, &post, &q.path)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({"diff": diff, "truncated": truncated, "binary": binary})))
+}
+
+#[derive(Deserialize)]
+pub struct UndoFileBody {
+    path: String,
+    #[serde(default)]
+    force: bool,
+}
+
+pub async fn undo_file(
+    State(state): State<AppState>,
+    UrlPath((id, tid)): UrlPath<(String, String)>,
+    ApiJson(b): ApiJson<UndoFileBody>,
+) -> Result<Json<Value>, ApiError> {
+    let r = row(&state, &id).await?;
+    if !snapshots::valid_rel(&b.path) {
+        return Err(ApiError::BadRequest);
+    }
+    let (Some(pre), Some(post)) = turn_snaps(&state, &id, &tid).await? else {
+        return Err(ApiError::NoSnapshot);
+    };
+    let f = snapshots::folder(&state, &r).await?;
+    ensure_folder_free(&state, &f).await?;
+    match snapshots::undo_file(&state, &f, &pre, &post, &b.path, b.force)
+        .await
+        .map_err(internal)?
+    {
+        snapshots::UndoFile::ChangedSince => Err(ApiError::ChangedSince),
+        snapshots::UndoFile::Done(undo) => {
+            set_session_field(&state, &id, "undo_snap", Some(&undo)).await?;
+            emit_session(&state, &id).await;
+            Ok(Json(json!({ "ok": true })))
+        }
+    }
+}
+
+/// Le détail de la session a changé (bandeau, note) : nouvel instantané SSE.
+async fn emit_session(state: &AppState, id: &str) {
+    if let Ok(r) = row(state, id).await {
+        bridge::hub(state, id).emit_event("session", session_json(state, &r));
+    }
+}
+
+/// Texte du message de Michael d'un tour.
+async fn user_item(state: &AppState, sid: &str, tid: &str) -> Result<Option<Value>, ApiError> {
+    let d: Option<String> = sqlx::query_scalar(
+        "SELECT data FROM chat_items WHERE session_id = ? AND turn_id = ? AND kind = 'userMessage' ORDER BY seq LIMIT 1",
+    )
+    .bind(sid)
+    .bind(tid)
+    .fetch_optional(state.db())
+    .await?;
+    Ok(d.and_then(|d| serde_json::from_str(&d).ok()))
+}
+
+fn note_for(user: Option<&Value>) -> String {
+    let text: String = user
+        .and_then(|u| u["text"].as_str())
+        .unwrap_or("")
+        .chars()
+        .take(60)
+        .collect();
+    format!(
+        "Note d'EngineX : les fichiers ont été remis dans l'état d'avant le message « {text} ». \
+         Vérifie l'état actuel avant de continuer."
+    )
+}
+
+#[derive(Deserialize)]
+pub struct RevertBody {
+    #[serde(default)]
+    conversation: bool,
+}
+
+/// « Revenir avant ce message » : fichiers, et la conversation si demandé.
+pub async fn revert(
+    State(state): State<AppState>,
+    UrlPath((id, tid)): UrlPath<(String, String)>,
+    ApiJson(b): ApiJson<RevertBody>,
+) -> Result<Json<Value>, ApiError> {
+    let r = row(&state, &id).await?;
+    let (pre, _) = turn_snaps(&state, &id, &tid).await?;
+    let pre = pre.ok_or(ApiError::NoSnapshot)?;
+    let f = snapshots::folder(&state, &r).await?;
+    ensure_folder_free(&state, &f).await?;
+    let undo = snapshots::restore_to(&state, &f, &pre).await.map_err(internal)?;
+    set_session_field(&state, &id, "undo_snap", Some(&undo)).await?;
+    let user = user_item(&state, &id, &tid).await?;
+    if !b.conversation {
+        set_session_field(&state, &id, "pending_note", Some(&note_for(user.as_ref()))).await?;
+        emit_session(&state, &id).await;
+        return Ok(Json(json!({"ok": true, "user": null})));
+    }
+    // Conversation : ce tour et les suivants quittent l'historique d'EngineX
+    // tout de suite, et celui de Codex dès que possible.
+    let started: i64 = sqlx::query_scalar("SELECT started_at FROM chat_turns WHERE session_id = ? AND id = ?")
+        .bind(&id)
+        .bind(&tid)
+        .fetch_one(state.db())
+        .await?;
+    let first_seq: Option<i64> =
+        sqlx::query_scalar("SELECT MIN(seq) FROM chat_items WHERE session_id = ? AND turn_id = ?")
+            .bind(&id)
+            .bind(&tid)
+            .fetch_one(state.db())
+            .await?;
+    let first_seq = first_seq.unwrap_or(i64::MAX);
+    let mut removed: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT id, started_at FROM chat_turns WHERE session_id = ? AND (started_at > ? OR id = ? OR id IN \
+         (SELECT turn_id FROM chat_items WHERE session_id = ? AND seq >= ? AND turn_id IS NOT NULL))",
+    )
+    .bind(&id)
+    .bind(started)
+    .bind(&tid)
+    .bind(&id)
+    .bind(first_seq)
+    .fetch_all(state.db())
+    .await?;
+    removed.sort_by_key(|(t, s)| (*s, t != &tid));
+    let mut tx = state.db().begin().await?;
+    for (t, _) in &removed {
+        sqlx::query("INSERT INTO chat_reverted (session_id, turn_id) VALUES (?, ?) ON CONFLICT DO NOTHING")
+            .bind(&id)
+            .bind(t)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM chat_turns WHERE session_id = ? AND id = ?")
+            .bind(&id)
+            .bind(t)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM verifications WHERE session_id = ? AND turn_id = ?")
+            .bind(&id)
+            .bind(t)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM chat_items WHERE session_id = ? AND turn_id = ?")
+            .bind(&id)
+            .bind(t)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DELETE FROM chat_items WHERE session_id = ? AND seq >= ?")
+        .bind(&id)
+        .bind(first_seq)
+        .execute(&mut *tx)
+        .await?;
+    // Un tour `ex-…` est inconnu de Codex : le premier tour retiré connu.
+    let pending = removed.iter().map(|(t, _)| t).find(|t| !t.starts_with("ex-")).cloned();
+    if let Some(p) = &pending {
+        sqlx::query("UPDATE chat_sessions SET pending_revert = ? WHERE id = ? AND pending_revert IS NULL")
+            .bind(p)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    let hub = bridge::hub(&state, &id);
+    if pending.is_some() && hub.has_conn() {
+        let st = state.clone();
+        tokio::spawn(async move { hub.revert_now(&st).await });
+    }
+    emit_session(&state, &id).await;
+    bridge::hub(&state, &id).emit_event("history", json!({ "reverted": tid }));
+    Ok(Json(json!({"ok": true, "user": user})))
+}
+
+/// « Rétablir » : les fichiers d'avant le dernier retour arrière.
+pub async fn restore_undo(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    let r = row(&state, &id).await?;
+    let undo = r.undo_snap.clone().ok_or(ApiError::NoSnapshot)?;
+    let f = snapshots::folder(&state, &r).await?;
+    ensure_folder_free(&state, &f).await?;
+    let before = snapshots::restore_to(&state, &f, &undo).await.map_err(internal)?;
+    set_session_field(&state, &id, "undo_snap", Some(&before)).await?;
+    emit_session(&state, &id).await;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// « Revenir au dernier état vert » (fichiers seulement).
+pub async fn restore_green(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<Value>, ApiError> {
+    let r = row(&state, &id).await?;
+    let green: Option<String> = sqlx::query_scalar(
+        "SELECT v.turn_id FROM verifications v JOIN chat_turns t ON t.session_id = v.session_id AND t.id = v.turn_id \
+         WHERE v.session_id = ? AND v.status = 'passed' AND t.snap_post IS NOT NULL ORDER BY v.id DESC LIMIT 1",
+    )
+    .bind(&id)
+    .fetch_optional(state.db())
+    .await?;
+    let green = green.ok_or(ApiError::NoSnapshot)?;
+    let f = snapshots::folder(&state, &r).await?;
+    ensure_folder_free(&state, &f).await?;
+    let undo = snapshots::restore_to(&state, &f, &snapshots::green_ref(&id))
+        .await
+        .map_err(internal)?;
+    set_session_field(&state, &id, "undo_snap", Some(&undo)).await?;
+    let user = user_item(&state, &id, &green).await?;
+    let note = note_for(user.as_ref()).replace(
+        "dans l'état d'avant le message",
+        "dans le dernier état vérifié (vert), celui d'après le message",
+    );
+    set_session_field(&state, &id, "pending_note", Some(&note)).await?;
+    emit_session(&state, &id).await;
+    Ok(Json(json!({ "ok": true })))
 }

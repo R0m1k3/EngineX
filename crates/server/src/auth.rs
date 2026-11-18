@@ -268,18 +268,22 @@ pub async fn same_origin(State(state): State<AppState>, req: Request, next: Next
         return next.run(req).await;
     }
     let h = req.headers();
-    if let Some(origin) = h.get(header::ORIGIN) {
-        let origin = origin.to_str().unwrap_or("null");
-        let expected = public_host(&state, h);
-        let ok = match (origin_host(origin), expected) {
-            (Some(o), Some(e)) => o.eq_ignore_ascii_case(e),
-            _ => false,
-        };
-        if !ok {
-            return ApiError::ForbiddenOrigin.into_response();
-        }
+    if h.get(header::ORIGIN).is_some() && !origin_ok(&state, h) {
+        return ApiError::ForbiddenOrigin.into_response();
     }
     next.run(req).await
+}
+
+/// L'en-tête `Origin` est présent et désigne l'hôte public d'EngineX.
+pub fn origin_ok(state: &AppState, h: &HeaderMap) -> bool {
+    let Some(origin) = h.get(header::ORIGIN) else {
+        return false;
+    };
+    let origin = origin.to_str().unwrap_or("null");
+    match (origin_host(origin), public_host(state, h)) {
+        (Some(o), Some(e)) => o.eq_ignore_ascii_case(e),
+        _ => false,
+    }
 }
 
 // ---- Gestionnaires ----

@@ -301,6 +301,7 @@ pub struct Resp {
     pub text: String,
     /// `nom=valeur` du Set-Cookie, s'il y en a un.
     pub cookie: Option<String>,
+    pub headers: axum::http::HeaderMap,
 }
 
 pub async fn call(r: &Router, method: &str, path: &str, body: Option<Value>, cookie: Option<&str>) -> Resp {
@@ -320,6 +321,7 @@ pub async fn call(r: &Router, method: &str, path: &str, body: Option<Value>, coo
     .unwrap();
     let res = r.clone().oneshot(req).await.unwrap();
     let status = res.status();
+    let headers = res.headers().clone();
     let cookie = res
         .headers()
         .get(header::SET_COOKIE)
@@ -333,6 +335,7 @@ pub async fn call(r: &Router, method: &str, path: &str, body: Option<Value>, coo
         body: serde_json::from_str(&text).unwrap_or(Value::Null),
         text,
         cookie,
+        headers,
     }
 }
 
@@ -727,6 +730,7 @@ pub async fn upload(e: &Env, path: &str, ctype: &str, bytes: Vec<u8>) -> Resp {
         .unwrap();
     let res = e.router.clone().oneshot(req).await.unwrap();
     let status = res.status();
+    let headers = res.headers().clone();
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&bytes).into_owned();
     Resp {
@@ -734,6 +738,7 @@ pub async fn upload(e: &Env, path: &str, ctype: &str, bytes: Vec<u8>) -> Resp {
         body: serde_json::from_str(&text).unwrap_or(Value::Null),
         text,
         cookie: None,
+        headers,
     }
 }
 
@@ -743,4 +748,25 @@ pub fn png(w: u32, h: u32) -> Vec<u8> {
         .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
         .unwrap();
     buf
+}
+
+// ---- WebSocket ----
+
+pub type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Ouvre le WebSocket `path` sur `base` (`http://hôte:port`) avec le cookie de
+/// session ; `origin` absent = pas d'en-tête Origin. Erreur : statut HTTP.
+pub async fn ws_connect(base: &str, cookie: &str, path: &str, origin: Option<&str>) -> Result<Ws, u16> {
+    use tokio_tungstenite::tungstenite::{Error, client::IntoClientRequest};
+    let url = format!("{}{path}", base.replacen("http://", "ws://", 1));
+    let mut req = url.into_client_request().unwrap();
+    req.headers_mut().insert(header::COOKIE, cookie.parse().unwrap());
+    if let Some(o) = origin {
+        req.headers_mut().insert(header::ORIGIN, o.parse().unwrap());
+    }
+    match tokio_tungstenite::connect_async(req).await {
+        Ok((ws, _)) => Ok(ws),
+        Err(Error::Http(r)) => Err(r.status().as_u16()),
+        Err(e) => panic!("WebSocket {path} : {e}"),
+    }
 }

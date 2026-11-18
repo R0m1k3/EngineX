@@ -12,7 +12,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use crate::{Handle, Owned, Spec};
+use crate::{HELPER_STDOUT_MAX, Handle, HelperOutcome, HelperSpec, OUTPUT_TOO_LARGE, Owned, Spec};
 
 pub struct Local {
     bin: PathBuf,
@@ -140,6 +140,34 @@ impl Local {
             });
         }
         Ok(out)
+    }
+
+    /// Script du conteneur d'aide en processus hôte (sans isolation).
+    pub async fn run_helper(&self, spec: &HelperSpec, timeout: std::time::Duration) -> anyhow::Result<HelperOutcome> {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg(spec.script)
+            .current_dir("/")
+            .envs(spec.env.iter().map(|(k, v)| (k, v)))
+            .envs(spec.binds.iter().map(|(p, var, _)| (*var, p.as_os_str())))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let child = cmd
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("lancement du script d'aide : {e}"))?;
+        let out = tokio::time::timeout(timeout, child.wait_with_output())
+            .await
+            .map_err(|_| anyhow::anyhow!("script d'aide : délai de {} s dépassé", timeout.as_secs()))??;
+        if out.stdout.len() > HELPER_STDOUT_MAX {
+            anyhow::bail!(OUTPUT_TOO_LARGE);
+        }
+        Ok(HelperOutcome {
+            code: out.status.code().map(i64::from).unwrap_or(-1),
+            stdout: out.stdout,
+            stderr: crate::tail(&String::from_utf8_lossy(&out.stderr), 200),
+        })
     }
 
     pub async fn logs(&self, session_id: &str) -> String {

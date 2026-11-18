@@ -8,7 +8,7 @@ use std::{
 
 use bollard::models::{ContainerCreateBody, HostConfig};
 
-use crate::Spec;
+use crate::{HelperSpec, Spec};
 
 pub const LISTEN_PORT: u16 = 4500;
 pub const WORKDIR: &str = "/workspace";
@@ -94,6 +94,59 @@ pub fn container_spec(spec: &Spec, opts: &DockerOpts) -> anyhow::Result<Containe
             extra_hosts: opts
                 .host_gateway
                 .then(|| vec!["host.docker.internal:host-gateway".into()]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+}
+
+/// Nom d'un conteneur d'aide : `enginex-helper-<8 car. de la session>-<suffixe>`.
+pub fn helper_name(session_id: &str, suffix: &str) -> String {
+    let short: String = session_id.chars().take(8).collect();
+    format!("enginex-helper-{short}-{suffix}")
+}
+
+/// Point de montage d'un dossier du conteneur d'aide.
+pub fn helper_mount(var: &str) -> String {
+    format!("/mnt/{}", var.to_ascii_lowercase())
+}
+
+/// Spec d'un conteneur d'aide : image devbox, même durcissement que la
+/// sandbox, aucun réseau, seulement les montages et variables demandés.
+pub fn helper_spec(spec: &HelperSpec, opts: &DockerOpts) -> anyhow::Result<ContainerCreateBody> {
+    let mut binds = Vec::new();
+    let mut env: Vec<String> = spec.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    for (path, var, rw) in &spec.binds {
+        let mount = helper_mount(var);
+        binds.push(format!(
+            "{}:{mount}:{}",
+            host_path(path, opts)?,
+            if *rw { "rw" } else { "ro" }
+        ));
+        env.push(format!("{var}={mount}"));
+    }
+    let labels = HashMap::from([
+        ("enginex.helper".to_string(), "1".to_string()),
+        ("enginex.owner".to_string(), spec.owner.clone()),
+    ]);
+    Ok(ContainerCreateBody {
+        image: Some(opts.image.clone()),
+        user: Some("1000:1000".into()),
+        working_dir: Some("/".into()),
+        cmd: Some(vec!["sh".into(), "-c".into(), spec.script.into()]),
+        env: Some(env),
+        labels: Some(labels),
+        network_disabled: Some(true),
+        host_config: Some(HostConfig {
+            binds: Some(binds),
+            network_mode: Some("none".into()),
+            cap_drop: Some(vec!["ALL".into()]),
+            security_opt: Some(vec!["no-new-privileges:true".into()]),
+            privileged: Some(false),
+            pids_limit: Some(512),
+            memory: Some(opts.memory),
+            auto_remove: Some(false),
+            init: Some(true),
             ..Default::default()
         }),
         ..Default::default()

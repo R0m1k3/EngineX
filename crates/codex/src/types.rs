@@ -17,6 +17,7 @@ pub const WHITELIST: &[&str] = &[
     "thread/tokenUsage/updated",
     "serverRequest/resolved",
     "error",
+    "command/exec/outputDelta",
 ];
 
 /// Requêtes du serveur que l'UI sait traiter.
@@ -34,8 +35,58 @@ pub fn approval_policy(mode: &str) -> &'static str {
     }
 }
 
-pub fn thread_start(cwd: &str, approval: &str) -> Value {
-    json!({"cwd": cwd, "sandbox": "danger-full-access", "approvalPolicy": approval})
+pub fn thread_start(cwd: &str, approval: &str, developer_instructions: Option<&str>) -> Value {
+    let mut v = json!({"cwd": cwd, "sandbox": "danger-full-access", "approvalPolicy": approval});
+    if let Some(d) = developer_instructions {
+        v["developerInstructions"] = json!(d);
+    }
+    v
+}
+
+/// `thread/revert` : retire le tour `before_turn_id` et les suivants.
+pub fn thread_revert(thread_id: &str, before_turn_id: &str) -> Value {
+    json!({"threadId": thread_id, "beforeTurnId": before_turn_id})
+}
+
+/// `command/exec` : `process_id` + `tty` pour un terminal (sortie en
+/// `command/exec/outputDelta`), sinon mode tamponné (`stdout`/`stderr` dans
+/// la réponse). Sans politique de Codex : la sandbox Docker est la frontière.
+pub fn command_exec(
+    command: &[&str],
+    cwd: &str,
+    process_id: Option<&str>,
+    tty: Option<(u16, u16)>,
+    timeout_ms: Option<u64>,
+) -> Value {
+    let mut v = json!({
+        "command": command,
+        "cwd": cwd,
+        "sandboxPolicy": {"type": "dangerFullAccess"},
+    });
+    if let Some(p) = process_id {
+        v["processId"] = json!(p);
+    }
+    if let Some((rows, cols)) = tty {
+        v["tty"] = json!(true);
+        v["size"] = json!({"rows": rows, "cols": cols});
+    }
+    match timeout_ms {
+        Some(ms) => v["timeoutMs"] = json!(ms),
+        None => v["disableTimeout"] = json!(true),
+    }
+    v
+}
+
+pub fn exec_write(process_id: &str, data_base64: &str) -> Value {
+    json!({"processId": process_id, "deltaBase64": data_base64})
+}
+
+pub fn exec_resize(process_id: &str, rows: u16, cols: u16) -> Value {
+    json!({"processId": process_id, "size": {"rows": rows, "cols": cols}})
+}
+
+pub fn exec_terminate(process_id: &str) -> Value {
+    json!({"processId": process_id})
 }
 
 pub fn thread_resume(thread_id: &str, cwd: &str, approval: &str) -> Value {

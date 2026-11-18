@@ -1,0 +1,9 @@
+[
+ {"tool_calls": [{"name": "exec_command", "arguments": "{\"cmd\": \"echo un > un.txt\"}", "id": "call_1"}]},
+ {"content": "Un."},
+ {"tool_calls": [{"name": "exec_command", "arguments": "{\"cmd\": \"echo deux > deux.txt\"}", "id": "call_2"}]},
+ {"content": "Deux."},
+ {"content": "Trois."},
+ {"content": "Quatre."},
+ {"content": "Cinq."}
+]

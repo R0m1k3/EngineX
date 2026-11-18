@@ -82,13 +82,14 @@ jobs:
             | jq -r 'select(.profile.test == true and .target.name == "sandbox_docker") | .executable')
           sudo chmod o+rx "$HOME" "$HOME/work"
           sudo env ENGINEX_TEST_DOCKER=1 ENGINEX_DEVBOX_IMAGE=enginex-devbox:ci HOME=/tmp \
-            setpriv --reuid=1000 --regid=1000 --clear-groups "$bin" --ignored --nocapture
+            setpriv --reuid=1000 --regid=1000 --clear-groups "$bin" --ignored --nocapture --test-threads=1
       - name: Journaux en cas d'échec
         if: failure()
         run: |
           docker ps -a
           docker logs proxy 2>&1 | tail -50
           for c in $(docker ps -aq --filter label=enginex.session); do docker logs "$c" 2>&1 | tail -50; done
+          for c in $(docker ps -aq --filter label=enginex.helper); do docker logs "$c" 2>&1 | tail -50; done
 
   # Publie la devbox avec le Codex validé par `contract` (un contrat rouge
   # bloque la devbox, pas l'image EngineX).

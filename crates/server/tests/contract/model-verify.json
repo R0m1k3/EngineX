@@ -1,0 +1,6 @@
+[
+ {"tool_calls": [{"name": "exec_command", "arguments": "{\"cmd\": \"echo nope > ok.txt\"}", "id": "call_1"}]},
+ {"content": "Fichier écrit."},
+ {"tool_calls": [{"name": "exec_command", "arguments": "{\"cmd\": \"echo ok > ok2.txt\"}", "id": "call_2"}]},
+ {"content": "Corrigé."}
+]

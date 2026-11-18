@@ -12,14 +12,14 @@ use bollard::{
     errors::Error as DockerError,
     query_parameters::{
         CreateContainerOptions, CreateImageOptions, InspectContainerOptions, ListContainersOptions, LogsOptions,
-        RemoveContainerOptions,
+        RemoveContainerOptions, WaitContainerOptions,
     },
 };
 use futures_util::StreamExt;
 
 use crate::{
-    Handle, Owned, Progress, Spec,
-    spec::{ATTACHMENTS, DockerOpts, LISTEN_PORT, WORKDIR, container_name, container_spec},
+    HELPER_STDOUT_MAX, Handle, HelperOutcome, HelperSpec, OUTPUT_TOO_LARGE, Owned, Progress, Spec,
+    spec::{ATTACHMENTS, DockerOpts, LISTEN_PORT, WORKDIR, container_name, container_spec, helper_name, helper_spec},
 };
 
 pub struct Docker {
@@ -42,6 +42,18 @@ fn now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Suffixe aléatoire de 4 caractères hexadécimaux.
+fn suffix() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let v = nanos ^ N.fetch_add(0x9e37, Ordering::Relaxed).rotate_left(7) ^ std::process::id();
+    format!("{:04x}", v & 0xffff)
 }
 
 fn is_404(e: &DockerError) -> bool {
@@ -142,10 +154,16 @@ impl Docker {
         res
     }
 
-    pub async fn start(&self, spec: &Spec, progress: &(dyn Fn(Progress) + Send + Sync)) -> anyhow::Result<Handle> {
+    /// Tire l'image si elle manque.
+    pub async fn ensure_image(&self, progress: &(dyn Fn(Progress) + Send + Sync)) -> anyhow::Result<()> {
         if !self.image_present().await {
             self.pull(progress).await?;
         }
+        Ok(())
+    }
+
+    pub async fn start(&self, spec: &Spec, progress: &(dyn Fn(Progress) + Send + Sync)) -> anyhow::Result<Handle> {
+        self.ensure_image(progress).await?;
         progress(Progress::Starting);
         let name = container_name(&spec.session_id);
         self.stop(&spec.session_id).await?;
@@ -184,11 +202,14 @@ impl Docker {
     }
 
     pub async fn stop(&self, session_id: &str) -> anyhow::Result<()> {
-        let name = container_name(session_id);
+        self.remove(&container_name(session_id)).await
+    }
+
+    async fn remove(&self, name: &str) -> anyhow::Result<()> {
         match self
             .client
             .remove_container(
-                &name,
+                name,
                 Some(RemoveContainerOptions {
                     force: true,
                     ..Default::default()
@@ -200,6 +221,98 @@ impl Docker {
             Err(e) if is_404(&e) => Ok(()),
             Err(e) => Err(anyhow::anyhow!("suppression de {name} : {e}")),
         }
+    }
+
+    /// Lance un conteneur d'aide, attend sa fin, lit stdout et stderr à part,
+    /// puis le supprime (aussi sur erreur ou délai).
+    pub async fn run_helper(&self, spec: &HelperSpec, timeout: std::time::Duration) -> anyhow::Result<HelperOutcome> {
+        self.ensure_image(&|_| {}).await?;
+        let name = helper_name(&spec.session_id, &suffix());
+        let body = helper_spec(spec, &self.opts)?;
+        self.client
+            .create_container(
+                Some(CreateContainerOptions {
+                    name: Some(name.clone()),
+                    ..Default::default()
+                }),
+                body,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("création de {name} : {e}"))?;
+        let res = tokio::time::timeout(timeout, self.helper_run(&name)).await;
+        let _ = self.remove(&name).await;
+        match res {
+            Ok(r) => r,
+            Err(_) => Err(anyhow::anyhow!("{name} : délai de {} s dépassé", timeout.as_secs())),
+        }
+    }
+
+    async fn helper_run(&self, name: &str) -> anyhow::Result<HelperOutcome> {
+        self.client
+            .start_container(name, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("démarrage de {name} : {e}"))?;
+        let mut wait = self.client.wait_container(name, None::<WaitContainerOptions>);
+        let code = match wait.next().await {
+            Some(Ok(r)) => r.status_code,
+            Some(Err(DockerError::DockerContainerWaitError { code, .. })) => code,
+            Some(Err(e)) => anyhow::bail!("attente de {name} : {e}"),
+            None => anyhow::bail!("attente de {name} : pas de réponse"),
+        };
+        let stdout = self.container_logs(name, true, false, HELPER_STDOUT_MAX).await?;
+        let stderr = self
+            .container_logs(name, false, true, HELPER_STDOUT_MAX)
+            .await
+            .unwrap_or_default();
+        Ok(HelperOutcome {
+            code,
+            stdout,
+            stderr: crate::tail(&String::from_utf8_lossy(&stderr), 200),
+        })
+    }
+
+    /// Journal complet d'un conteneur par son nom (stdout et/ou stderr), au
+    /// plus `max` octets (au-delà : erreur `output_too_large`).
+    pub async fn container_logs(&self, name: &str, stdout: bool, stderr: bool, max: usize) -> anyhow::Result<Vec<u8>> {
+        let mut s = self.client.logs(
+            name,
+            Some(LogsOptions {
+                stdout,
+                stderr,
+                ..Default::default()
+            }),
+        );
+        let mut out = Vec::new();
+        while let Some(item) = s.next().await {
+            let chunk = item.map_err(|e| anyhow::anyhow!("journal de {name} : {e}"))?;
+            out.extend_from_slice(&chunk.into_bytes());
+            if out.len() > max {
+                anyhow::bail!(OUTPUT_TOO_LARGE);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Supprime les conteneurs d'aide de cette instance.
+    pub async fn remove_helpers(&self, owner: &str) -> anyhow::Result<()> {
+        let filters = HashMap::from([(
+            "label".to_string(),
+            vec!["enginex.helper=1".to_string(), format!("enginex.owner={owner}")],
+        )]);
+        let list = self
+            .client
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                filters: Some(filters),
+                ..Default::default()
+            }))
+            .await?;
+        for c in list {
+            for n in c.names.unwrap_or_default() {
+                let _ = self.remove(n.trim_start_matches('/')).await;
+            }
+        }
+        Ok(())
     }
 
     pub async fn list_owned(&self, owner: &str) -> anyhow::Result<Vec<Owned>> {

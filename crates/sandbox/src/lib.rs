@@ -6,7 +6,7 @@ pub mod docker;
 pub mod local;
 pub mod spec;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 /// Dossiers de la session vus par EngineX (sous son dossier de données).
 #[derive(Clone, Debug)]
@@ -61,6 +61,36 @@ pub enum Progress {
     Starting,
 }
 
+/// Conteneur d'aide : un script `sh -c` fixe, sans réseau ni secret, qui ne
+/// voit que les dossiers de `binds` (voir `spec::helper_spec`).
+#[derive(Clone, Debug)]
+pub struct HelperSpec {
+    pub session_id: String,
+    pub owner: String,
+    /// (chemin vu par EngineX, variable d'environnement, écriture permise).
+    /// Docker monte le dossier sous `/mnt/<variable en minuscules>` ; le
+    /// backend local passe le chemin tel quel. La variable donne le chemin au
+    /// script.
+    pub binds: Vec<(PathBuf, &'static str, bool)>,
+    pub script: &'static str,
+    pub env: Vec<(String, String)>,
+}
+
+/// Résultat d'un conteneur d'aide.
+#[derive(Clone, Debug)]
+pub struct HelperOutcome {
+    pub code: i64,
+    pub stdout: Vec<u8>,
+    /// 200 dernières lignes de stderr.
+    pub stderr: String,
+}
+
+/// Taille maximale du stdout d'un conteneur d'aide.
+pub const HELPER_STDOUT_MAX: usize = 8 << 20;
+
+/// Erreur rendue quand le stdout dépasse `HELPER_STDOUT_MAX`.
+pub const OUTPUT_TOO_LARGE: &str = "output_too_large";
+
 pub enum Backend {
     Local(local::Local),
     Docker(docker::Docker),
@@ -94,6 +124,22 @@ impl Backend {
         match self {
             Self::Local(b) => b.list_owned(owner).await,
             Self::Docker(b) => b.list_owned(owner).await,
+        }
+    }
+
+    /// Lance un conteneur d'aide et attend sa fin (supprimé dans tous les cas).
+    pub async fn run_helper(&self, spec: &HelperSpec, timeout: Duration) -> anyhow::Result<HelperOutcome> {
+        match self {
+            Self::Local(b) => b.run_helper(spec, timeout).await,
+            Self::Docker(b) => b.run_helper(spec, timeout).await,
+        }
+    }
+
+    /// Supprime les conteneurs d'aide restés d'un arrêt brutal.
+    pub async fn remove_helpers(&self, owner: &str) -> anyhow::Result<()> {
+        match self {
+            Self::Local(_) => Ok(()),
+            Self::Docker(b) => b.remove_helpers(owner).await,
         }
     }
 

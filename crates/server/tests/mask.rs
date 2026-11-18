@@ -77,3 +77,44 @@ fn held_text_comes_out_with_the_next_delta() {
     assert_eq!(s.push(&m, " et super"), " et ");
     assert_eq!(s.flush(&m), "super");
 }
+
+mod bytes {
+    use enginex_server::mask::{ByteStream, Masker};
+
+    /// Octets coupés partout (y compris au milieu d'un caractère UTF-8) :
+    /// même résultat que le masquage d'un bloc, aucun fragment ne sort.
+    #[test]
+    fn cut_anywhere_gives_the_whole_result() {
+        let secret = "clé-très-secrète";
+        let m = Masker::new([secret.to_string()]);
+        let text = format!("é {secret} \x1b[31m{secret}\x1b[0m fin").into_bytes();
+        let whole = m.mask_bytes(&text).into_owned();
+        for a in 1..text.len() {
+            for b in (a + 1..text.len()).step_by(3) {
+                let mut s = ByteStream::default();
+                let mut out = Vec::new();
+                for piece in [&text[..a], &text[a..b], &text[b..]] {
+                    let o = s.push(&m, piece);
+                    assert!(
+                        !o.windows(6).any(|w| secret.as_bytes().windows(6).any(|f| f == w))
+                            || whole.windows(o.len()).any(|w| w == o.as_slice()),
+                        "fragment sorti en {a}/{b}"
+                    );
+                    out.extend(o);
+                }
+                out.extend(s.flush(&m));
+                assert_eq!(out, whole, "coupé en {a}/{b}");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_passes_through() {
+        let m = Masker::new(["secret42".to_string()]);
+        let mut s = ByteStream::default();
+        let mut out = s.push(&m, b"\xff\xfe secret");
+        out.extend(s.push(&m, b"42 \xc3"));
+        out.extend(s.flush(&m));
+        assert_eq!(out, b"\xff\xfe *** \xc3");
+    }
+}

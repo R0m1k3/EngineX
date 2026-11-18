@@ -22,6 +22,7 @@ use crate::{
     mask::Stream,
     sandboxes,
     sessions::{self, SessionRow},
+    snapshots::{self, SnapOpts},
     state::{AppState, now},
     v1, workspace,
 };
@@ -49,6 +50,10 @@ struct TurnState {
     streams: HashMap<(String, &'static str), Stream>,
     usage: Option<Value>,
     started_at: i64,
+    /// `user` (message de Michael) ou `verify` (correction demandée par EngineX).
+    origin: &'static str,
+    /// Instantané d'avant le tour (avant que Codex ne connaisse l'id du tour).
+    snap_pre: Option<String>,
 }
 
 struct PendingReq {
@@ -58,8 +63,21 @@ struct PendingReq {
     params: Value,
 }
 
+/// Vérification en cours (`verify.rs`).
+pub struct VerifyState {
+    pub turn_id: String,
+    /// `processId` de l'étape en cours.
+    pub process: Option<String>,
+    pub cancelled: bool,
+}
+
 struct HubState {
     sandbox: (String, Option<String>),
+    verify: Option<VerifyState>,
+    /// Tours de correction lancés depuis le dernier message de Michael.
+    fixes_done: u32,
+    /// Terminaux ouverts : `processId` → sortie vers le WebSocket.
+    terminals: HashMap<String, Arc<crate::terminal::Sink>>,
     conn: Option<Conn>,
     /// Incrémenté à chaque connexion ou arrêt : un lecteur périmé se tait.
     generation: u64,
@@ -73,6 +91,8 @@ pub struct Hub {
     tx: broadcast::Sender<Event>,
     st: Mutex<HubState>,
     start: tokio::sync::Mutex<()>,
+    /// Un seul envoi de `thread/revert` à la fois.
+    revert: tokio::sync::Mutex<()>,
     recorder: Mutex<Option<Arc<Recorder>>>,
 }
 
@@ -86,6 +106,9 @@ pub fn hub(state: &AppState, session_id: &str) -> Arc<Hub> {
                 tx: broadcast::channel(1024).0,
                 st: Mutex::new(HubState {
                     sandbox: ("stopped".into(), None),
+                    verify: None,
+                    fixes_done: 0,
+                    terminals: HashMap::new(),
                     conn: None,
                     generation: 0,
                     turn: None,
@@ -93,6 +116,7 @@ pub fn hub(state: &AppState, session_id: &str) -> Arc<Hub> {
                     last_activity: Instant::now(),
                 }),
                 start: tokio::sync::Mutex::new(()),
+                revert: tokio::sync::Mutex::new(()),
                 recorder: Mutex::new(None),
             })
         })
@@ -145,6 +169,165 @@ impl Hub {
         self.st.lock().expect("verrou").turn.is_some()
     }
 
+    /// Tour ou vérification en cours.
+    pub fn busy(&self) -> bool {
+        let st = self.st.lock().expect("verrou");
+        st.turn.is_some() || st.verify.is_some()
+    }
+
+    pub fn verifying(&self) -> bool {
+        self.st.lock().expect("verrou").verify.is_some()
+    }
+
+    /// Ouvre une vérification (refus si tour ou vérification en cours).
+    pub(crate) fn verify_begin(&self, turn_id: &str) -> bool {
+        let mut st = self.st.lock().expect("verrou");
+        if st.turn.is_some() || st.verify.is_some() {
+            return false;
+        }
+        st.verify = Some(VerifyState {
+            turn_id: turn_id.to_string(),
+            process: None,
+            cancelled: false,
+        });
+        st.last_activity = Instant::now();
+        true
+    }
+
+    /// Étape en cours ; `false` si la vérification a été annulée.
+    pub(crate) fn verify_step(&self, process: Option<String>) -> bool {
+        let mut st = self.st.lock().expect("verrou");
+        st.last_activity = Instant::now();
+        match st.verify.as_mut() {
+            Some(v) if !v.cancelled => {
+                v.process = process;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn verify_cancelled(&self) -> bool {
+        self.st
+            .lock()
+            .expect("verrou")
+            .verify
+            .as_ref()
+            .is_none_or(|v| v.cancelled)
+    }
+
+    pub(crate) fn verify_end(&self) {
+        let mut st = self.st.lock().expect("verrou");
+        st.verify = None;
+        st.last_activity = Instant::now();
+    }
+
+    /// Annule la vérification en cours (étape terminée par
+    /// `command/exec/terminate`).
+    pub async fn cancel_verify(&self) {
+        let target = {
+            let mut st = self.st.lock().expect("verrou");
+            let client = st.conn.as_ref().map(|c| c.client.clone());
+            match st.verify.as_mut() {
+                Some(v) => {
+                    v.cancelled = true;
+                    v.process.clone().zip(client)
+                }
+                None => None,
+            }
+        };
+        if let Some((pid, client)) = target {
+            let _ = client
+                .request("command/exec/terminate", types::exec_terminate(&pid))
+                .await;
+        }
+    }
+
+    pub(crate) fn fixes_done(&self) -> u32 {
+        self.st.lock().expect("verrou").fixes_done
+    }
+
+    pub(crate) fn add_fix(&self) {
+        self.st.lock().expect("verrou").fixes_done += 1;
+    }
+
+    /// Client et dossier de travail de la sandbox vivante.
+    pub(crate) fn client_cwd(&self) -> Option<(Client, String)> {
+        let st = self.st.lock().expect("verrou");
+        st.conn.as_ref().map(|c| (c.client.clone(), c.handle.cwd.clone()))
+    }
+
+    /// Connexion prête (sandbox démarrée au besoin) : client et dossier.
+    pub(crate) async fn ready(self: &Arc<Self>, state: &AppState) -> Result<(Client, String), String> {
+        self.ensure_conn(state).await?;
+        self.client_cwd().ok_or_else(|| "sandbox arrêtée".to_string())
+    }
+
+    pub(crate) fn emit_event(&self, name: &'static str, data: Value) {
+        self.emit(name, data);
+    }
+
+    /// Inscrit un terminal ; rend les `processId` des anciens (un seul
+    /// terminal par session : l'ancien est terminé).
+    pub(crate) fn add_terminal(&self, state: &AppState, pid: &str, sink: Arc<crate::terminal::Sink>) -> Vec<String> {
+        let m = state.masker();
+        let mut st = self.st.lock().expect("verrou");
+        let old: Vec<String> = st
+            .terminals
+            .drain()
+            .map(|(k, s)| {
+                s.finish(&m, None, Some("autre terminal ouvert".into()));
+                k
+            })
+            .collect();
+        st.terminals.insert(pid.to_string(), sink);
+        st.last_activity = Instant::now();
+        old
+    }
+
+    pub(crate) fn touch_activity(&self) {
+        self.touch();
+    }
+
+    /// Ferme les terminaux (sandbox arrêtée).
+    fn close_terminals(&self, state: &AppState, reason: &str) {
+        let m = state.masker();
+        let sinks: Vec<_> = self
+            .st
+            .lock()
+            .expect("verrou")
+            .terminals
+            .drain()
+            .map(|(_, s)| s)
+            .collect();
+        for s in sinks {
+            s.finish(&m, None, Some(reason.to_string()));
+        }
+    }
+
+    /// Sortie d'un `command/exec` en flux : vers son terminal, jamais dans
+    /// l'historique ni le SSE.
+    fn on_exec_output(&self, state: &AppState, params: &Value) {
+        let pid = params["processId"].as_str().unwrap_or("");
+        let sink = {
+            let mut st = self.st.lock().expect("verrou");
+            st.last_activity = Instant::now();
+            st.terminals.get(pid).cloned()
+        };
+        let Some(sink) = sink else { return };
+        let raw = params["deltaBase64"]
+            .as_str()
+            .and_then(|b| base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b).ok())
+            .unwrap_or_default();
+        sink.push(&state.masker(), &raw);
+    }
+
+    pub(crate) fn remove_terminal(&self, pid: &str) {
+        let mut st = self.st.lock().expect("verrou");
+        st.terminals.remove(pid);
+        st.last_activity = Instant::now();
+    }
+
     pub fn has_conn(&self) -> bool {
         self.st.lock().expect("verrou").conn.is_some()
     }
@@ -152,7 +335,8 @@ impl Hub {
     /// Durée d'inactivité d'une sandbox vivante sans tour ni requête.
     pub fn idle_for(&self) -> Option<Duration> {
         let st = self.st.lock().expect("verrou");
-        (st.conn.is_some() && st.turn.is_none() && st.requests.is_empty()).then(|| st.last_activity.elapsed())
+        (st.conn.is_some() && st.turn.is_none() && st.verify.is_none() && st.requests.is_empty())
+            .then(|| st.last_activity.elapsed())
     }
 
     fn touch(&self) {
@@ -181,10 +365,13 @@ impl Hub {
     }
 
     /// Ouvre un tour (refus si un tour tourne déjà).
-    pub fn begin(&self, user: Value) -> Result<(), ApiError> {
+    pub fn begin(&self, user: Value, origin: &'static str) -> Result<(), ApiError> {
         let mut st = self.st.lock().expect("verrou");
         if st.turn.is_some() {
             return Err(ApiError::TurnInProgress);
+        }
+        if origin == "user" {
+            st.fixes_done = 0;
         }
         st.turn = Some(TurnState {
             id: None,
@@ -195,6 +382,8 @@ impl Hub {
             streams: HashMap::new(),
             usage: None,
             started_at: now(),
+            origin,
+            snap_pre: None,
         });
         st.last_activity = Instant::now();
         drop(st);
@@ -203,7 +392,7 @@ impl Hub {
     }
 
     /// Arrête la sandbox (inactivité, suppression, archivage, arrêt).
-    pub async fn stop_conn(&self, state: &AppState, reason: &str) {
+    pub async fn stop_conn(self: &Arc<Self>, state: &AppState, reason: &str) {
         let conn = {
             let mut st = self.st.lock().expect("verrou");
             st.generation += 1;
@@ -214,6 +403,7 @@ impl Hub {
             c.client.close();
         }
         sandboxes::stop(state, &self.id).await;
+        self.close_terminals(state, reason);
         if had {
             self.set_sandbox("stopped", Some(reason.to_string()));
         }
@@ -228,7 +418,31 @@ impl Hub {
     /// Lance le tour ouvert par `begin` : connexion (sandbox démarrée si
     /// besoin), message stocké, `turn/start`.
     pub async fn run_turn(self: Arc<Self>, state: AppState, text: String, images: Vec<String>) {
-        let conn = match self.ensure_conn(&state).await {
+        // Instantané d'avant le tour, en parallèle du démarrage de la sandbox
+        // (Codex ne lance rien avant `turn/start`).
+        let folder = match sessions::row(&state, &self.id).await {
+            Ok(r) => snapshots::folder(&state, &r).await.ok(),
+            Err(_) => None,
+        };
+        let pre = async {
+            match &folder {
+                Some(f) => snapshots::snapshot(&state, f, "avant le message", SnapOpts::default())
+                    .await
+                    .map(|s| s.sha)
+                    .map_err(|e| format!("{e:#}")),
+                None => Err("dossier de travail introuvable".to_string()),
+            }
+        };
+        let (conn, pre) = tokio::join!(self.ensure_conn(&state), pre);
+        match pre {
+            Ok(sha) => {
+                if let Some(t) = self.st.lock().expect("verrou").turn.as_mut() {
+                    t.snap_pre = Some(sha);
+                }
+            }
+            Err(e) => tracing::warn!("session {} : instantané d'avant le tour impossible : {e}", self.id),
+        }
+        let conn = match conn {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("session {} : sandbox indisponible : {e}", self.id);
@@ -238,6 +452,16 @@ impl Hub {
             }
         };
         let (client, thread_id, attachments) = conn;
+        if let Err(e) = self.apply_pending_revert(&state, &client, &thread_id).await {
+            self.fail_turn(&state, &e).await;
+            return;
+        }
+        let note = sessions::row(&state, &self.id).await.ok().and_then(|r| r.pending_note);
+        if let Some(n) = &note
+            && let Some(t) = self.st.lock().expect("verrou").turn.as_mut()
+        {
+            t.user["note"] = json!(n);
+        }
         let first = sessions::item_count(&state, &self.id).await.unwrap_or(1) == 0;
         if let Err(e) = self.store_user(&state).await {
             self.fail_turn(&state, &format!("base de données : {e}")).await;
@@ -259,6 +483,9 @@ impl Hub {
             .await
             .unwrap_or_else(|_| "auto".into());
         let mut input = Vec::new();
+        if let Some(n) = &note {
+            input.push(types::text_input(n));
+        }
         if !text.is_empty() {
             input.push(types::text_input(&text));
         }
@@ -274,6 +501,10 @@ impl Hub {
                 if let Some(tid) = types::turn_id(&r) {
                     self.adopt_turn(&state, tid).await;
                 }
+                if note.is_some() {
+                    let _ = sessions::set_session_field(&state, &self.id, "pending_note", None).await;
+                }
+                let _ = sessions::set_session_field(&state, &self.id, "undo_snap", None).await;
             }
             Err(e) => self.fail_turn(&state, &format!("turn/start : {e}")).await,
         }
@@ -297,7 +528,7 @@ impl Hub {
 
     /// Id du tour connu (réponse à `turn/start` ou `turn/started`).
     async fn adopt_turn(&self, state: &AppState, tid: &str) {
-        let (user_id, started) = {
+        let (user_id, started, origin, pre) = {
             let mut st = self.st.lock().expect("verrou");
             let Some(t) = st.turn.as_mut() else { return };
             if t.id.is_some() {
@@ -307,9 +538,11 @@ impl Hub {
             (
                 t.user_stored.then(|| t.user["id"].as_str().unwrap_or("").to_string()),
                 t.started_at,
+                t.origin,
+                t.snap_pre.clone(),
             )
         };
-        if let Err(e) = sessions::insert_turn(state, &self.id, tid, started).await {
+        if let Err(e) = sessions::insert_turn(state, &self.id, tid, started, origin, pre.as_deref()).await {
             tracing::warn!("tour {tid} : {e}");
         }
         if let Some(u) = user_id {
@@ -319,7 +552,7 @@ impl Hub {
 
     /// Termine le tour ouvert en échec (avant ou pendant `turn/start`, ou pont
     /// perdu) ; le message de Michael reste dans l'historique.
-    async fn fail_turn(&self, state: &AppState, error: &str) {
+    async fn fail_turn(self: &Arc<Self>, state: &AppState, error: &str) {
         let _ = self.store_user(state).await;
         let (turn, reqs) = {
             let mut st = self.st.lock().expect("verrou");
@@ -342,11 +575,103 @@ impl Hub {
         )
         .await;
         let _ = sessions::set_item_turn(state, &self.id, t.user["id"].as_str().unwrap_or(""), &tid).await;
+        let _ = sqlx::query("UPDATE chat_turns SET origin = ? WHERE session_id = ? AND id = ?")
+            .bind(t.origin)
+            .bind(&self.id)
+            .bind(&tid)
+            .execute(state.db())
+            .await;
         self.emit(
             "turn_stored",
-            json!({"turn": {"id": tid, "status": "failed", "error": error, "usage": t.usage}}),
+            json!({"turn": {"id": tid, "status": "failed", "error": error, "usage": t.usage, "origin": t.origin}}),
         );
         self.touch();
+        if let Some(pre) = t.snap_pre {
+            let (me, st) = (self.clone(), state.clone());
+            tokio::spawn(async move {
+                me.post_snapshot(&st, &tid, &pre).await;
+            });
+        }
+    }
+
+    /// Instantané d'après le tour : refs `-pre` et `-post`, modifications
+    /// stockées et émises (`changes`).
+    pub(crate) async fn post_snapshot(&self, state: &AppState, tid: &str, pre: &str) -> Option<Value> {
+        let folder = snapshots::folder(state, &sessions::row(state, &self.id).await.ok()?)
+            .await
+            .ok()?;
+        let opts = SnapOpts {
+            ref_name: Some(snapshots::post_ref(&self.id, tid)),
+            base: Some(pre.to_string()),
+            extra_ref: Some((snapshots::pre_ref(&self.id, tid), pre.to_string())),
+        };
+        match snapshots::snapshot(state, &folder, "après le message", opts).await {
+            Ok(s) => {
+                let changes = s.changes.unwrap_or_else(|| json!({"files": [], "truncated": false}));
+                if let Err(e) =
+                    sessions::set_turn_snaps(state, &self.id, tid, Some(pre), Some(&s.sha), Some(&changes)).await
+                {
+                    tracing::warn!("tour {tid} : instantané non stocké : {e}");
+                }
+                self.emit("changes", json!({"turn_id": tid, "changes": changes}));
+                snapshots::gc_later(state, &folder);
+                Some(changes)
+            }
+            Err(e) => {
+                tracing::warn!("session {} : instantané d'après le tour impossible : {e:#}", self.id);
+                None
+            }
+        }
+    }
+
+    /// Envoie `thread/revert` si un retour de conversation attend. `Err` :
+    /// connexion perdue ou délai (le retour reste en attente).
+    async fn apply_pending_revert(&self, state: &AppState, client: &Client, thread_id: &str) -> Result<(), String> {
+        let _g = self.revert.lock().await;
+        let Some(tid) = sessions::row(state, &self.id).await.ok().and_then(|r| r.pending_revert) else {
+            return Ok(());
+        };
+        match client
+            .request("thread/revert", types::thread_revert(thread_id, &tid))
+            .await
+        {
+            Ok(_) => {
+                let _ = sessions::set_session_field(state, &self.id, "pending_revert", None).await;
+                Ok(())
+            }
+            Err(enginex_codex::Error::Rpc { message, .. }) => {
+                let _ = sessions::set_session_field(state, &self.id, "pending_revert", None).await;
+                let msg = state.masker().mask(&message).into_owned();
+                self.notice(
+                    state,
+                    &format!("Codex n'a pas pu retirer ces messages de son fil : {msg}"),
+                )
+                .await;
+                Ok(())
+            }
+            Err(e) => Err(format!("retour de conversation non appliqué par Codex : {e}")),
+        }
+    }
+
+    /// Retour de conversation demandé sandbox vivante : envoyé tout de suite.
+    pub async fn revert_now(self: &Arc<Self>, state: &AppState) {
+        let conn = {
+            let st = self.st.lock().expect("verrou");
+            st.conn.as_ref().map(|c| (c.client.clone(), c.thread_id.clone()))
+        };
+        if let Some((client, thread)) = conn
+            && let Err(e) = self.apply_pending_revert(state, &client, &thread).await
+        {
+            tracing::warn!("session {} : {e} (réessayé au prochain message)", self.id);
+        }
+    }
+
+    /// Ligne d'EngineX dans le fil (stockée, hors tour).
+    async fn notice(&self, state: &AppState, text: &str) {
+        let item = json!({"type": "notice", "id": format!("ex-{}", uuid::Uuid::new_v4()), "text": text});
+        let iid = item["id"].as_str().unwrap_or("").to_string();
+        let _ = sessions::store_item(state, &self.id, None, &iid, "notice", &item).await;
+        self.emit("notice", json!({ "item": item }));
     }
 
     pub async fn interrupt(&self) -> Result<(), ApiError> {
@@ -425,6 +750,7 @@ impl Hub {
                 c.client.close();
             }
             sandboxes::stop(state, &self.id).await;
+            self.close_terminals(state, "redémarrage de la sandbox");
         }
         let session = sessions::row(state, &self.id).await.map_err(|e| format!("{e:?}"))?;
         let topic = workspace::topic(state, session.topic_id)
@@ -488,6 +814,9 @@ impl Hub {
                 .await
             {
                 Ok(_) => {
+                    if let Err(e) = self.apply_pending_revert(state, &client, tid).await {
+                        return Err(fail(e).await);
+                    }
                     self.catch_up(state, &client, tid).await;
                     tid.clone()
                 }
@@ -501,13 +830,18 @@ impl Hub {
         };
         let thread_id = if thread_id.is_empty() {
             match client
-                .request("thread/start", types::thread_start(&handle.cwd, policy))
+                .request(
+                    "thread/start",
+                    types::thread_start(&handle.cwd, policy, Some(crate::verify::DEVELOPER_INSTRUCTIONS)),
+                )
                 .await
             {
                 Ok(r) => match types::thread_id(&r) {
                     Some(t) => {
                         let t = t.to_string();
                         let _ = sessions::set_thread(state, &self.id, &t).await;
+                        // Nouveau fil : plus rien à retirer chez Codex.
+                        let _ = sessions::set_session_field(state, &self.id, "pending_revert", None).await;
                         t
                     }
                     None => return Err(fail("thread/start sans id".into()).await),
@@ -551,8 +885,12 @@ impl Hub {
         let mut list = list;
         state.masker().mask_json(&mut list);
         let mut added = 0;
+        let reverted = sessions::reverted(state, &self.id).await.unwrap_or_default();
         for turn in list["data"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
             let Some(tid) = turn["id"].as_str() else { continue };
+            if reverted.contains(tid) {
+                continue;
+            }
             let status = turn["status"].as_str().unwrap_or("completed");
             if status != "inProgress" {
                 let _ = sessions::insert_turn_status(state, &self.id, tid, status).await;
@@ -600,6 +938,7 @@ impl Hub {
         if lost {
             tracing::warn!("session {} : pont perdu", self.id);
             sandboxes::stop(&state, &self.id).await;
+            self.close_terminals(&state, "sandbox perdue");
             self.fail_turn(&state, "sandbox perdue").await;
             self.set_sandbox("stopped", Some("connexion à la sandbox perdue".into()));
         }
@@ -629,9 +968,13 @@ impl Hub {
         self.emit("request", json!({"rid": rid, "method": method, "params": params}));
     }
 
-    async fn on_notification(&self, state: &AppState, method: &str, mut params: Value) {
+    async fn on_notification(self: &Arc<Self>, state: &AppState, method: &str, mut params: Value) {
         if !types::WHITELIST.contains(&method) {
             tracing::debug!("notification de Codex ignorée : {method}");
+            return;
+        }
+        if method == "command/exec/outputDelta" {
+            self.on_exec_output(state, &params);
             return;
         }
         let masker = state.masker();
@@ -721,7 +1064,7 @@ impl Hub {
         }
     }
 
-    async fn complete_turn(&self, state: &AppState, params: &Value) {
+    async fn complete_turn(self: &Arc<Self>, state: &AppState, params: &Value) {
         let turn = &params["turn"];
         let tid = turn["id"].as_str().unwrap_or("").to_string();
         let status = match turn["status"].as_str() {
@@ -737,10 +1080,10 @@ impl Hub {
         for r in reqs {
             self.emit("request_resolved", json!({ "rid": r.rid }));
         }
-        let (started, usage) = t
+        let (started, usage, origin, pre) = t
             .as_ref()
-            .map(|t| (t.started_at, t.usage.clone()))
-            .unwrap_or((now(), None));
+            .map(|t| (t.started_at, t.usage.clone(), t.origin, t.snap_pre.clone()))
+            .unwrap_or((now(), None, "user", None));
         if let Err(e) = sessions::finish_turn(
             state,
             &self.id,
@@ -770,8 +1113,13 @@ impl Hub {
         let _ = sessions::touch(state, &self.id).await;
         self.emit(
             "turn_stored",
-            json!({"turn": {"id": tid, "status": status, "error": error, "usage": usage}}),
+            json!({"turn": {"id": tid, "status": status, "error": error, "usage": usage, "origin": origin}}),
         );
+        self.write_record(state);
+        crate::verify::spawn_after_turn(state.clone(), self.clone(), tid, status, origin, pre);
+    }
+
+    pub(crate) fn record(&self, state: &AppState) {
         self.write_record(state);
     }
 
@@ -832,5 +1180,7 @@ pub fn session_json(r: &SessionRow, running: bool) -> Value {
         "id": r.id, "topic_id": r.topic_id, "title": r.title, "thread_id": r.thread_id,
         "approval": r.approval, "archived": r.archived != 0,
         "created_at": r.created_at, "updated_at": r.updated_at, "running": running,
+        "copy_branch": r.copy_branch, "pending_note": r.pending_note,
+        "pending_revert": r.pending_revert.is_some(), "undo": r.undo_snap.is_some(),
     })
 }

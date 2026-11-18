@@ -1,0 +1,38 @@
+{
+  "Cmd": [
+    "sh",
+    "-c",
+    "git --version"
+  ],
+  "Env": [
+    "REF=refs/enginex/x/pre",
+    "WORK=/mnt/work",
+    "SNAP=/mnt/snap"
+  ],
+  "HostConfig": {
+    "AutoRemove": false,
+    "Binds": [
+      "/mnt/user/appdata/enginex/workspace/projects/site/topics/front:/mnt/work:rw",
+      "/mnt/user/appdata/enginex/snapshots/topic-7.git:/mnt/snap:rw"
+    ],
+    "CapDrop": [
+      "ALL"
+    ],
+    "Init": true,
+    "Memory": 8589934592,
+    "NetworkMode": "none",
+    "PidsLimit": 512,
+    "Privileged": false,
+    "SecurityOpt": [
+      "no-new-privileges:true"
+    ]
+  },
+  "Image": "ghcr.io/r0m1k3/enginex-devbox:latest",
+  "Labels": {
+    "enginex.helper": "1",
+    "enginex.owner": "instance-1"
+  },
+  "NetworkDisabled": true,
+  "User": "1000:1000",
+  "WorkingDir": "/"
+}

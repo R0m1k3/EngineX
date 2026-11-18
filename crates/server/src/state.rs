@@ -75,6 +75,8 @@ pub(crate) struct Inner {
     pub sandboxes: crate::sandboxes::Sandboxes,
     /// Hubs des sessions ouvertes depuis le démarrage.
     pub hubs: Mutex<HashMap<String, Arc<crate::bridge::Hub>>>,
+    /// Un verrou par dossier de travail (instantanés, retours arrière).
+    pub folder_locks: crate::snapshots::FolderLocks,
 }
 
 impl AppState {
@@ -117,6 +119,7 @@ impl AppState {
             masker: Default::default(),
             sandboxes: Default::default(),
             hubs: Mutex::new(HashMap::new()),
+            folder_locks: Default::default(),
         }))
     }
 
