@@ -568,10 +568,29 @@ impl Bridge {
             &std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} absent : UPDATE_FIXTURES=1", path.display())),
         ));
         let got = shape_of(&parse(&got_raw));
-        for (i, (w, g)) in want.iter().zip(got.iter()).enumerate() {
-            assert_eq!(w, g, "scénario {scenario}, étape {i} : attendu {w:?}, reçu {g:?}");
+        // Les notifications de Codex (« send ») arrivent dans un ordre et en nombre
+        // variables (deltas découpés autrement, usage avant ou après une requête) :
+        // seul leur ensemble compte, deltas exclus. Le reste suit l'ordre exact.
+        let split = |v: &[(String, String)]| {
+            let steps: Vec<(String, String)> = v.iter().filter(|(k, _)| k != "send").cloned().collect();
+            let notes: std::collections::BTreeSet<String> = v
+                .iter()
+                .filter(|(k, m)| k == "send" && !m.ends_with("Delta"))
+                .map(|(_, m)| m.clone())
+                .collect();
+            (steps, notes)
+        };
+        let (want_steps, want_notes) = split(&want);
+        let (got_steps, got_notes) = split(&got);
+        for (i, (w, g)) in want_steps.iter().zip(got_steps.iter()).enumerate() {
+            assert_eq!(w, g, "scénario {scenario}, échange {i} : attendu {w:?}, reçu {g:?}");
         }
-        assert_eq!(want.len(), got.len(), "scénario {scenario} : nombre d'étapes");
+        assert_eq!(
+            want_steps.len(),
+            got_steps.len(),
+            "scénario {scenario} : nombre d'échanges"
+        );
+        assert_eq!(want_notes, got_notes, "scénario {scenario} : notifications");
     }
 
     async fn items(&self, sid: &str) -> Vec<Value> {
