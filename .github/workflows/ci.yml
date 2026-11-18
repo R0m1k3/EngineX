@@ -1,0 +1,83 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: npm ci && npm run check && npm run build
+        working-directory: web
+
+  image:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/r0m1k3/enginex
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (local, pour le test de fumée)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: enginex:smoke
+          build-args: ENGINEX_REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Test de fumée (CPU)
+        run: |
+          set -eu
+          docker run -d --name smoke -p 8090:8090 -v smoke-data:/data enginex:smoke
+          fail() { echo "ÉCHEC : $1"; docker logs smoke; exit 1; }
+          for i in $(seq 1 45); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' smoke 2>/dev/null || echo gone)
+            [ "$s" = healthy ] && break
+            [ "$s" = gone ] && fail "conteneur arrêté"
+            sleep 2
+          done
+          [ "$(docker inspect -f '{{.State.Health.Status}}' smoke)" = healthy ] || fail "pas healthy en 90 s"
+          [ "$(docker exec smoke id -u)" = 1000 ] || fail "uid différent de 1000"
+          curl -fsS http://127.0.0.1:8090/api/health | grep -q '"ok":true' || fail "/api/health"
+          curl -fsS http://127.0.0.1:8090/api/auth/state | grep -q '"setup_required":true' || fail "/api/auth/state"
+          docker logs smoke 2>&1 | grep -q "Code de configuration EngineX" || fail "code de configuration absent des logs"
+          echo "Test de fumée réussi"
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ENGINEX_REVISION=${{ github.sha }}
+          cache-from: type=gha

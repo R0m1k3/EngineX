@@ -1,0 +1,27 @@
+# Stack EngineX (Portainer ou compose de l'Unraid).
+# Premier démarrage : le code de configuration est dans `docker logs enginex`.
+services:
+  enginex:
+    image: ghcr.io/r0m1k3/enginex:latest
+    container_name: enginex
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8090:8090"
+    environment:
+      # true seulement derrière un reverse proxy (voir README).
+      ENGINEX_TRUST_PROXY: "false"
+    volumes:
+      - enginex-data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+volumes:
+  enginex-data:
