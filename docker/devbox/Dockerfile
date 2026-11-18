@@ -19,19 +19,20 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # uv (script officiel), binaires dans /usr/local/bin.
-RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
+RUN curl -LsSf --retry 5 --retry-all-errors https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
 
 # Rust stable : rustup et la chaîne dans /usr/local ; CARGO_HOME pointe
 # ensuite vers le cache du projet (/cache/cargo).
 ENV RUSTUP_HOME=/usr/local/rustup
-RUN curl -fsSL https://sh.rustup.rs | env CARGO_HOME=/usr/local/cargo sh -s -- -y --no-modify-path \
+RUN curl -fsSL --retry 5 --retry-all-errors https://sh.rustup.rs | env CARGO_HOME=/usr/local/cargo sh -s -- -y --no-modify-path \
        --profile minimal --component clippy,rustfmt --default-toolchain stable \
     && chmod -R a+rX /usr/local/rustup /usr/local/cargo
 
 # Go : dernière version stable (archive officielle).
-RUN v=$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n1) \
+RUN v=$(curl -fsSL --retry 5 --retry-all-errors 'https://go.dev/VERSION?m=text' | head -n1) \
     && arch=$(dpkg --print-architecture) \
-    && curl -fsSL "https://go.dev/dl/${v}.linux-${arch}.tar.gz" | tar -C /usr/local -xz
+    && curl -fsSL --retry 5 --retry-all-errors -o /tmp/go.tgz "https://go.dev/dl/${v}.linux-${arch}.tar.gz" \
+    && tar -C /usr/local -xzf /tmp/go.tgz && rm /tmp/go.tgz
 ENV PATH=/usr/local/go/bin:$PATH
 
 # Codex CLI.
