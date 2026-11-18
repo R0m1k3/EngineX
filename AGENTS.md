@@ -4,7 +4,7 @@ Application locale qui pilote un agent de code : backend Rust (`crates/server`, 
 UI Svelte 5 (`web/`, embarquée dans le binaire), image Docker basée sur `ghcr.io/ggml-org/llama.cpp:server-cuda`.
 
 ## Commandes
-- Tests Rust : `cargo test --workspace`
+- Tests Rust : `cargo build -p enginex-fake-llama && cargo test --workspace` (faux llama-server des tests)
 - Lint : `cargo fmt --check` et `cargo clippy --workspace --all-targets -- -D warnings`
 - UI : `cd web && npm ci && npm run check && npm run build`
 - Build release (exige `web/dist`) : `cargo build --release -p enginex-server`

@@ -26,9 +26,14 @@ async fn env() -> Env {
     let config = Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         data_dir: dir.path().to_path_buf(),
-        llama_bin: fixture,
+        llama_bin: Some(fixture.clone()),
+        image_bin: fixture,
         nvidia_smi: "/nonexistent/nvidia-smi".into(),
         trust_proxy: false,
+        models_dir: dir.path().join("models"),
+        llama_port: 0,
+        registry: "http://127.0.0.1:9".into(),
+        hf_base: "http://127.0.0.1:9".into(),
     };
     let pool = db::open(&config.data_dir).await.unwrap();
     let state = AppState::new(config, pool);

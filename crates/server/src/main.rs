@@ -29,16 +29,21 @@ async fn serve() -> anyhow::Result<()> {
     auth::ensure_setup_code(&state)
         .await
         .map_err(|e| anyhow::anyhow!("lecture de la base : {e}"))?;
+    state.start_background().await?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("EngineX {} écoute sur {bind}", env!("CARGO_PKG_VERSION"));
-    axum::serve(listener, app(state).into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app(state.clone()).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(state))
+    .await?;
     Ok(())
 }
 
-/// SIGTERM ou SIGINT ; les requêtes en cours ont ensuite 10 s pour finir.
-async fn shutdown_signal() {
+/// SIGTERM ou SIGINT : llama-server arrêté d'abord (15 s au plus), puis les
+/// requêtes en cours finissent ; sortie forcée au bout de 25 s.
+async fn shutdown_signal(state: AppState) {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -53,9 +58,10 @@ async fn shutdown_signal() {
     tokio::select! { _ = ctrl_c => {}, _ = term => {} }
     tracing::info!("arrêt demandé");
     tokio::spawn(async {
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        tokio::time::sleep(Duration::from_secs(25)).await;
         std::process::exit(0);
     });
+    let _ = tokio::time::timeout(Duration::from_secs(15), state.supervisor().stop(false)).await;
 }
 
 async fn reset_password() -> anyhow::Result<()> {

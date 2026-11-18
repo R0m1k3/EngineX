@@ -52,6 +52,32 @@ exemple `/mnt/user/appdata/enginex:/data`) ne le fait pas. Deux solutions :
 
 Si `/data` n'est pas inscriptible, le conteneur s'arrête et le message donne l'uid à utiliser.
 
+## Modèles et moteur
+
+**Modèles → Chercher** interroge Hugging Face (dépôts GGUF). La fiche d'un dépôt regroupe les fichiers par
+quantification, avec une estimation de la place en VRAM sur les deux cartes au contexte et au type de KV choisis
+(*tient*, *juste*, *ne tient pas*). C'est une estimation prudente : les modèles à fenêtre glissante (Gemma 3...) sont
+surestimés. **Télécharger** met le fichier dans la file (un à la fois, reprise après coupure, sha256 vérifié) ; les
+modèles vont dans `/models/<auteur>/<dépôt>/`.
+
+À la fin d'un téléchargement, EngineX crée un **preset** : contexte, KV `q8_0`, flash attention, placement automatique
+`--fit` sur les deux GPU, et les réglages d'échantillonnage lus sur la page Hugging Face du dépôt, puis sur celle du
+modèle de base, puis dans `generation_config.json`, puis dans le GGUF. La fiche du preset montre d'où vient chaque
+valeur (avec l'extrait de la page) et propose un choix quand la page en donne plusieurs. L'échantillonnage s'applique
+à chaque requête sans recharger le modèle ; changer le contexte, le KV ou le placement recharge le modèle.
+
+**Activer** lance llama-server (un seul à la fois, sur `127.0.0.1:8081` dans le conteneur). Le bandeau du haut donne
+l'état, la progression du chargement, la VRAM par carte et les logs.
+
+**Paramètres → Moteur** gère llama.cpp : *Vérifier* lit la dernière version publiée (`ghcr.io/ggml-org/llama.cpp`,
+tag `server-cuda`), *Installer* la télécharge dans `/data/engines/`, la teste (version, 2 cartes vues, `--fit`) puis
+recharge le preset actif avec elle ; si le modèle ne charge pas, EngineX revient tout seul à la version d'avant.
+*Revenir à la précédente* échange la version active et la précédente. Le moteur fourni par l'image reste toujours
+disponible en recours.
+
+Sur l'Unraid, montez les modèles sur un disque plutôt que dans le volume Docker :
+`/mnt/user/appdata/enginex/models:/models` dans la stack, puis `chown -R 1000:1000` sur ce dossier.
+
 ## Accès depuis l'extérieur
 
 EngineX ne fait pas de HTTPS. Sur le réseau local, l'accès direct suffit. Hors du réseau local, passez par un VPN
@@ -67,8 +93,13 @@ EngineX ne fait pas de HTTPS. Sur le réseau local, l'accès direct suffit. Hors
 |---|---|---|
 | `ENGINEX_DATA` | `/data` | base SQLite (`enginex.db`) |
 | `ENGINEX_TRUST_PROXY` | `false` | lire `X-Forwarded-For/Proto/Host` (derrière un reverse proxy uniquement) |
-| `ENGINEX_LLAMA_BIN` | `/app/llama-server` | binaire llama-server |
+| `ENGINEX_LLAMA_BIN` | absent | impose le binaire llama-server (tests, dépannage) ; absent : moteur choisi dans Paramètres → Moteur, sinon `/app/llama-server` |
+| `ENGINEX_MODELS` | `/models` | dossier des modèles GGUF |
+| `ENGINEX_LLAMA_PORT` | `8081` | port local de llama-server (127.0.0.1) |
 | `ENGINEX_NVIDIA_SMI` | `nvidia-smi` | binaire nvidia-smi |
+| `ENGINEX_IMAGE_LLAMA_BIN` | `/app/llama-server` | moteur de l'image (recours) |
+| `ENGINEX_HF_BASE` | `https://huggingface.co` | adresse de Hugging Face (tests) |
+| `ENGINEX_OCI_REGISTRY` | `https://ghcr.io` | registre des images llama.cpp (tests) |
 | `ENGINEX_BIND` | `0.0.0.0:8090` | adresse d'écoute (développement ; l'image écoute sur 8090) |
 | `RUST_LOG` | `info` | niveau des logs |
 
@@ -78,8 +109,9 @@ Il faut Rust stable et Node 22.
 
 ```sh
 cd web && npm ci && npm run dev          # UI sur http://localhost:5173, /api relayé vers :8090
-ENGINEX_DATA=/tmp/ex ENGINEX_BIND=127.0.0.1:8090 \
-  ENGINEX_LLAMA_BIN=$PWD/crates/server/tests/fixtures/fake-llama-server.sh \
+cargo build -p enginex-fake-llama        # faux llama-server (pas de GPU nécessaire)
+ENGINEX_DATA=/tmp/ex/data ENGINEX_MODELS=/tmp/ex/models ENGINEX_BIND=127.0.0.1:8090 \
+  ENGINEX_IMAGE_LLAMA_BIN=$PWD/target/debug/fake-llama-server \
   cargo run -p enginex-server             # API (code de configuration dans la sortie)
 ```
 

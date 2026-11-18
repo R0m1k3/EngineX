@@ -14,16 +14,23 @@ FROM rust:1-alpine AS build
 RUN apk add --no-cache musl-dev build-base
 WORKDIR /src
 # Dépendances d'abord (couche en cache). build.rs exige un web/dist.
+# Chaque crate du workspace : manifeste + source vide (sinon --locked échoue).
 COPY Cargo.toml Cargo.lock ./
 COPY crates/server/Cargo.toml crates/server/build.rs crates/server/
-RUN mkdir -p crates/server/src web/dist \
+COPY crates/engine/Cargo.toml crates/engine/
+COPY crates/hub/Cargo.toml crates/hub/
+COPY crates/fake-llama/Cargo.toml crates/fake-llama/
+RUN mkdir -p crates/server/src crates/engine/src crates/hub/src crates/fake-llama/src web/dist \
     && echo 'fn main() {}' > crates/server/src/main.rs && touch crates/server/src/lib.rs \
+    && touch crates/engine/src/lib.rs crates/hub/src/lib.rs \
+    && echo 'fn main() {}' > crates/fake-llama/src/main.rs \
     && echo '<!doctype html>' > web/dist/index.html \
     && cargo build --release --locked -p enginex-server \
-    && rm -rf crates/server/src web/dist
+    && rm -rf crates/server/src crates/engine/src crates/hub/src crates/fake-llama/src web/dist
 COPY crates/ crates/
 COPY --from=web /src/web/dist web/dist
-RUN touch crates/server/src/main.rs crates/server/src/lib.rs crates/server/build.rs \
+# Sources plus récentes que les vides compilés ci-dessus.
+RUN find crates -name '*.rs' -exec touch {} + \
     && cargo build --release --locked -p enginex-server
 
 # Runtime : image officielle llama.cpp CUDA (llama-server dans /app).
@@ -40,7 +47,6 @@ ENV HOME=/data \
     LD_LIBRARY_PATH=/app \
     CUDA_DEVICE_ORDER=PCI_BUS_ID \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-    ENGINEX_LLAMA_BIN=/app/llama-server \
     ENGINEX_DATA=/data
 USER 1000:1000
 WORKDIR /data

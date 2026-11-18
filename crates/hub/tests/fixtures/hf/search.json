@@ -1,0 +1,26 @@
+[
+ {
+  "_id": "69e61328cec04cd5d9cc4c15",
+  "id": "handy-computer/Qwen3-ASR-0.6B-gguf",
+  "gated": false,
+  "lastModified": "2026-10-16T08:29:36.000Z",
+  "likes": 4,
+  "downloads": 433761
+ },
+ {
+  "_id": "680fb38323f5063a59efd782",
+  "id": "bartowski/Qwen_Qwen3-0.6B-GGUF",
+  "gated": false,
+  "lastModified": "2025-04-28T17:26:40.000Z",
+  "likes": 29,
+  "downloads": 237190
+ },
+ {
+  "_id": "680f574d990259644b674a6d",
+  "id": "unsloth/Qwen3-0.6B-GGUF",
+  "gated": false,
+  "lastModified": "2025-06-23T00:26:15.000Z",
+  "likes": 144,
+  "downloads": 224849
+ }
+]

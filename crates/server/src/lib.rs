@@ -4,8 +4,11 @@ pub mod auth;
 pub mod client_ip;
 pub mod config;
 pub mod db;
+pub mod engine_api;
 pub mod error;
 pub mod limiter;
+pub mod models;
+pub mod presets;
 pub mod state;
 pub mod system;
 pub mod web;
@@ -16,7 +19,7 @@ use axum::{
     http::{HeaderValue, Method, header},
     middleware,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post, put},
 };
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -51,6 +54,31 @@ pub fn app(state: AppState) -> Router {
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/password", post(auth::change_password))
         .route("/api/system", get(system::system))
+        .route("/api/hf/search", get(models::search))
+        .route("/api/hf/repo", get(models::repo))
+        .route("/api/hf/fit", get(models::fit_route))
+        .route(
+            "/api/downloads",
+            get(models::list_downloads).post(models::create_download),
+        )
+        .route("/api/downloads/{id}", delete(models::delete_download))
+        .route("/api/downloads/{id}/pause", post(models::pause_download))
+        .route("/api/downloads/{id}/resume", post(models::resume_download))
+        .route("/api/models", get(models::list_models))
+        .route("/api/models/{id}", delete(models::delete_model))
+        .route("/api/presets", get(presets::list).post(presets::copy))
+        .route("/api/presets/{id}", put(presets::update).delete(presets::delete))
+        .route("/api/presets/{id}/activate", post(presets::activate))
+        .route("/api/presets/{id}/refresh-sources", post(presets::refresh_sources))
+        .route("/api/engine", get(engine_api::engine))
+        .route("/api/engine/stop", post(engine_api::stop))
+        .route("/api/engine/logs", get(engine_api::logs))
+        .route("/api/engine/versions", get(engine_api::versions))
+        .route("/api/engine/versions/check", post(engine_api::check))
+        .route("/api/engine/versions/install", post(engine_api::install))
+        .route("/api/engine/versions/rollback", post(engine_api::rollback))
+        .route("/api/engine/versions/{tag}", delete(engine_api::delete_version))
+        .route("/api/engine/versions/{tag}/use", post(engine_api::use_version))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_session));
     let public = Router::new()
         .route("/api/health", get(health))

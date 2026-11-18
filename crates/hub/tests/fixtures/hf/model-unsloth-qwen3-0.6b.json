@@ -1,0 +1,19 @@
+{
+ "id": "unsloth/Qwen3-0.6B-GGUF",
+ "gated": false,
+ "cardData": {
+  "base_model": "Qwen/Qwen3-0.6B",
+  "language": [
+   "en"
+  ],
+  "library_name": "transformers",
+  "license_link": "https://huggingface.co/Qwen/Qwen3-0.6B/blob/main/LICENSE",
+  "license": "apache-2.0",
+  "tags": [
+   "qwen3",
+   "qwen",
+   "unsloth",
+   "transformers"
+  ]
+ }
+}

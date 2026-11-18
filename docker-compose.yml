@@ -6,6 +6,8 @@ services:
     container_name: enginex
     restart: unless-stopped
     init: true
+    # Laisse le temps d'arrêter llama-server (15 s au plus) avant SIGKILL.
+    stop_grace_period: 30s
     ports:
       - "8090:8090"
     environment:
@@ -13,6 +15,9 @@ services:
       ENGINEX_TRUST_PROXY: "false"
     volumes:
       - enginex-data:/data
+      # Modèles GGUF (plusieurs dizaines de Go). Sur l'Unraid, un dossier du
+      # disque est conseillé : /mnt/user/appdata/enginex/models:/models (voir README).
+      - enginex-models:/models
     deploy:
       resources:
         reservations:
@@ -25,3 +30,4 @@ services:
 
 volumes:
   enginex-data:
+  enginex-models:

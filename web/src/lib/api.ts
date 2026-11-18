@@ -72,6 +72,247 @@ export const changePassword = (current: string, next: string) =>
   request('POST', '/api/auth/password', { current, new: next });
 export const system = (refresh = false) => request<SystemInfo>('GET', refresh ? '/api/system?refresh=1' : '/api/system');
 
+// ---- Modèles, presets, moteur ----
+
+export interface RepoHit {
+  repo: string;
+  downloads: number;
+  likes: number;
+  updated: string | null;
+  gated: boolean;
+}
+
+export interface FileSpec {
+  name: string;
+  size: number;
+  sha256: string;
+}
+
+export interface QuantGroup {
+  quant: string;
+  files: FileSpec[];
+  total_size: number;
+}
+
+export interface RepoInfo {
+  repo: string;
+  gated: boolean;
+  base_model: string | null;
+  groups: QuantGroup[];
+  mmproj: FileSpec[];
+}
+
+export interface GgufMeta {
+  arch: string;
+  name: string | null;
+  context_length: number | null;
+  block_count: number | null;
+  [k: string]: unknown;
+}
+
+export type Verdict = 'fits' | 'tight' | 'no_fit' | 'unknown';
+
+export interface FitReport {
+  cards: { need_mib: number; avail_mib: number }[];
+  verdict: Verdict;
+  kv_mib: number;
+}
+
+export interface FitResult {
+  report: FitReport;
+  meta: GgufMeta;
+  measured_at: number | null;
+}
+
+export type DownloadState = 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled';
+
+export interface Download {
+  id: number;
+  repo: string;
+  files: FileSpec[];
+  mmproj: string | null;
+  received_bytes: number;
+  total_bytes: number;
+  state: DownloadState;
+  error: string | null;
+  speed_bps: number;
+}
+
+export interface LocalModel {
+  id: number;
+  repo: string;
+  file: string;
+  shards: string[];
+  mmproj: string | null;
+  size_bytes: number;
+  meta: GgufMeta;
+  presets: number[];
+}
+
+export const SAMPLING = ['temperature', 'top_p', 'top_k', 'min_p', 'presence_penalty', 'repeat_penalty'] as const;
+export type SamplingKey = (typeof SAMPLING)[number];
+export type Sampling = Record<SamplingKey, number | null>;
+
+export interface PresetSettings {
+  ctx: number;
+  kv_type: 'f16' | 'q8_0' | 'q4_0';
+  flash_attn: boolean;
+  parallel: number;
+  fit_target_mib: number;
+  tensor_split: number[] | null;
+  reasoning: 'on' | 'off';
+  sampling: Sampling;
+  mmproj: boolean;
+  extra_args: string[];
+}
+
+export interface Origin {
+  source: 'card_repo' | 'card_base' | 'generation_config' | 'gguf' | 'defaut';
+  excerpt: string | null;
+  url: string | null;
+}
+
+export interface CandidateSet {
+  label: 'thinking' | 'non_thinking' | 'general';
+  values: Sampling;
+  excerpt: string;
+}
+
+export interface Sources {
+  values: Sampling;
+  origins: Partial<Record<SamplingKey, Origin>>;
+  to_choose: Partial<Record<SamplingKey, CandidateSet[]>>;
+  error: string | null;
+}
+
+export interface Preset {
+  id: number;
+  name: string;
+  model_id: number;
+  settings: PresetSettings;
+  sources: Sources;
+  active: boolean;
+}
+
+export type EngineState =
+  | { state: 'stopped' }
+  | { state: 'starting'; preset_id: number; progress: number }
+  | { state: 'ready'; preset_id: number; pid: number }
+  | { state: 'failed'; preset_id: number; cause: string; last_lines: string[] }
+  | { state: 'stopping' };
+
+export interface EngineInfo {
+  state: EngineState;
+  preset_id: number | null;
+  gpus: Gpu[];
+  tools_ok: boolean | null;
+  n_ctx: number | null;
+  build: string | null;
+  origin: 'env' | 'active' | 'image' | 'secours';
+  has_fit: boolean;
+  vram_others: number[] | null;
+  measured_at: number | null;
+}
+
+export interface TestResult {
+  ok: boolean;
+  code: string | null;
+  message: string | null;
+  gpus?: number;
+  has_fit?: boolean;
+  at: number;
+}
+
+export interface Job {
+  kind: 'install' | 'use' | 'rollback';
+  tag: string;
+  step: 'test' | 'download' | 'loading' | 'done' | 'failed';
+  done_bytes: number;
+  total_bytes: number;
+  finished: boolean;
+  error: string | null;
+  message: string | null;
+}
+
+export interface Versions {
+  active: string;
+  previous: string | null;
+  installed: { tag: string; build: string; installed_at: number; last_test: TestResult | null }[];
+  latest: { tag: string; build: string } | null;
+  job: Job | null;
+  env_override: boolean;
+}
+
+const q = encodeURIComponent;
+export const hfSearch = (text: string) => request<RepoHit[]>('GET', `/api/hf/search?q=${q(text)}`);
+export const hfRepo = (repo: string) => request<RepoInfo>('GET', `/api/hf/repo?repo=${q(repo)}`);
+export const hfFit = (repo: string, file: string, ctx: number, kv: string, mmproj?: string) =>
+  request<FitResult>(
+    'GET',
+    `/api/hf/fit?repo=${q(repo)}&file=${q(file)}&ctx=${ctx}&kv=${kv}${mmproj ? `&mmproj=${q(mmproj)}` : ''}`,
+  );
+export const downloads = () => request<Download[]>('GET', '/api/downloads');
+export const startDownload = (repo: string, quant: string, mmproj: string | null) =>
+  request<{ id: number }>('POST', '/api/downloads', { repo, quant, mmproj });
+export const pauseDownload = (id: number) => request('POST', `/api/downloads/${id}/pause`);
+export const resumeDownload = (id: number) => request('POST', `/api/downloads/${id}/resume`);
+export const deleteDownload = (id: number) => request('DELETE', `/api/downloads/${id}`);
+export const models = () => request<LocalModel[]>('GET', '/api/models');
+export const deleteModel = (id: number) => request('DELETE', `/api/models/${id}`);
+export const presets = () => request<Preset[]>('GET', '/api/presets');
+export const copyPreset = (from: number, name: string) => request<{ id: number }>('POST', '/api/presets', { from, name });
+export const savePreset = (id: number, name: string, settings: PresetSettings) =>
+  request<{ reload_needed: boolean }>('PUT', `/api/presets/${id}`, { name, settings });
+export const deletePreset = (id: number) => request('DELETE', `/api/presets/${id}`);
+export const activatePreset = (id: number, confirm_nofit = false) =>
+  request<{ ok: boolean; fit: FitReport }>('POST', `/api/presets/${id}/activate`, { confirm_nofit });
+export const refreshSources = (id: number) => request<Preset>('POST', `/api/presets/${id}/refresh-sources`);
+export const engine = () => request<EngineInfo>('GET', '/api/engine');
+export const stopEngine = () => request('POST', '/api/engine/stop');
+export const engineLogs = (tail = 200) => request<{ lines: string[] }>('GET', `/api/engine/logs?tail=${tail}`);
+export const versions = () => request<Versions>('GET', '/api/engine/versions');
+export const checkVersion = () => request<{ tag: string; build: string }>('POST', '/api/engine/versions/check');
+export const installVersion = (tag?: string) => request('POST', '/api/engine/versions/install', { tag: tag ?? null });
+export const useVersion = (tag: string) => request('POST', `/api/engine/versions/${q(tag)}/use`);
+export const rollbackVersion = () => request('POST', '/api/engine/versions/rollback');
+export const deleteVersion = (tag: string) => request('DELETE', `/api/engine/versions/${q(tag)}`);
+
+/** Taille lisible (octets). */
+export function size(bytes: number): string {
+  if (bytes >= 1 << 30) return `${(bytes / (1 << 30)).toFixed(1)} Gio`;
+  if (bytes >= 1 << 20) return `${(bytes / (1 << 20)).toFixed(0)} Mio`;
+  return `${Math.max(0, Math.round(bytes / 1024))} Kio`;
+}
+
+export const VERDICT: Record<Verdict, string> = {
+  fits: 'tient',
+  tight: 'juste',
+  no_fit: 'ne tient pas',
+  unknown: 'inconnu',
+};
+
+/** Erreurs des tâches de fond (téléchargements, moteurs). */
+export function jobError(code: string | null): string {
+  if (!code) return '';
+  const c = code.split(' ')[0];
+  const known: Record<string, string> = {
+    sha256_mismatch: 'Fichier corrompu (sha256 différent) : supprimé, relancez.',
+    disk_full: 'Disque plein.',
+    network: 'Réseau coupé après plusieurs essais.',
+    io: 'Erreur disque.',
+    register_failed: 'Fichier reçu mais illisible.',
+    version_not_found: 'Version introuvable sur ghcr.',
+    digest_mismatch: 'Couche corrompue (digest différent).',
+    engine_incomplete: 'Moteur incomplet (fichiers manquants).',
+    bad_link: 'Lien refusé dans l’image.',
+    test_failed: 'Test du moteur échoué.',
+    load_failed: 'Le modèle ne charge pas avec ce moteur : retour au précédent.',
+  };
+  if (c.startsWith('http_')) return `Hugging Face répond ${c.slice(5)}.`;
+  const key = c.replace(/:$/, '');
+  return known[key] ? `${known[key]} ${code.includes(':') ? code.slice(code.indexOf(':') + 1).trim() : ''}`.trim() : code;
+}
+
 /** Message affichable pour un code d'erreur de l'API. */
 export function message(e: unknown): string {
   if (!(e instanceof ApiError)) return 'Serveur injoignable.';
@@ -88,6 +329,30 @@ export function message(e: unknown): string {
       return 'Serveur occupé, réessayez.';
     case 'already_setup':
       return 'Déjà configuré : connectez-vous.';
+    case 'model_in_use':
+      return 'Modèle utilisé par le preset actif : arrêtez-le ou activez-en un autre.';
+    case 'engine_in_use':
+      return 'Ce moteur est utilisé (actif ou moteur de l’image).';
+    case 'job_running':
+      return 'Une opération sur le moteur est déjà en cours.';
+    case 'already_downloaded':
+      return 'Déjà téléchargé (voir Mes modèles).';
+    case 'already_queued':
+      return 'Déjà dans les téléchargements.';
+    case 'nofit_confirm_required':
+      return 'Ne tient pas en VRAM : confirmation demandée.';
+    case 'env_override':
+      return 'Binaire imposé par ENGINEX_LLAMA_BIN : changement de moteur désactivé.';
+    case 'gated_repo':
+      return 'Dépôt à accès restreint : non pris en charge.';
+    case 'disk_full':
+      return 'Pas assez de place sur le disque des modèles.';
+    case 'upstream_error':
+      return 'Hugging Face ou ghcr injoignable, réessayez.';
+    case 'not_found':
+      return 'Introuvable.';
+    case 'bad_request':
+      return 'Demande refusée (valeur invalide).';
     default:
       return `Erreur : ${e.code}`;
   }

@@ -32,6 +32,27 @@ pub enum ApiError {
     RateLimited(u64),
     #[error("busy")]
     Busy,
+    #[error("model_in_use")]
+    ModelInUse,
+    #[error("engine_in_use")]
+    EngineInUse,
+    #[error("job_running")]
+    JobRunning,
+    #[error("already_downloaded")]
+    AlreadyDownloaded,
+    #[error("already_queued")]
+    AlreadyQueued,
+    #[error("nofit_confirm_required")]
+    NofitConfirmRequired,
+    #[error("env_override")]
+    EnvOverride,
+    #[error("gated_repo")]
+    GatedRepo,
+    #[error("disk_full")]
+    DiskFull,
+    /// Hugging Face ou ghcr injoignable ou en erreur (détail dans les logs).
+    #[error("upstream_error")]
+    Upstream(String),
     #[error("internal")]
     Internal(#[from] anyhow::Error),
 }
@@ -44,7 +65,17 @@ impl ApiError {
             Self::BadSetupCode | Self::ForbiddenOrigin => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
-            Self::AlreadySetup => StatusCode::CONFLICT,
+            Self::AlreadySetup
+            | Self::ModelInUse
+            | Self::EngineInUse
+            | Self::JobRunning
+            | Self::AlreadyDownloaded
+            | Self::AlreadyQueued
+            | Self::NofitConfirmRequired
+            | Self::EnvOverride => StatusCode::CONFLICT,
+            Self::GatedRepo => StatusCode::FORBIDDEN,
+            Self::DiskFull => StatusCode::INSUFFICIENT_STORAGE,
+            Self::Upstream(_) => StatusCode::BAD_GATEWAY,
             Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Busy => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -58,10 +89,35 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
+impl From<enginex_hub::hf::HubError> for ApiError {
+    fn from(e: enginex_hub::hf::HubError) -> Self {
+        use enginex_hub::hf::HubError;
+        match e {
+            HubError::Gated | HubError::Status(401 | 403) => Self::GatedRepo,
+            HubError::Status(404) => Self::NotFound,
+            e => Self::Upstream(e.to_string()),
+        }
+    }
+}
+
+impl From<std::io::Error> for ApiError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Internal(e.into())
+    }
+}
+
+impl From<serde_json::Error> for ApiError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Internal(e.into())
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        if let Self::Internal(e) = &self {
-            tracing::error!("erreur interne : {e:#}");
+        match &self {
+            Self::Internal(e) => tracing::error!("erreur interne : {e:#}"),
+            Self::Upstream(e) => tracing::warn!("service distant : {e}"),
+            _ => {}
         }
         let retry = match &self {
             Self::RateLimited(s) => Some(*s),

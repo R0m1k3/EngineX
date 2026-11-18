@@ -20,6 +20,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo build -p enginex-fake-llama
       - run: cargo test --workspace
       - run: npm ci && npm run check && npm run build
         working-directory: web
@@ -71,6 +72,8 @@ jobs:
           curl -fsS http://127.0.0.1:8090/api/health | grep -q '"ok":true' || fail "/api/health"
           curl -fsS http://127.0.0.1:8090/api/auth/state | grep -q '"setup_required":true' || fail "/api/auth/state"
           docker logs smoke 2>&1 | grep -q "Code de configuration EngineX" || fail "code de configuration absent des logs"
+          # Pas de GPU sur le runner : si --help ne démarre pas sans libcuda, on cherche l'option dans le binaire.
+          docker exec smoke sh -c '/app/llama-server --help 2>&1 | grep -q -- --fit-target || grep -aq -- --fit-target /app/llama-server' || fail "llama-server sans --fit"
           echo "Test de fumée réussi"
       - name: Push
         uses: docker/build-push-action@v6
