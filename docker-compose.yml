@@ -9,7 +9,8 @@ services:
     # Laisse le temps d'arrêter llama-server (15 s au plus) avant SIGKILL.
     stop_grace_period: 30s
     ports:
-      - "8090:8090"
+      # Port de l'hôte réglable (variable ENGINEX_HOST_PORT dans Portainer), 8090 par défaut.
+      - "${ENGINEX_HOST_PORT:-8090}:8090"
     environment:
       # true seulement derrière un reverse proxy (voir README).
       ENGINEX_TRUST_PROXY: "false"
