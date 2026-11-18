@@ -212,6 +212,10 @@ export interface EngineInfo {
   has_fit: boolean;
   vram_others: number[] | null;
   measured_at: number | null;
+  auto_update: boolean;
+  pending: { tag: string; build: string; since: number } | null;
+  auto_last: { at: number; tag: string; ok: boolean; message: string } | null;
+  skipped: string[];
 }
 
 export interface TestResult {
@@ -224,9 +228,9 @@ export interface TestResult {
 }
 
 export interface Job {
-  kind: 'install' | 'use' | 'rollback';
+  kind: 'install' | 'use' | 'rollback' | 'auto_update' | 'activate' | 'stop' | 'delete';
   tag: string;
-  step: 'test' | 'download' | 'loading' | 'done' | 'failed';
+  step: 'test' | 'download' | 'wait_requests' | 'loading' | 'done' | 'failed';
   done_bytes: number;
   total_bytes: number;
   finished: boolean;
@@ -265,7 +269,7 @@ export const savePreset = (id: number, name: string, settings: PresetSettings) =
   request<{ reload_needed: boolean }>('PUT', `/api/presets/${id}`, { name, settings });
 export const deletePreset = (id: number) => request('DELETE', `/api/presets/${id}`);
 export const activatePreset = (id: number, confirm_nofit = false) =>
-  request<{ ok: boolean; fit: FitReport }>('POST', `/api/presets/${id}/activate`, { confirm_nofit });
+  request<{ started: boolean; fit: FitReport }>('POST', `/api/presets/${id}/activate`, { confirm_nofit });
 export const refreshSources = (id: number) => request<Preset>('POST', `/api/presets/${id}/refresh-sources`);
 export const engine = () => request<EngineInfo>('GET', '/api/engine');
 export const stopEngine = () => request('POST', '/api/engine/stop');
@@ -276,6 +280,47 @@ export const installVersion = (tag?: string) => request('POST', '/api/engine/ver
 export const useVersion = (tag: string) => request('POST', `/api/engine/versions/${q(tag)}/use`);
 export const rollbackVersion = () => request('POST', '/api/engine/versions/rollback');
 export const deleteVersion = (tag: string) => request('DELETE', `/api/engine/versions/${q(tag)}`);
+export const setAutoUpdate = (on: boolean) => request<{ on: boolean }>('PUT', '/api/engine/auto-update', { on });
+
+// ---- API pour Codex ----
+
+export interface ApiKey {
+  id: number;
+  name: string;
+  created_at: number;
+  last_used_at: number | null;
+}
+
+export interface CodexConfig {
+  base_url: string;
+  toml: string;
+  env_key: string;
+}
+
+export const apiKeys = () => request<ApiKey[]>('GET', '/api/api-keys');
+export const createApiKey = (name: string) => request<ApiKey & { key: string }>('POST', '/api/api-keys', { name });
+export const deleteApiKey = (id: number) => request('DELETE', `/api/api-keys/${id}`);
+export const codexConfig = () => request<CodexConfig>('GET', '/api/codex-config');
+
+/** Libellés des tâches moteur. */
+export const JOB_KIND: Record<Job['kind'], string> = {
+  install: 'Installation',
+  use: 'Bascule',
+  rollback: 'Retour',
+  auto_update: 'Mise à jour automatique',
+  activate: 'Activation du preset',
+  stop: 'Arrêt du moteur',
+  delete: 'Suppression du preset actif',
+};
+
+export const JOB_STEP: Record<Job['step'], string> = {
+  test: 'test du moteur',
+  download: 'téléchargement',
+  wait_requests: 'attente de la fin des requêtes',
+  loading: 'chargement du modèle',
+  done: 'terminé',
+  failed: 'échec',
+};
 
 /** Taille lisible (octets). */
 export function size(bytes: number): string {
@@ -307,6 +352,8 @@ export function jobError(code: string | null): string {
     bad_link: 'Lien refusé dans l’image.',
     test_failed: 'Test du moteur échoué.',
     load_failed: 'Le modèle ne charge pas avec ce moteur : retour au précédent.',
+    tools_broken: 'Cette version ne rend plus les appels d’outils : retour au précédent, version écartée.',
+    tools_unknown: 'La sonde « outils » n’a pas répondu : retour au précédent, nouvel essai plus tard.',
   };
   if (c.startsWith('http_')) return `Hugging Face répond ${c.slice(5)}.`;
   const key = c.replace(/:$/, '');
@@ -353,6 +400,10 @@ export function message(e: unknown): string {
       return 'Introuvable.';
     case 'bad_request':
       return 'Demande refusée (valeur invalide).';
+    case 'name_taken':
+      return 'Ce nom est déjà pris.';
+    case 'no_active_preset':
+      return 'Aucun preset actif : activez-en un dans Modèles.';
     default:
       return `Erreur : ${e.code}`;
   }

@@ -2,7 +2,10 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicI64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -12,12 +15,14 @@ use enginex_engine::{
 };
 use enginex_hub::hf::Hf;
 use sqlx::SqlitePool;
-use tokio::sync::Semaphore;
+use tokio::sync::{RwLock, Semaphore};
 
 use crate::{config::Config, engine_api::JobState, limiter::Limiter, models::DownloadQueue, system::SysCache};
 
 /// Calculs argon2 simultanés au maximum (environ 19 Mio chacun).
 pub const HASH_PERMITS: usize = 2;
+/// Échecs de clé d'API permis par IP en 15 min sur `/v1`.
+pub const V1_MAX_FAILURES: u32 = 20;
 /// Délai de chargement d'un modèle (un 27B sur disque lent).
 pub const READY_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -50,12 +55,19 @@ pub(crate) struct Inner {
     pub vram_others: Mutex<Option<(i64, Vec<u64>)>>,
     /// Installation ou bascule de moteur en cours (ou la dernière terminée).
     pub engine_job: Mutex<Option<JobState>>,
-    /// Une seule opération sur le moteur à la fois (activation, bascule).
-    pub engine_lock: tokio::sync::Mutex<()>,
     /// Moteur de secours : le moteur actif a échoué au lancement d'EngineX.
     pub fallback: AtomicBool,
     pub latest: Mutex<Option<Release>>,
     pub probe: Mutex<Option<EngineProbe>>,
+    /// Porte de service : chaque requête `/v1` la prend en lecture jusqu'à la
+    /// fin de son flux ; tout chargement ou arrêt de llama-server la prend en
+    /// écriture jusqu'à `Ready`/`Failed`/`Stopped`. Toujours après `begin_job`.
+    pub serve_gate: Arc<RwLock<()>>,
+    /// Fin de la dernière requête `/v1` (ms Unix ; 0 = jamais).
+    pub last_done_ms: AtomicI64,
+    pub auto: crate::autoupdate::AutoState,
+    /// Échecs de clé d'API par IP, séparé de celui de la connexion.
+    pub v1_limiter: Mutex<Limiter>,
     /// Réponses de Hugging Face gardées un moment (clé → date, valeur).
     pub hf_cache: Mutex<HashMap<String, (Instant, serde_json::Value)>>,
 }
@@ -88,11 +100,14 @@ impl AppState {
             downloads: DownloadQueue::default(),
             vram_others: Mutex::new(None),
             engine_job: Mutex::new(None),
-            engine_lock: tokio::sync::Mutex::new(()),
             fallback: AtomicBool::new(false),
             latest: Mutex::new(None),
             probe: Mutex::new(None),
             hf_cache: Mutex::new(HashMap::new()),
+            serve_gate: Arc::new(RwLock::new(())),
+            last_done_ms: AtomicI64::new(0),
+            auto: Default::default(),
+            v1_limiter: Mutex::new(Limiter::new(V1_MAX_FAILURES, crate::limiter::WINDOW)),
         }))
     }
 
@@ -113,12 +128,27 @@ impl AppState {
         &self.0.supervisor
     }
 
+    pub fn serve_gate(&self) -> &Arc<RwLock<()>> {
+        &self.0.serve_gate
+    }
+
+    pub fn last_done_ms(&self) -> i64 {
+        self.0.last_done_ms.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn mark_done(&self) {
+        self.0.last_done_ms.store(now_ms(), Ordering::SeqCst);
+    }
+
     /// Tâches de fond : mesure de la VRAM, test du moteur, relance du preset
     /// actif, reprise des téléchargements. Appelée une fois par `main.rs`.
     pub async fn start_background(&self) -> anyhow::Result<()> {
         crate::engine_api::measure_vram_others(self).await;
         crate::engine_api::boot(self).await?;
         crate::models::boot(self).await?;
+        if self.config().timings.auto_loop {
+            tokio::spawn(crate::autoupdate::run(self.clone()));
+        }
         Ok(())
     }
 }
@@ -128,5 +158,13 @@ pub fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Millisecondes Unix.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }

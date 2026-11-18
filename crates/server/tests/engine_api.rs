@@ -66,6 +66,14 @@ async fn models_presets_engine_and_versions() {
     // Activation → prêt, sondes faites.
     let r = e.send("POST", &format!("/api/presets/{id}/activate"), json!({})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.body["started"], true, "{}", r.text);
+    assert!(r.body["fit"].is_object(), "{}", r.text);
+    let v = e
+        .until("/api/engine/versions", |v| {
+            v["job"]["kind"] == "activate" && v["job"]["finished"] == true
+        })
+        .await;
+    assert_eq!(v["job"]["step"], "done", "{v}");
     let v = e
         .until("/api/engine", |v| engine_state(v) == "ready" && v["tools_ok"] == true)
         .await;
@@ -153,8 +161,15 @@ async fn models_presets_engine_and_versions() {
     let v = e.until("/api/engine", |v| engine_state(v) == "ready").await;
     assert_eq!(v["origin"], "image");
 
-    // Arrêt, puis suppression du modèle (et de ses presets).
-    e.send("POST", "/api/engine/stop", json!({})).await;
+    // Arrêt (tâche en fond), puis suppression du modèle (et de ses presets).
+    let r = e.send("POST", "/api/engine/stop", json!({})).await;
+    assert_eq!(r.body["started"], true, "{}", r.text);
+    let v = e
+        .until("/api/engine/versions", |v| {
+            v["job"]["kind"] == "stop" && v["job"]["finished"] == true
+        })
+        .await;
+    assert_eq!(v["job"]["step"], "done", "{v}");
     let r = e.send("DELETE", &format!("/api/models/{model_id}"), json!({})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert_eq!(e.get("/api/presets").await.body, json!([]));

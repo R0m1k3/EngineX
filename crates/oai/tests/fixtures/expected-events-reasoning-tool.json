@@ -1,0 +1,170 @@
+[
+  {
+    "response": {
+      "created_at": 0,
+      "id": "resp_1",
+      "model": "qwen",
+      "object": "response",
+      "output": [],
+      "status": "in_progress"
+    },
+    "sequence_number": 0,
+    "type": "response.created"
+  },
+  {
+    "response": {
+      "created_at": 0,
+      "id": "resp_1",
+      "model": "qwen",
+      "object": "response",
+      "output": [],
+      "status": "in_progress"
+    },
+    "sequence_number": 1,
+    "type": "response.in_progress"
+  },
+  {
+    "item": {
+      "content": [],
+      "id": "rs_1",
+      "summary": [],
+      "type": "reasoning"
+    },
+    "output_index": 0,
+    "sequence_number": 2,
+    "type": "response.output_item.added"
+  },
+  {
+    "content_index": 0,
+    "delta": "Je dois ",
+    "item_id": "rs_1",
+    "output_index": 0,
+    "sequence_number": 3,
+    "type": "response.reasoning_text.delta"
+  },
+  {
+    "content_index": 0,
+    "delta": "lister.",
+    "item_id": "rs_1",
+    "output_index": 0,
+    "sequence_number": 4,
+    "type": "response.reasoning_text.delta"
+  },
+  {
+    "content_index": 0,
+    "item_id": "rs_1",
+    "output_index": 0,
+    "sequence_number": 5,
+    "text": "Je dois lister.",
+    "type": "response.reasoning_text.done"
+  },
+  {
+    "item": {
+      "content": [
+        {
+          "text": "Je dois lister.",
+          "type": "reasoning_text"
+        }
+      ],
+      "id": "rs_1",
+      "summary": [],
+      "type": "reasoning"
+    },
+    "output_index": 0,
+    "sequence_number": 6,
+    "type": "response.output_item.done"
+  },
+  {
+    "item": {
+      "arguments": "",
+      "call_id": "call_abc",
+      "id": "fc_2",
+      "name": "echo",
+      "namespace": "mcp__test",
+      "status": "in_progress",
+      "type": "function_call"
+    },
+    "output_index": 1,
+    "sequence_number": 7,
+    "type": "response.output_item.added"
+  },
+  {
+    "delta": "{\"text\":",
+    "item_id": "fc_2",
+    "output_index": 1,
+    "sequence_number": 8,
+    "type": "response.function_call_arguments.delta"
+  },
+  {
+    "delta": "\"hi\"}",
+    "item_id": "fc_2",
+    "output_index": 1,
+    "sequence_number": 9,
+    "type": "response.function_call_arguments.delta"
+  },
+  {
+    "arguments": "{\"text\":\"hi\"}",
+    "item_id": "fc_2",
+    "output_index": 1,
+    "sequence_number": 10,
+    "type": "response.function_call_arguments.done"
+  },
+  {
+    "item": {
+      "arguments": "{\"text\":\"hi\"}",
+      "call_id": "call_abc",
+      "id": "fc_2",
+      "name": "echo",
+      "namespace": "mcp__test",
+      "status": "completed",
+      "type": "function_call"
+    },
+    "output_index": 1,
+    "sequence_number": 11,
+    "type": "response.output_item.done"
+  },
+  {
+    "response": {
+      "created_at": 0,
+      "id": "resp_1",
+      "model": "qwen",
+      "object": "response",
+      "output": [
+        {
+          "content": [
+            {
+              "text": "Je dois lister.",
+              "type": "reasoning_text"
+            }
+          ],
+          "id": "rs_1",
+          "summary": [],
+          "type": "reasoning"
+        },
+        {
+          "arguments": "{\"text\":\"hi\"}",
+          "call_id": "call_abc",
+          "id": "fc_2",
+          "name": "echo",
+          "namespace": "mcp__test",
+          "status": "completed",
+          "type": "function_call"
+        }
+      ],
+      "status": "completed",
+      "usage": {
+        "input_tokens": 120,
+        "input_tokens_details": {
+          "cached_tokens": 100
+        },
+        "output_tokens": 8,
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        },
+        "total_tokens": 128
+      }
+    },
+    "sequence_number": 12,
+    "type": "response.completed"
+  }
+]

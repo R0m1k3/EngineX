@@ -18,7 +18,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use enginex_server::{AppState, Config, app, db};
+use enginex_server::{
+    AppState, Config, app,
+    config::{AutoUpdateTimings, Timings},
+    db,
+};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -154,6 +158,8 @@ pub async fn serve_hf() -> String {
 pub struct Reg {
     manifests: HashMap<String, Value>,
     blobs: HashMap<String, Vec<u8>>,
+    /// Pause avant chaque blob (téléchargement lent).
+    pub blob_delay_ms: u64,
 }
 
 pub type SharedReg = Arc<Mutex<Reg>>;
@@ -217,6 +223,10 @@ async fn manifest(State(r): State<SharedReg>, UrlPath(reference): UrlPath<String
 }
 
 async fn blob(State(r): State<SharedReg>, UrlPath(d): UrlPath<String>) -> Response {
+    let delay = r.lock().unwrap().blob_delay_ms;
+    if delay > 0 {
+        tokio::time::sleep(Duration::from_millis(delay)).await;
+    }
     match r.lock().unwrap().blobs.get(&d) {
         Some(b) => b.clone().into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
@@ -237,6 +247,23 @@ pub async fn serve_registry() -> (String, SharedReg) {
 }
 
 // ---- Serveur EngineX ----
+
+/// Délais courts ; pas de boucle de mise à jour automatique en fond (les
+/// tests appellent `autoupdate::tick`).
+pub fn test_timings() -> Timings {
+    Timings {
+        keepalive: Duration::from_millis(200),
+        wait_limit: Duration::from_secs(20),
+        probe_wait: Duration::from_secs(5),
+        auto_loop: false,
+        auto: AutoUpdateTimings {
+            first_check: Duration::from_millis(10),
+            check_every: Duration::from_secs(3600),
+            idle_for: Duration::from_millis(300),
+            tick: Duration::from_millis(50),
+        },
+    }
+}
 
 pub struct Env {
     pub state: AppState,
@@ -311,21 +338,49 @@ impl Env {
 /// EngineX avec moteur de l'image = faux llama-server, HF et registre locaux,
 /// tâches de fond lancées, session ouverte.
 pub async fn env() -> Env {
+    env_with("").await
+}
+
+/// Comme `env`, le faux llama-server de l'image lancé avec les variables
+/// `fake_env` (`FAKE_LOAD_MS=1500 FAKE_CHAT_SCRIPT=…`).
+pub async fn env_with(fake_env: &str) -> Env {
+    env_full(fake_env, false).await
+}
+
+/// `trust_proxy` = `ENGINEX_TRUST_PROXY`.
+pub async fn env_full(fake_env: &str, trust_proxy: bool) -> Env {
+    env_cfg(fake_env, |c| c.trust_proxy = trust_proxy).await
+}
+
+/// Comme `env_with`, `tweak` ajuste la configuration avant le démarrage.
+pub async fn env_cfg(fake_env: &str, tweak: impl FnOnce(&mut Config)) -> Env {
     let dir = tempfile::tempdir().unwrap();
+    let image_bin = if fake_env.is_empty() {
+        fake_bin()
+    } else {
+        let p = dir.path().join("llama-server-image");
+        let script = format!("#!/bin/sh\n{fake_env} exec {} \"$@\"\n", fake_bin().display());
+        std::fs::write(&p, script).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    };
     let hf = serve_hf().await;
     let (registry, reg) = serve_registry().await;
-    let config = Config {
+    let mut config = Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         data_dir: dir.path().join("data"),
         llama_bin: None,
-        image_bin: fake_bin(),
+        image_bin,
         nvidia_smi: "/nonexistent/nvidia-smi".into(),
         trust_proxy: false,
         models_dir: dir.path().join("models"),
         llama_port: free_port(),
         registry,
         hf_base: hf,
+        timings: test_timings(),
     };
+    tweak(&mut config);
     config.check_data_dir().unwrap();
     let pool = db::open(&config.data_dir).await.unwrap();
     let state = AppState::new(config, pool);
@@ -349,4 +404,40 @@ pub async fn env() -> Env {
         reg,
         dir,
     }
+}
+
+/// Sert `router` sur un vrai port TCP (avec `ConnectInfo`) : `http://127.0.0.1:P`.
+pub async fn serve_tcp(router: Router) -> String {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(l, router.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap()
+    });
+    format!("http://{addr}")
+}
+
+/// Télécharge le faux GGUF, active le preset créé et attend `ready`.
+pub async fn make_active_preset(e: &Env) -> i64 {
+    let r = e
+        .send("POST", "/api/downloads", json!({"repo": REPO, "quant": "Q8_0"}))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    e.until("/api/downloads", |v| v[0]["state"] == "done").await;
+    let id = e.until("/api/presets", |v| v[0]["id"].is_i64()).await[0]["id"]
+        .as_i64()
+        .unwrap();
+    let r = e.send("POST", &format!("/api/presets/{id}/activate"), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    e.until("/api/engine", |v| v["state"]["state"] == "ready").await;
+    e.until("/api/engine/versions", |v| v["job"]["finished"] == true).await;
+    id
+}
+
+/// Crée une clé d'API et renvoie sa valeur.
+pub async fn new_key(e: &Env, name: &str) -> String {
+    let r = e.send("POST", "/api/api-keys", json!({"name": name})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    r.body["key"].as_str().unwrap().to_string()
 }

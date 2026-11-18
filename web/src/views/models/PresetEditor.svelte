@@ -50,12 +50,12 @@
       if (r.reload_needed) {
         if (confirm('Ces changements demandent de recharger le modèle. Recharger maintenant ?')) {
           await activatePreset(preset.id, true);
-          notice = 'Enregistré, rechargement lancé.';
+          notice = 'Enregistré, rechargement lancé (après la fin des requêtes en cours).';
         } else {
           notice = 'Enregistré : pris en compte au prochain chargement.';
         }
       } else {
-        notice = 'Enregistré.';
+        notice = 'Enregistré : appliqué dès la prochaine requête.';
       }
       saved();
     } catch (e) {

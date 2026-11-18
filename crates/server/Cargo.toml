@@ -32,6 +32,9 @@ regex = "1"
 libc = "0.2"
 enginex-engine = { path = "../engine" }
 enginex-hub = { path = "../hub" }
+enginex-oai = { path = "../oai" }
+tokio-stream = "0.1"
+futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 tokio-util = "0.7"
 

@@ -78,6 +78,26 @@ disponible en recours.
 Sur l'Unraid, montez les modèles sur un disque plutôt que dans le volume Docker :
 `/mnt/user/appdata/enginex/models:/models` dans la stack, puis `chown -R 1000:1000` sur ce dossier.
 
+## Utiliser Codex avec EngineX
+
+EngineX a une API compatible OpenAI sur `/v1` : `/v1/responses` (le protocole de Codex), `/v1/chat/completions` et
+`/v1/models`. Elle sert le preset actif, et l'échantillonnage du preset est ajouté à chaque requête.
+
+1. **Paramètres → API → Nouvelle clé** : donnez un nom (`codex-portable`) et copiez la clé, qui ne sera plus affichée.
+2. Copiez le `config.toml` proposé dans `~/.codex/config.toml`, et la ligne `export ENGINEX_API_KEY=...` dans votre shell.
+3. `codex` ou `codex exec "..."` utilise alors le modèle chargé par EngineX.
+
+`/v1` demande la clé et refuse le cookie de l'UI. Une clé révoquée est refusée tout de suite. Après 20 clés refusées
+depuis une même adresse, `/v1` est bloqué 15 minutes pour cette adresse ; la connexion à l'UI reste ouverte. Pendant un
+chargement (activation, changement de version), les requêtes attendent qu'il finisse, et un chargement attend la fin
+des requêtes en cours.
+
+**Mise à jour automatique de llama.cpp** (Paramètres → Moteur, activée par défaut) : toutes les 6 heures, EngineX
+regarde si une version plus récente est publiée. Il la télécharge et la teste sans toucher au modèle en service, puis
+la met en service quand le modèle est au repos (10 minutes sans requête, aucun téléchargement en cours). Si le modèle
+ne charge pas ou si les appels d'outils ne passent plus, EngineX revient à la version d'avant et ne retente plus
+celle-là ; l'installer à la main la remet en jeu.
+
 ## Accès depuis l'extérieur
 
 EngineX ne fait pas de HTTPS. Sur le réseau local, l'accès direct suffit. Hors du réseau local, passez par un VPN
@@ -115,7 +135,7 @@ ENGINEX_DATA=/tmp/ex/data ENGINEX_MODELS=/tmp/ex/models ENGINEX_BIND=127.0.0.1:8
   cargo run -p enginex-server             # API (code de configuration dans la sortie)
 ```
 
-Tests et lint : voir `AGENTS.md`.
+Tests et lint : voir `AGENTS.md`. Test de contrat avec le vrai Codex : `scripts/contract-codex.sh`.
 
 ## Licence
 

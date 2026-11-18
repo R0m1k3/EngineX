@@ -40,7 +40,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-fn sha256(data: &[u8]) -> Vec<u8> {
+pub(crate) fn sha256(data: &[u8]) -> Vec<u8> {
     Sha256::digest(data).to_vec()
 }
 
@@ -91,7 +91,7 @@ pub async fn ensure_setup_code(state: &AppState) -> Result<bool, ApiError> {
 }
 
 /// IP utilisée par le limiteur.
-fn ip_of(state: &AppState, peer: &SocketAddr, headers: &HeaderMap) -> String {
+pub(crate) fn ip_of(state: &AppState, peer: &SocketAddr, headers: &HeaderMap) -> String {
     let raw = if state.config().trust_proxy {
         let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
         client_ip(peer, xff)
@@ -178,11 +178,33 @@ fn set_cookie(value: &str, max_age: i64, secure: bool) -> HeaderValue {
     HeaderValue::from_str(&s).expect("cookie ASCII")
 }
 
-/// Crée une session et renvoie l'en-tête `Set-Cookie`.
-async fn new_session(state: &AppState, headers: &HeaderMap) -> Result<HeaderValue, ApiError> {
+/// 32 octets aléatoires en base64url (jetons de session, clés d'API).
+pub(crate) fn random_token() -> String {
     let mut raw = [0u8; 32];
     rand::fill(&mut raw);
-    let token = URL_SAFE_NO_PAD.encode(raw);
+    URL_SAFE_NO_PAD.encode(raw)
+}
+
+/// Hôte vu par le client : `X-Forwarded-Host` derrière un reverse proxy
+/// (`ENGINEX_TRUST_PROXY`), sinon `Host`.
+fn public_host<'h>(state: &AppState, h: &'h HeaderMap) -> Option<&'h str> {
+    if state.config().trust_proxy {
+        h.get("x-forwarded-host").or_else(|| h.get(header::HOST))
+    } else {
+        h.get(header::HOST)
+    }
+    .and_then(|v| v.to_str().ok())
+}
+
+/// Origine publique d'EngineX (`https://hôte` derrière un proxy en HTTPS).
+pub(crate) fn origin(state: &AppState, headers: &HeaderMap) -> String {
+    let scheme = if secure(state, headers) { "https" } else { "http" };
+    format!("{scheme}://{}", public_host(state, headers).unwrap_or("localhost:8090"))
+}
+
+/// Crée une session et renvoie l'en-tête `Set-Cookie`.
+async fn new_session(state: &AppState, headers: &HeaderMap) -> Result<HeaderValue, ApiError> {
+    let token = random_token();
     let now = now_secs();
     sqlx::query("INSERT INTO sessions (token_hash, created_at, last_seen, expires_at) VALUES (?, ?, ?, ?)")
         .bind(sha256(token.as_bytes()))
@@ -248,12 +270,7 @@ pub async fn same_origin(State(state): State<AppState>, req: Request, next: Next
     let h = req.headers();
     if let Some(origin) = h.get(header::ORIGIN) {
         let origin = origin.to_str().unwrap_or("null");
-        let expected = if state.config().trust_proxy {
-            h.get("x-forwarded-host").or_else(|| h.get(header::HOST))
-        } else {
-            h.get(header::HOST)
-        }
-        .and_then(|v| v.to_str().ok());
+        let expected = public_host(&state, h);
         let ok = match (origin_host(origin), expected) {
             (Some(o), Some(e)) => o.eq_ignore_ascii_case(e),
             _ => false,

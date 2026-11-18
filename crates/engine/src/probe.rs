@@ -188,9 +188,15 @@ pub fn has_fit(help: &str) -> bool {
         && help.contains("--fit-target")
 }
 
-/// Numéro de build tiré de la version (`12464 (d3c3e242)` → `b12464`).
+/// Numéro de build tiré de la version : `1.0.0-dev (build 12464, commit
+/// d3c3e242c)` (b12464, relevé sur le binaire officiel) ou l'ancienne forme
+/// `12464 (d3c3e242)` → `b12464`.
 pub fn build_of(version: &str) -> Option<String> {
-    let n: String = version.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits = |s: &str| -> String { s.chars().take_while(|c| c.is_ascii_digit()).collect() };
+    let n = match version.find("build ") {
+        Some(i) => digits(&version[i + "build ".len()..]),
+        None => digits(version),
+    };
     (!n.is_empty()).then(|| format!("b{n}"))
 }
 
@@ -273,6 +279,10 @@ mod tests {
         assert!(!has_fit("  --fit-target only\n"));
         assert!(!has_fit("-ngl N\n"));
         assert_eq!(build_of("12464 (d3c3e242)").as_deref(), Some("b12464"));
+        assert_eq!(
+            build_of("1.0.0-dev (build 12464, commit d3c3e242c)").as_deref(),
+            Some("b12464")
+        );
         assert_eq!(build_of("inconnue"), None);
     }
 

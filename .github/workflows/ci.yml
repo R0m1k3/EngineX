@@ -3,6 +3,9 @@ name: ci
 on:
   push:
   pull_request:
+  # Test de contrat chaque lundi : voir quand une nouvelle version de Codex casse.
+  schedule:
+    - cron: '0 6 * * 1'
 
 jobs:
   test:
@@ -19,15 +22,30 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: cargo fmt --check
+      # Traduction déterministe : clés triées, jamais la feature preserve_order.
+      - run: "! cargo tree -e features -i serde_json | grep -q preserve_order"
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo build -p enginex-fake-llama
       - run: cargo test --workspace
       - run: npm ci && npm run check && npm run build
         working-directory: web
 
+  # Vrai Codex (dernière version npm) contre EngineX + faux llama-server.
+  # N'empêche pas la publication de l'image.
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: scripts/contract-codex.sh
+
   image:
     needs: test
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read

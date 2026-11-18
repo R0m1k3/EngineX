@@ -1,7 +1,10 @@
 //! EngineX : serveur de l'API et de l'UI embarquée.
 
+pub mod api_keys;
 pub mod auth;
+pub mod autoupdate;
 pub mod client_ip;
+pub mod codex_config;
 pub mod config;
 pub mod db;
 pub mod engine_api;
@@ -11,6 +14,7 @@ pub mod models;
 pub mod presets;
 pub mod state;
 pub mod system;
+pub mod v1;
 pub mod web;
 
 use axum::{
@@ -23,7 +27,7 @@ use axum::{
 };
 use tower_http::set_header::SetResponseHeaderLayer;
 
-use crate::error::ApiError;
+use crate::error::{ApiError, V1Error};
 pub use crate::{config::Config, state::AppState};
 
 const CSP: &str =
@@ -36,6 +40,9 @@ async fn health() -> Json<serde_json::Value> {
 /// Hors `/api` : fichiers de l'UI, sinon 405 (méthode) ou 404.
 async fn fallback(req: Request) -> Response {
     let path = req.uri().path();
+    if path == "/v1" || path.starts_with("/v1/") {
+        return V1Error::not_found().into_response();
+    }
     if path == "/api" || path.starts_with("/api/") {
         return ApiError::NotFound.into_response();
     }
@@ -72,6 +79,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/presets/{id}/refresh-sources", post(presets::refresh_sources))
         .route("/api/engine", get(engine_api::engine))
         .route("/api/engine/stop", post(engine_api::stop))
+        .route("/api/engine/auto-update", put(autoupdate::set_auto))
         .route("/api/engine/logs", get(engine_api::logs))
         .route("/api/engine/versions", get(engine_api::versions))
         .route("/api/engine/versions/check", post(engine_api::check))
@@ -79,13 +87,16 @@ pub fn app(state: AppState) -> Router {
         .route("/api/engine/versions/rollback", post(engine_api::rollback))
         .route("/api/engine/versions/{tag}", delete(engine_api::delete_version))
         .route("/api/engine/versions/{tag}/use", post(engine_api::use_version))
+        .route("/api/api-keys", get(api_keys::list).post(api_keys::create))
+        .route("/api/api-keys/{id}", delete(api_keys::delete))
+        .route("/api/codex-config", get(codex_config::codex_config))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::require_session));
     let public = Router::new()
         .route("/api/health", get(health))
         .route("/api/auth/state", get(auth::auth_state))
         .route("/api/auth/setup", post(auth::setup))
         .route("/api/auth/login", post(auth::login));
-    Router::new()
+    let ui = Router::new()
         .merge(public)
         .merge(private)
         .fallback(fallback)
@@ -101,6 +112,8 @@ pub fn app(state: AppState) -> Router {
         .layer(SetResponseHeaderLayer::if_not_present(
             header::REFERRER_POLICY,
             HeaderValue::from_static("same-origin"),
-        ))
-        .with_state(state)
+        ));
+    // `/v1` hors des couches de l'UI (session, même origine) : seule la clé
+    // d'API le protège. Le seul fallback est celui de `ui`.
+    Router::new().merge(v1::router(&state)).merge(ui).with_state(state)
 }

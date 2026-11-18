@@ -1,0 +1,9 @@
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{"role":"assistant","content":null},"finish_reason":null}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{"reasoning_content":"Je dois "},"finish_reason":null}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{"reasoning_content":"lister."},"finish_reason":null}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"mcp__test__echo","arguments":""}}]},"finish_reason":null}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"text\":"}}]},"finish_reason":null}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"hi\"}"}}]},"finish_reason":null}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":8,"total_tokens":128,"prompt_tokens_details":{"cached_tokens":100}}}
+[DONE]

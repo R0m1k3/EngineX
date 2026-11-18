@@ -22,19 +22,36 @@ struct Failures {
 
 /// Clés dans l'ordre d'insertion : la plus ancienne fenêtre part en premier
 /// quand la table est pleine. L'IP est hachée avec une clé aléatoire.
-#[derive(Default)]
 pub struct Limiter {
     map: LinkedHashMap<u64, Failures>,
     hasher: RandomState,
+    max: u32,
+    window: Duration,
+}
+
+/// Seuils de la connexion à l'UI.
+impl Default for Limiter {
+    fn default() -> Self {
+        Self::new(MAX_PER_IP, WINDOW)
+    }
 }
 
 impl Limiter {
+    pub fn new(max: u32, window: Duration) -> Self {
+        Self {
+            map: LinkedHashMap::new(),
+            hasher: RandomState::new(),
+            max,
+            window,
+        }
+    }
+
     fn key(&self, ip: &str) -> u64 {
         self.hasher.hash_one(ip)
     }
 
     fn live(&mut self, key: u64, now: Instant) -> Option<&mut Failures> {
-        if self.map.get(&key).is_some_and(|f| f.since + WINDOW <= now) {
+        if self.map.get(&key).is_some_and(|f| f.since + self.window <= now) {
             self.map.remove(&key);
         }
         self.map.get_mut(&key)
@@ -43,8 +60,9 @@ impl Limiter {
     /// Temps avant le prochain essai permis, zéro si permis maintenant.
     pub fn locked_for(&mut self, ip: &str, now: Instant) -> Duration {
         let key = self.key(ip);
+        let (max, window) = (self.max, self.window);
         match self.live(key, now) {
-            Some(f) if f.count >= MAX_PER_IP => f.since + WINDOW - now,
+            Some(f) if f.count >= max => f.since + window - now,
             _ => Duration::ZERO,
         }
     }

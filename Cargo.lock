@@ -392,8 +392,10 @@ name = "enginex-fake-llama"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -416,6 +418,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "enginex-oai"
+version = "0.1.0"
+dependencies = [
+ "enginex-hub",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+]
+
+[[package]]
 name = "enginex-server"
 version = "0.1.0"
 dependencies = [
@@ -425,7 +439,9 @@ dependencies = [
  "base64 0.22.1",
  "enginex-engine",
  "enginex-hub",
+ "enginex-oai",
  "flate2",
+ "futures-util",
  "hashlink",
  "http-body-util",
  "libc",
@@ -441,6 +457,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tower",
  "tower-http",

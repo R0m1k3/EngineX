@@ -1,8 +1,12 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { engine, engineLogs, presets, stopEngine, message, type EngineInfo, type Preset } from '../../lib/api';
+  import {
+    engine, engineLogs, presets, stopEngine, versions, message, jobError, JOB_KIND, JOB_STEP,
+    type EngineInfo, type Preset, type Job,
+  } from '../../lib/api';
 
   let info = $state<EngineInfo | null>(null);
+  let job = $state<Job | null>(null);
   let list = $state<Preset[]>([]);
   let error = $state('');
   let showLogs = $state(false);
@@ -10,8 +14,8 @@
 
   async function load() {
     try {
-      info = await engine();
-      if (info.preset_id !== null && !list.some((p) => p.id === info?.preset_id)) list = await presets();
+      [info, job] = await Promise.all([engine(), versions().then((v) => v.job)]);
+      if (info && info.preset_id !== null && !list.some((p) => p.id === info?.preset_id)) list = await presets();
       if (showLogs) lines = (await engineLogs(200)).lines;
       error = '';
     } catch (e) {
@@ -42,6 +46,10 @@
     secours: 'moteur de secours',
   };
   let presetName = $derived(list.find((p) => p.id === info?.preset_id)?.name ?? null);
+  // Tâche en cours, ou dernière tâche ratée sur le preset (activation, arrêt).
+  let shownJob = $derived(
+    job && (!job.finished || (job.step === 'failed' && ['activate', 'stop', 'delete'].includes(job.kind))) ? job : null,
+  );
 
   load();
   const timer = setInterval(load, 2000);
@@ -66,7 +74,7 @@
       <div class="actions">
         <button class="link" onclick={() => { showLogs = !showLogs; load(); }}>{showLogs ? 'Masquer les logs' : 'Logs'}</button>
         {#if info.state.state === 'ready' || info.state.state === 'starting'}
-          <button class="secondary" onclick={stop}>Arrêter</button>
+          <button class="secondary" onclick={stop} disabled={!!job && !job.finished}>Arrêter</button>
         {/if}
       </div>
     </div>
@@ -75,6 +83,13 @@
     {/if}
     {#if info.state.state === 'failed'}
       <p class="error">{info.state.cause}</p>
+    {/if}
+    {#if shownJob}
+      <p class="small">
+        {JOB_KIND[shownJob.kind]}{shownJob.tag && !['activate', 'stop', 'delete'].includes(shownJob.kind) ? ` (${shownJob.tag})` : ''} :
+        <span class="state state-{shownJob.step}">{JOB_STEP[shownJob.step]}</span>
+      </p>
+      {#if shownJob.error}<p class="error small">{jobError(shownJob.error)}</p>{/if}
     {/if}
     {#if !info.has_fit}
       <p class="small error">Ce llama-server n’a pas --fit : placement par défaut de llama.cpp.</p>

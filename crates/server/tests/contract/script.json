@@ -1,0 +1,24 @@
+[
+ {
+  "reasoning": "Je teste d'abord l'outil echo.",
+  "tool_calls": [
+   {
+    "name": "mcp__test__echo",
+    "arguments": "{\"text\": \"hi\"}",
+    "id": "call_echo"
+   }
+  ]
+ },
+ {
+  "tool_calls": [
+   {
+    "name": "exec_command",
+    "arguments": "{\"cmd\": \"apply_patch <<'EOF'\\n*** Begin Patch\\n*** Update File: hello.txt\\n@@\\n-hello\\n+bonjour\\n*** End Patch\\nEOF\\n\"}",
+    "id": "call_patch"
+   }
+  ]
+ },
+ {
+  "content": "Fait : hello remplacé par bonjour dans hello.txt."
+ }
+]

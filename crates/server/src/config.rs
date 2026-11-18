@@ -4,7 +4,51 @@
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
+    time::Duration,
 };
+
+use crate::state::READY_TIMEOUT;
+
+/// Délais de l'API `/v1` et de la mise à jour automatique (les tests les
+/// raccourcissent ; pas de variable d'environnement).
+#[derive(Clone, Debug)]
+pub struct Timings {
+    /// Événement de maintien envoyé à Codex quand rien n'arrive.
+    pub keepalive: Duration,
+    /// Attente maximale de la porte de service par une requête.
+    pub wait_limit: Duration,
+    /// Attente du résultat de la sonde « outils » après une bascule.
+    pub probe_wait: Duration,
+    /// Lance la boucle de mise à jour automatique (les tests appellent `tick`).
+    pub auto_loop: bool,
+    pub auto: AutoUpdateTimings,
+}
+
+#[derive(Clone, Debug)]
+pub struct AutoUpdateTimings {
+    pub first_check: Duration,
+    pub check_every: Duration,
+    /// Durée sans requête `/v1` avant une mise en service.
+    pub idle_for: Duration,
+    pub tick: Duration,
+}
+
+impl Default for Timings {
+    fn default() -> Self {
+        Self {
+            keepalive: Duration::from_secs(15),
+            wait_limit: READY_TIMEOUT * 2 + Duration::from_secs(60),
+            probe_wait: Duration::from_secs(30),
+            auto_loop: true,
+            auto: AutoUpdateTimings {
+                first_check: Duration::from_secs(5 * 60),
+                check_every: Duration::from_secs(6 * 3600),
+                idle_for: Duration::from_secs(10 * 60),
+                tick: Duration::from_secs(60),
+            },
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -22,6 +66,7 @@ pub struct Config {
     pub llama_port: u16,
     pub registry: String,
     pub hf_base: String,
+    pub timings: Timings,
 }
 
 impl Config {
@@ -47,6 +92,7 @@ impl Config {
                 .map_err(|e| anyhow::anyhow!("ENGINEX_LLAMA_PORT invalide ({port}) : {e}"))?,
             registry: var("ENGINEX_OCI_REGISTRY", "https://ghcr.io"),
             hf_base: var("ENGINEX_HF_BASE", "https://huggingface.co"),
+            timings: Timings::default(),
         })
     }
 

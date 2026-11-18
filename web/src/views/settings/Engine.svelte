@@ -1,17 +1,19 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import {
-    versions, checkVersion, installVersion, useVersion, rollbackVersion, deleteVersion, message, size, jobError,
-    type Versions,
+    versions, engine, checkVersion, installVersion, useVersion, rollbackVersion, deleteVersion, setAutoUpdate,
+    message, size, jobError, JOB_KIND, JOB_STEP,
+    type Versions, type EngineInfo,
   } from '../../lib/api';
 
   let v = $state<Versions | null>(null);
+  let info = $state<EngineInfo | null>(null);
   let error = $state('');
   let checking = $state(false);
 
   async function load() {
     try {
-      v = await versions();
+      [v, info] = await Promise.all([versions(), engine()]);
       error = '';
     } catch (e) {
       error = message(e);
@@ -34,9 +36,6 @@
     checking = false;
   }
 
-  const stepLabel: Record<string, string> = {
-    test: 'test du moteur', download: 'téléchargement', loading: 'rechargement du modèle', done: 'terminé', failed: 'échec',
-  };
   const date = (t: number) => new Date(t * 1000).toLocaleString('fr-FR');
   let running = $derived(!!v?.job && !v.job.finished);
   // Même build que l'image ou qu'une version installée : rien à installer.
@@ -49,7 +48,32 @@
 
 {#if error}<p class="error">{error}</p>{/if}
 
-{#if v}
+{#if v && info}
+  <section class="card">
+    <h3>Mise à jour automatique</h3>
+    <label class="check">
+      <input
+        type="checkbox"
+        checked={info.auto_update}
+        disabled={v.env_override}
+        onchange={(e) => run(() => setAutoUpdate((e.currentTarget as HTMLInputElement).checked))}
+      />
+      Installer les nouvelles versions de llama.cpp toute seule, quand le modèle est au repos (10 min sans requête)
+    </label>
+    {#if info.pending}
+      <p class="small">{info.pending.build} en attente de repos depuis le {date(info.pending.since)}</p>
+    {/if}
+    {#if info.auto_last}
+      <p class="small {info.auto_last.ok ? 'ok' : 'error'}">
+        {info.auto_last.tag.replace('server-cuda-', '')}
+        {info.auto_last.ok ? `installée le ${date(info.auto_last.at)}` : `écartée le ${date(info.auto_last.at)} : ${jobError(info.auto_last.message)}`}
+      </p>
+    {/if}
+    {#if info.skipped.length}
+      <p class="small muted">Versions écartées (plus retentées seules ; une installation à la main les remet en jeu) : {info.skipped.join(', ')}</p>
+    {/if}
+  </section>
+
   <section class="card">
     <h3>llama.cpp</h3>
     {#if v.env_override}<p class="error small">Binaire imposé par ENGINEX_LLAMA_BIN : les boutons de changement sont désactivés.</p>{/if}
@@ -66,8 +90,8 @@
     {#if v.job}
       <div class="job">
         <p class="small">
-          {v.job.kind === 'install' ? 'Installation' : v.job.kind === 'use' ? 'Bascule' : 'Retour'} de {v.job.tag} :
-          <span class="state state-{v.job.step}">{stepLabel[v.job.step]}</span>
+          {JOB_KIND[v.job.kind]}{v.job.tag && ['install', 'use', 'rollback', 'auto_update'].includes(v.job.kind) ? ` de ${v.job.tag}` : ''} :
+          <span class="state state-{v.job.step}">{JOB_STEP[v.job.step]}</span>
           {#if v.job.step === 'download' && v.job.total_bytes}<span class="muted"> · {size(v.job.done_bytes)} / {size(v.job.total_bytes)}</span>{/if}
         </p>
         {#if v.job.step === 'download' && v.job.total_bytes}

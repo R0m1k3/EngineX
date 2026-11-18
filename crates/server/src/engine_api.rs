@@ -22,6 +22,7 @@ use enginex_engine::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::OwnedRwLockWriteGuard;
 
 use crate::{
     error::{ApiError, ApiJson},
@@ -41,7 +42,9 @@ static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(image|server-cuda-
 pub struct JobState {
     pub kind: &'static str,
     pub tag: String,
-    /// `download`, `test`, `loading`, `done`, `failed`.
+    /// `kind` : `install`, `use`, `rollback`, `auto_update`, `activate`,
+    /// `stop`, `delete`. `step` : `download`, `test`, `wait_requests` (attente
+    /// de la fin des requêtes /v1), `loading`, `done`, `failed`.
     pub step: &'static str,
     pub done_bytes: u64,
     pub total_bytes: u64,
@@ -50,14 +53,15 @@ pub struct JobState {
     pub message: Option<String>,
 }
 
-fn set_job(state: &AppState, f: impl FnOnce(&mut JobState)) {
+pub(crate) fn set_job(state: &AppState, f: impl FnOnce(&mut JobState)) {
     if let Some(j) = state.0.engine_job.lock().expect("job").as_mut() {
         f(j);
     }
 }
 
-/// Réserve le créneau de tâche (409 si une tâche tourne déjà).
-fn begin_job(state: &AppState, kind: &'static str, tag: &str) -> Result<(), ApiError> {
+/// Réserve le créneau de tâche (409 si une tâche tourne déjà). Toujours
+/// avant la porte de service, jamais l'inverse.
+pub(crate) fn begin_job(state: &AppState, kind: &'static str, tag: &str) -> Result<(), ApiError> {
     let mut g = state.0.engine_job.lock().expect("job");
     if g.as_ref().is_some_and(|j| !j.finished) {
         return Err(ApiError::JobRunning);
@@ -75,7 +79,7 @@ fn begin_job(state: &AppState, kind: &'static str, tag: &str) -> Result<(), ApiE
     Ok(())
 }
 
-fn end_job(state: &AppState, res: Result<String, String>) {
+pub(crate) fn end_job(state: &AppState, res: Result<String, String>) {
     set_job(state, |j| {
         j.finished = true;
         match res {
@@ -89,6 +93,15 @@ fn end_job(state: &AppState, res: Result<String, String>) {
             }
         }
     });
+}
+
+/// Prend la porte de service en écriture (étape `wait_requests` tant que des
+/// requêtes /v1 sont en cours).
+pub(crate) async fn take_gate(state: &AppState) -> OwnedRwLockWriteGuard<()> {
+    set_job(state, |j| j.step = "wait_requests");
+    let g = state.serve_gate().clone().write_owned().await;
+    set_job(state, |j| j.step = "loading");
+    g
 }
 
 // ---- Lancement ----
@@ -135,7 +148,7 @@ pub async fn launch(state: &AppState, id: i64) -> Result<(), ApiError> {
 }
 
 /// Attend la fin du chargement : `true` si prêt.
-async fn wait_loaded(state: &AppState) -> bool {
+pub(crate) async fn wait_loaded(state: &AppState) -> bool {
     let mut rx = state.supervisor().subscribe();
     let r = tokio::time::timeout(
         READY_TIMEOUT + Duration::from_secs(30),
@@ -262,10 +275,20 @@ pub async fn boot(state: &AppState) -> anyhow::Result<()> {
         }
         Origin::Env => {}
     }
-    if let Some(id) = presets::active_id(state).await.map_err(|e| anyhow::anyhow!("{e}"))?
-        && let Err(e) = launch(state, id).await
-    {
-        tracing::warn!("relance du preset {id} : {e}");
+    if let Some(id) = presets::active_id(state).await.map_err(|e| anyhow::anyhow!("{e}"))? {
+        // Chargement en fond, porte prise : le serveur démarre tout de suite et
+        // les requêtes /v1 attendent la fin du chargement.
+        let gate = state.serve_gate().clone().write_owned().await;
+        let s = state.clone();
+        tokio::spawn(async move {
+            let _gate = gate;
+            match launch(&s, id).await {
+                Ok(()) => {
+                    wait_loaded(&s).await;
+                }
+                Err(e) => tracing::warn!("relance du preset {id} : {e}"),
+            }
+        });
     }
     Ok(())
 }
@@ -308,14 +331,27 @@ pub async fn engine(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
         "has_fit": has_fit,
         "vram_others": others.as_ref().map(|(_, v)| v.clone()),
         "measured_at": others.map(|(t, _)| t),
+        "auto_update": crate::autoupdate::enabled(&state).await,
+        "pending": crate::autoupdate::pending(&state).await,
+        "auto_last": crate::autoupdate::auto_last(&state).await,
+        "skipped": crate::autoupdate::skipped(&state).await,
     })))
 }
 
+/// Arrêt du moteur : tâche en fond qui attend la fin des requêtes en cours.
 pub async fn stop(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let _g = state.0.engine_lock.try_lock().map_err(|_| ApiError::JobRunning)?;
-    state.supervisor().stop(false).await;
-    set_setting(&state, "preset.active", None).await?;
-    Ok(Json(json!({ "ok": true })))
+    begin_job(&state, "stop", "")?;
+    let s = state.clone();
+    tokio::spawn(async move {
+        let _gate = take_gate(&s).await;
+        s.supervisor().stop(false).await;
+        let r = set_setting(&s, "preset.active", None)
+            .await
+            .map(|_| "moteur arrêté".to_string())
+            .map_err(|e| e.to_string());
+        end_job(&s, r);
+    });
+    Ok(Json(json!({ "started": true })))
 }
 
 #[derive(Deserialize)]
@@ -329,13 +365,13 @@ pub async fn logs(State(state): State<AppState>, Query(q): Query<LogsQuery>) -> 
 
 // ---- Routes : versions ----
 
-async fn active_tag(state: &AppState) -> Result<String, ApiError> {
+pub(crate) async fn active_tag(state: &AppState) -> Result<String, ApiError> {
     Ok(setting(state, "engine.active")
         .await?
         .unwrap_or_else(|| IMAGE_TAG.to_string()))
 }
 
-fn bin_of(state: &AppState, tag: &str) -> PathBuf {
+pub(crate) fn bin_of(state: &AppState, tag: &str) -> PathBuf {
     if tag == IMAGE_TAG {
         state.config().image_bin.clone()
     } else {
@@ -399,13 +435,25 @@ pub async fn install(State(state): State<AppState>, ApiJson(b): ApiJson<InstallB
     begin_job(&state, "install", &rel.tag)?;
     let s = state.clone();
     tokio::spawn(async move {
-        let r = install_job(&s, rel).await;
+        // Installer à la main une version écartée la remet en jeu.
+        crate::autoupdate::unskip(&s, &rel.tag).await;
+        let r = match download_version(&s, &rel).await {
+            Ok(()) => {
+                let gate = take_gate(&s).await;
+                switch_to(&s, &rel.tag, SwitchOrigin::Manual, gate)
+                    .await
+                    .map_err(|e| e.message)
+            }
+            Err(e) => Err(e),
+        };
         end_job(&s, r);
     });
     Ok(Json(json!({ "started": true })))
 }
 
-async fn install_job(state: &AppState, rel: Release) -> Result<String, String> {
+/// Téléchargement, enregistrement et test du binaire de `rel`, sans la porte
+/// de service (les requêtes /v1 passent pendant ce temps).
+pub(crate) async fn download_version(state: &AppState, rel: &Release) -> Result<(), String> {
     let dir = state.config().engines_dir();
     tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
     set_job(state, |j| j.step = "download");
@@ -413,7 +461,7 @@ async fn install_job(state: &AppState, rel: Release) -> Result<String, String> {
     let bin = state
         .0
         .registry
-        .install(&rel, &dir, &move |done, total| {
+        .install(rel, &dir, &move |done, total| {
             set_job(&s, |j| {
                 j.done_bytes = done;
                 j.total_bytes = total;
@@ -431,10 +479,16 @@ async fn install_job(state: &AppState, rel: Release) -> Result<String, String> {
             return Err(format!("{} : {e}", e.code()));
         }
     };
-    record_version(state, &rel.tag, &rel.build, &bin, "null")
+    set_job(state, |j| j.step = "test");
+    let gpus = probe::read_gpus(&state.config().nvidia_smi)
+        .await
+        .map(|g| g.len())
+        .unwrap_or(0);
+    let res = update::test_engine(&bin, Some(&rel.build), gpus).await;
+    record_version(state, &rel.tag, &rel.build, &bin, &test_json(&res))
         .await
         .map_err(|e| e.to_string())?;
-    switch_to(state, &rel.tag).await
+    res.map(|_| ()).map_err(|e| format!("{} : {e}", e.code()))
 }
 
 pub async fn use_version(
@@ -451,12 +505,18 @@ pub async fn use_version(
         return Err(ApiError::NotFound);
     }
     begin_job(&state, "use", &tag)?;
-    let s = state.clone();
-    tokio::spawn(async move {
-        let r = switch_to(&s, &tag).await;
-        end_job(&s, r);
-    });
+    spawn_switch(state, tag);
     Ok(Json(json!({ "started": true })))
+}
+
+fn spawn_switch(state: AppState, tag: String) {
+    tokio::spawn(async move {
+        let gate = take_gate(&state).await;
+        let r = switch_to(&state, &tag, SwitchOrigin::Manual, gate)
+            .await
+            .map_err(|e| e.message);
+        end_job(&state, r);
+    });
 }
 
 pub async fn rollback(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -468,20 +528,69 @@ pub async fn rollback(State(state): State<AppState>) -> Result<Json<Value>, ApiE
         return Err(ApiError::NotFound);
     }
     begin_job(&state, "rollback", &prev)?;
-    let s = state.clone();
-    tokio::spawn(async move {
-        let r = switch_to(&s, &prev).await;
-        end_job(&s, r);
-    });
+    spawn_switch(state, prev);
     Ok(Json(json!({ "started": true })))
 }
 
+/// Qui a demandé la bascule.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SwitchOrigin {
+    Manual,
+    Auto,
+}
+
+/// Échec d'une bascule ; le moteur d'avant est de nouveau en service.
+#[derive(Debug)]
+pub struct SwitchError {
+    pub message: String,
+    pub kind: SwitchFail,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SwitchFail {
+    /// Test du binaire ou chargement raté.
+    Failed,
+    /// La sonde « outils » passait avant, elle échoue avec la nouvelle version
+    /// (tag ajouté à `engine.skipped`).
+    ToolsBroken,
+    /// La sonde passait avant, elle n'a pas répondu (erreur passagère possible).
+    ToolsUnknown,
+}
+
+fn fail(kind: SwitchFail, message: String) -> SwitchError {
+    SwitchError { message, kind }
+}
+
+fn tools_ok(state: &AppState) -> Option<bool> {
+    state.0.probe.lock().expect("sonde").as_ref().and_then(|p| p.tools_ok)
+}
+
+/// Attend que `watch_engine` ait rempli la sonde du nouveau chargement.
+async fn wait_probe(state: &AppState) -> Option<bool> {
+    let deadline = tokio::time::Instant::now() + state.config().timings.probe_wait;
+    while tokio::time::Instant::now() < deadline {
+        if let Some(p) = state.0.probe.lock().expect("sonde").as_ref() {
+            return p.tools_ok;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    None
+}
+
 /// Teste `tag`, bascule (`previous` ← actif), relance le preset actif ; si le
-/// chargement échoue, revient au moteur d'avant.
-async fn switch_to(state: &AppState, tag: &str) -> Result<String, String> {
-    let _g = state.0.engine_lock.lock().await;
+/// chargement échoue ou si la sonde « outils » régresse, revient au moteur
+/// d'avant (chargement attendu). Reçoit la porte en écriture déjà prise et la
+/// garde jusqu'au bout.
+pub(crate) async fn switch_to(
+    state: &AppState,
+    tag: &str,
+    origin: SwitchOrigin,
+    gate: OwnedRwLockWriteGuard<()>,
+) -> Result<String, SwitchError> {
+    let _gate = gate;
+    let failed = |m: String| fail(SwitchFail::Failed, m);
     let bin = bin_of(state, tag);
-    let (cur, _) = current_bin(state).await.map_err(|e| e.to_string())?;
+    let (cur, _) = current_bin(state).await.map_err(|e| failed(e.to_string()))?;
     let gpus = update::describe(&cur).await.map(|r| r.gpus).unwrap_or(0);
     set_job(state, |j| j.step = "test");
     let res = if tag == IMAGE_TAG {
@@ -491,7 +600,7 @@ async fn switch_to(state: &AppState, tag: &str) -> Result<String, String> {
             .bind(tag)
             .fetch_optional(&state.0.db)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| failed(e.to_string()))?;
         update::test_engine(&bin, build.as_deref(), gpus).await
     };
     let build = res.as_ref().map(|r| r.build.clone()).unwrap_or_default();
@@ -502,29 +611,57 @@ async fn switch_to(state: &AppState, tag: &str) -> Result<String, String> {
         .execute(&state.0.db)
         .await;
     if let Err(e) = res {
-        return Err(format!("{} : {e}", e.code()));
+        return Err(failed(format!("{} : {e}", e.code())));
     }
-    let old_active = active_tag(state).await.map_err(|e| e.to_string())?;
-    let old_prev = setting(state, "engine.previous").await.map_err(|e| e.to_string())?;
+    let old_active = active_tag(state).await.map_err(|e| failed(e.to_string()))?;
+    let old_prev = setting(state, "engine.previous")
+        .await
+        .map_err(|e| failed(e.to_string()))?;
+    let old_tools = tools_ok(state);
     let was_fallback = state.0.fallback.swap(false, Ordering::SeqCst);
-    set_settings(state, tag, Some(&old_active)).await?;
+    set_settings(state, tag, Some(&old_active)).await.map_err(failed)?;
     reset_cache(state).await;
-    if let Some(id) = presets::active_id(state).await.map_err(|e| e.to_string())? {
+    if let Some(id) = presets::active_id(state).await.map_err(|e| failed(e.to_string()))? {
         set_job(state, |j| j.step = "loading");
         let ok = launch(state, id).await.is_ok() && wait_loaded(state).await;
-        if !ok {
+        let verdict = if !ok {
             let cause = match state.supervisor().state() {
                 EngineState::Failed { cause, .. } => cause,
                 _ => "chargement échoué".into(),
             };
-            set_settings(state, &old_active, old_prev.as_deref()).await?;
+            Some(fail(SwitchFail::Failed, format!("load_failed : {cause}")))
+        } else {
+            match (old_tools, wait_probe(state).await) {
+                (Some(true), Some(false)) => Some(fail(
+                    SwitchFail::ToolsBroken,
+                    "tools_broken : la nouvelle version ne rend plus les appels d'outils".into(),
+                )),
+                (Some(true), None) => Some(fail(
+                    SwitchFail::ToolsUnknown,
+                    "tools_unknown : la sonde « outils » n'a pas répondu".into(),
+                )),
+                _ => None,
+            }
+        };
+        if let Some(mut err) = verdict {
+            set_settings(state, &old_active, old_prev.as_deref())
+                .await
+                .map_err(failed)?;
             state.0.fallback.store(was_fallback, Ordering::SeqCst);
             reset_cache(state).await;
-            let _ = launch(state, id).await;
-            return Err(format!("load_failed : {cause} ; retour à {old_active}"));
+            if launch(state, id).await.is_ok() {
+                wait_loaded(state).await;
+            }
+            if err.kind == SwitchFail::ToolsBroken {
+                crate::autoupdate::skip(state, tag).await;
+            }
+            tracing::warn!("bascule vers {tag} ({origin:?}) annulée : {}", err.message);
+            err.message = format!("{} ; retour à {old_active}", err.message);
+            return Err(err);
         }
     }
     cleanup(state).await;
+    tracing::info!("moteur {tag} ({build}) actif ({origin:?})");
     Ok(format!("moteur {tag} ({build}) actif"))
 }
 
@@ -537,12 +674,14 @@ async fn set_settings(state: &AppState, active: &str, previous: Option<&str>) ->
         .map_err(|e| e.to_string())
 }
 
-/// Garde l'actif, le précédent et `image` ; supprime les autres.
-async fn cleanup(state: &AppState) {
+/// Garde l'actif, le précédent, `image` et la version en attente ; supprime
+/// les autres.
+pub(crate) async fn cleanup(state: &AppState) {
     let keep = [
         active_tag(state).await.ok(),
         setting(state, "engine.previous").await.ok().flatten(),
         Some(IMAGE_TAG.to_string()),
+        crate::autoupdate::pending(state).await.map(|p| p.tag),
     ];
     let tags: Vec<String> = sqlx::query_scalar("SELECT tag FROM engine_versions")
         .fetch_all(&state.0.db)
@@ -555,7 +694,7 @@ async fn cleanup(state: &AppState) {
     }
 }
 
-async fn remove_version(state: &AppState, tag: &str) -> Result<(), ApiError> {
+pub(crate) async fn remove_version(state: &AppState, tag: &str) -> Result<(), ApiError> {
     if tag != IMAGE_TAG && TAG.is_match(tag) {
         let dir = state.config().engines_dir().join(tag);
         if tokio::fs::metadata(&dir).await.is_ok() {

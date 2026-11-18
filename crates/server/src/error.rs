@@ -50,6 +50,10 @@ pub enum ApiError {
     GatedRepo,
     #[error("disk_full")]
     DiskFull,
+    #[error("name_taken")]
+    NameTaken,
+    #[error("no_active_preset")]
+    NoActivePreset,
     /// Hugging Face ou ghcr injoignable ou en erreur (détail dans les logs).
     #[error("upstream_error")]
     Upstream(String),
@@ -72,7 +76,9 @@ impl ApiError {
             | Self::AlreadyDownloaded
             | Self::AlreadyQueued
             | Self::NofitConfirmRequired
-            | Self::EnvOverride => StatusCode::CONFLICT,
+            | Self::EnvOverride
+            | Self::NameTaken
+            | Self::NoActivePreset => StatusCode::CONFLICT,
             Self::GatedRepo => StatusCode::FORBIDDEN,
             Self::DiskFull => StatusCode::INSUFFICIENT_STORAGE,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
@@ -149,5 +155,42 @@ where
             .await
             .map(|Json(v)| Self(v))
             .map_err(|_: JsonRejection| ApiError::BadRequest)
+    }
+}
+
+/// Erreur des routes `/v1/*`, au format OpenAI
+/// `{"error":{"code","message","type"}}` (Codex lit `error.code` et
+/// `error.message`) : exception écrite à la règle `{"error":"<code>"}`.
+#[derive(Debug)]
+pub struct V1Error {
+    pub status: StatusCode,
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl V1Error {
+    pub fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn not_found() -> Self {
+        Self::new(StatusCode::NOT_FOUND, "not_found", "route inconnue")
+    }
+}
+
+impl IntoResponse for V1Error {
+    fn into_response(self) -> Response {
+        let kind = match self.status.as_u16() {
+            401 => "authentication_error",
+            429 => "rate_limit_error",
+            400..=499 => "invalid_request_error",
+            _ => "server_error",
+        };
+        let body = serde_json::json!({"error": {"code": self.code, "message": self.message, "type": kind}});
+        (self.status, Json(body)).into_response()
     }
 }

@@ -212,18 +212,37 @@ pub async fn update(
     Ok(Json(json!({ "reload_needed": reload_needed })))
 }
 
-pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) -> Result<Json<Value>, ApiError> {
-    preset(&state, id).await?;
-    if active_id(&state).await? == Some(id) {
-        let _g = state.0.engine_lock.try_lock().map_err(|_| ApiError::JobRunning)?;
-        state.supervisor().stop(false).await;
-        set_setting(&state, "preset.active", None).await?;
-    }
+async fn delete_row(state: &AppState, id: i64) -> Result<(), sqlx::Error> {
     sqlx::query("DELETE FROM presets WHERE id = ?")
         .bind(id)
         .execute(&state.0.db)
-        .await?;
-    Ok(Json(json!({ "ok": true })))
+        .await
+        .map(|_| ())
+}
+
+/// Preset inactif : supprimé tout de suite. Preset actif : tâche en fond qui
+/// attend la fin des requêtes /v1, arrête le moteur, puis supprime.
+pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) -> Result<Json<Value>, ApiError> {
+    preset(&state, id).await?;
+    if active_id(&state).await? != Some(id) {
+        delete_row(&state, id).await?;
+        return Ok(Json(json!({ "ok": true })));
+    }
+    engine_api::begin_job(&state, "delete", &id.to_string())?;
+    let s = state.clone();
+    tokio::spawn(async move {
+        let _gate = engine_api::take_gate(&s).await;
+        s.supervisor().stop(false).await;
+        let r = async {
+            set_setting(&s, "preset.active", None).await?;
+            delete_row(&s, id).await
+        }
+        .await
+        .map(|_| "preset supprimé, moteur arrêté".to_string())
+        .map_err(|e| e.to_string());
+        engine_api::end_job(&s, r);
+    });
+    Ok(Json(json!({ "started": true })))
 }
 
 #[derive(Deserialize)]
@@ -244,10 +263,30 @@ pub async fn activate(
     if report.verdict == Verdict::NoFit && !b.confirm_nofit {
         return Err(ApiError::NofitConfirmRequired);
     }
-    let _g = state.0.engine_lock.try_lock().map_err(|_| ApiError::JobRunning)?;
-    set_setting(&state, "preset.active", Some(&id.to_string())).await?;
-    engine_api::launch(&state, id).await?;
-    Ok(Json(json!({ "ok": true, "fit": report })))
+    engine_api::begin_job(&state, "activate", &id.to_string())?;
+    let s = state.clone();
+    tokio::spawn(async move {
+        // Porte prise avant de changer de preset : les requêtes en cours
+        // finissent sur l'ancien, les suivantes attendent le nouveau.
+        let _gate = engine_api::take_gate(&s).await;
+        let r = async {
+            set_setting(&s, "preset.active", Some(&id.to_string()))
+                .await
+                .map_err(|e| e.to_string())?;
+            engine_api::launch(&s, id).await.map_err(|e| e.to_string())?;
+            if engine_api::wait_loaded(&s).await {
+                Ok(format!("preset « {} » chargé", p.name))
+            } else {
+                Err(match s.supervisor().state() {
+                    enginex_engine::supervisor::EngineState::Failed { cause, .. } => cause,
+                    _ => "chargement échoué".into(),
+                })
+            }
+        }
+        .await;
+        engine_api::end_job(&s, r);
+    });
+    Ok(Json(json!({ "started": true, "fit": report })))
 }
 
 pub async fn refresh_sources(

@@ -219,6 +219,11 @@ pub struct DownloadQueue {
 }
 
 impl DownloadQueue {
+    /// Un téléchargement de modèle est en cours.
+    pub fn busy(&self) -> bool {
+        self.current.lock().expect("file").is_some()
+    }
+
     fn progress(&self, id: i64, bytes: u64) {
         if let Some(c) = self.current.lock().expect("file").as_mut()
             && c.0 == id

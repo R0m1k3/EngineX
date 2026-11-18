@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import {
     presets, models, activatePreset, copyPreset, deletePreset, refreshSources, ApiError, message,
     type Preset, type LocalModel,
@@ -32,14 +33,20 @@
     }
   }
 
+  // L'activation est une tâche en fond (elle attend la fin des requêtes
+  // /v1 en cours) : son avancement s'affiche dans la barre du moteur.
+  const started = 'Chargement lancé : avancement dans la barre du moteur.';
+
   async function activate(p: Preset) {
     error = '';
+    notice = '';
     try {
       await activatePreset(p.id);
+      notice = started;
     } catch (e) {
       if (e instanceof ApiError && e.code === 'nofit_confirm_required') {
         if (!confirm('Ce preset ne tient pas en VRAM : llama.cpp mettra des couches sur le processeur, beaucoup plus lent. Activer quand même ?')) return;
-        await run(() => activatePreset(p.id, true));
+        await run(() => activatePreset(p.id, true), started);
         return;
       }
       error = message(e);
@@ -54,12 +61,16 @@
   }
 
   async function remove(p: Preset) {
-    if (confirm(`Supprimer le preset ${p.name} ?${p.active ? ' Le moteur sera arrêté.' : ''}`)) await run(() => deletePreset(p.id));
+    if (confirm(`Supprimer le preset ${p.name} ?${p.active ? ' Le moteur sera arrêté après les requêtes en cours.' : ''}`))
+      await run(() => deletePreset(p.id), p.active ? 'Suppression lancée : le moteur s’arrête après les requêtes en cours.' : '');
   }
 
   const modelOf = (p: Preset) => mods.find((m) => m.id === p.model_id);
 
   load();
+  // Relu régulièrement : une activation ou une suppression finit en fond.
+  const timer = setInterval(load, 3000);
+  onDestroy(() => clearInterval(timer));
 </script>
 
 {#if error}<p class="error">{error}</p>{/if}
