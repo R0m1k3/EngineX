@@ -12,7 +12,7 @@
 pub mod grid;
 pub mod js;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -193,6 +193,122 @@ pub fn guard(mut out: String, n: usize) -> String {
 }
 
 /// Un nombre comme `json.Marshal` l'écrit (`640`, pas `640.0`).
+/// Erreurs de page gardées par onglet (les plus vieilles partent).
+pub const CONSOLE_MAX: usize = 40;
+const CONSOLE_LINE: usize = 300;
+
+fn clip(s: &str, max: usize) -> String {
+    let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if s.chars().count() <= max {
+        return s;
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+/// Une ligne pour le modèle à partir d'un événement CDP : exception non
+/// attrapée, `console.error` / `console.assert`, entrée de journal de niveau
+/// erreur (ressource en 404 ou 500, CSP…). `None` : rien à signaler.
+pub fn console_line(method: &str, p: &Value) -> Option<String> {
+    let at = |url: &str, line: Option<i64>| -> String {
+        if url.is_empty() {
+            return String::new();
+        }
+        match line {
+            Some(l) => format!(" ({url}:{})", l + 1),
+            None => format!(" ({url})"),
+        }
+    };
+    let line = match method {
+        "Runtime.exceptionThrown" => {
+            let d = &p["exceptionDetails"];
+            let what = d["exception"]["description"]
+                .as_str()
+                .and_then(|s| s.lines().next())
+                .or_else(|| d["text"].as_str())
+                .unwrap_or("erreur");
+            format!(
+                "exception : {}{}",
+                clip(what, CONSOLE_LINE),
+                at(d["url"].as_str().unwrap_or(""), d["lineNumber"].as_i64())
+            )
+        }
+        "Runtime.consoleAPICalled" => {
+            let kind = p["type"].as_str().unwrap_or("");
+            if !matches!(kind, "error" | "assert") {
+                return None;
+            }
+            let args: Vec<String> = p["args"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|a| match &a["value"] {
+                    Value::String(s) => s.clone(),
+                    Value::Null => a["description"]
+                        .as_str()
+                        .and_then(|s| s.lines().next())
+                        .unwrap_or("")
+                        .to_string(),
+                    v => v.to_string(),
+                })
+                .collect();
+            let f = &p["stackTrace"]["callFrames"][0];
+            format!(
+                "console.{kind} : {}{}",
+                clip(&args.join(" "), CONSOLE_LINE),
+                at(f["url"].as_str().unwrap_or(""), f["lineNumber"].as_i64())
+            )
+        }
+        "Log.entryAdded" => {
+            let e = &p["entry"];
+            // L'icône du site demandée d'office par le navigateur n'est pas un défaut de l'app.
+            let favicon = e["url"].as_str().is_some_and(|u| u.ends_with("/favicon.ico"));
+            if e["level"] != "error" || favicon {
+                return None;
+            }
+            format!(
+                "{}{}",
+                clip(e["text"].as_str().unwrap_or(""), CONSOLE_LINE),
+                at(
+                    e["url"].as_str().unwrap_or(""),
+                    e["lineNumber"].as_i64().filter(|l| *l > 0)
+                )
+            )
+        }
+        _ => return None,
+    };
+    Some(line)
+}
+
+/// Les erreurs de page en bloc : lignes répétées à la suite regroupées
+/// (`×N`), 15 lignes au plus. Vide s'il n'y en a pas.
+pub fn format_console(lines: &[String]) -> String {
+    let mut grouped: Vec<(String, usize)> = Vec::new();
+    for l in lines {
+        match grouped.last_mut() {
+            Some((prev, n)) if prev == l => *n += 1,
+            _ => grouped.push((l.clone(), 1)),
+        }
+    }
+    if grouped.is_empty() {
+        return String::new();
+    }
+    let extra = grouped.len().saturating_sub(15);
+    let mut out = String::from("Erreurs de la page (console du navigateur) :");
+    for (l, n) in grouped.iter().take(15) {
+        out.push_str("\n- ");
+        out.push_str(l);
+        if *n > 1 {
+            out.push_str(&format!(" (×{n})"));
+        }
+    }
+    if extra > 0 {
+        out.push_str(&format!("\n… et {extra} autre(s)"));
+    }
+    out
+}
+
 fn go_num(f: f64) -> Value {
     if f.is_finite() && f.fract() == 0.0 && f.abs() < 1e15 {
         json!(f as i64)
@@ -216,6 +332,9 @@ pub struct Session {
     next: AtomicI64,
     /// Requêtes réseau en vol et dernier événement réseau (`settle`).
     net: Arc<Mutex<(i64, Option<Instant>)>>,
+    /// Erreurs de la page (exceptions, `console.error`, ressources en échec)
+    /// depuis la dernière lecture ([`Session::take_console`]).
+    console: Arc<Mutex<VecDeque<String>>>,
     last_snap: Mutex<String>,
     /// `repeatKey` / `repeatN` : dernière action sans effet et son nombre de
     /// répétitions (`cuRepeat`).
@@ -304,6 +423,8 @@ impl Session {
             }
             let _ = sink.close().await;
         });
+        let console: Arc<Mutex<VecDeque<String>>> = Default::default();
+        let k2 = console.clone();
         let (p2, n2, c2, e2) = (pending.clone(), net.clone(), closed.clone(), events.clone());
         let reader = tokio::spawn(async move {
             while let Some(Ok(msg)) = stream.next().await {
@@ -344,6 +465,15 @@ impl Session {
                     Some("Page.screencastFrame" | "Page.frameNavigated") => {
                         let _ = e2.send(m);
                     }
+                    Some(method @ ("Runtime.exceptionThrown" | "Runtime.consoleAPICalled" | "Log.entryAdded")) => {
+                        if let Some(line) = console_line(method, &m["params"]) {
+                            let mut k = lock(&k2);
+                            if k.len() >= CONSOLE_MAX {
+                                k.pop_front();
+                            }
+                            k.push_back(line);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -357,13 +487,20 @@ impl Session {
             pending,
             next: AtomicI64::new(0),
             net,
+            console,
             last_snap: Mutex::new(String::new()),
             repeat: Mutex::new(Repeat::default()),
             closed,
             tasks: Mutex::new(vec![writer, reader]),
             events,
         });
-        for m in ["Page.enable", "Runtime.enable", "DOM.enable", "Network.enable"] {
+        for m in [
+            "Page.enable",
+            "Runtime.enable",
+            "DOM.enable",
+            "Network.enable",
+            "Log.enable",
+        ] {
             let _ = s.call(m, None).await;
         }
         let _ = s
@@ -794,6 +931,29 @@ impl Session {
         Ok(())
     }
 
+    /// Les erreurs de page notées depuis le dernier appel (vidées).
+    pub fn take_console(&self) -> Vec<String> {
+        lock(&self.console).drain(..).collect()
+    }
+
+    /// Texte visible de la page (`innerText`), lignes vides retirées, `max`
+    /// caractères au plus.
+    pub async fn page_text(&self, max: usize) -> Option<String> {
+        let v = self
+            .eval("(document.body&&document.body.innerText||'').slice(0,20000)")
+            .await
+            .ok()
+            .flatten()?;
+        let lines: Vec<&str> = v.as_str()?.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        let text = lines.join("\n");
+        if text.chars().count() <= max {
+            return Some(text);
+        }
+        let mut out: String = text.chars().take(max).collect();
+        out.push_str("\n[… texte coupé]");
+        Some(out)
+    }
+
     /// `screenshot` : le viewport en PNG.
     pub async fn screenshot(&self) -> Result<Vec<u8>, String> {
         let res = self
@@ -858,6 +1018,11 @@ impl Browser {
 
     pub fn enabled(&self) -> bool {
         self.url.is_some()
+    }
+
+    /// `ENGINEX_BROWSER_URL` tel que configuré.
+    pub fn url(&self) -> Option<&str> {
+        self.url.as_deref()
     }
 
     /// Version du navigateur (page Système, onglet Navigateur).

@@ -13,9 +13,12 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
-use crate::{auth, error::ApiError, sessions, state::AppState};
+use crate::{appgate, auth, error::ApiError, sessions, state::AppState};
+
+/// Texte visible d'une app rendu au modèle, au plus.
+const PAGE_TEXT_MAX: usize = 3000;
 
 /// Schémas des outils (listés seulement si le navigateur est configuré).
 pub fn tools() -> Vec<Value> {
@@ -27,8 +30,8 @@ pub fn tools() -> Vec<Value> {
     vec![
         t(
             "browser_open",
-            "Ouvre une page dans le navigateur de la session (onglet gardé entre les appels, cookies et connexions gardés). Rend le snapshot : texte et éléments numérotés [n]. Pour une app de la sandbox, utilise plutôt Playwright ou curl dans la sandbox.",
-            json!({"url": {"type": "string", "description": "adresse, ou back / forward"}}),
+            "Ouvre une page dans le navigateur de la session (onglet gardé entre les appels). Rend le titre, l'adresse et les éléments numérotés [n]. Pour essayer l'app que tu as lancée dans la sandbox : http://localhost:<port> (tu reçois aussi son texte visible, les erreurs de la console et une capture si tu vois les images) ; clique et saisis ensuite avec browser_click et browser_type.",
+            json!({"url": {"type": "string", "description": "adresse (http://localhost:3000 pour ton app), ou back / forward"}}),
             &["url"],
         ),
         t(
@@ -82,20 +85,100 @@ pub fn tools() -> Vec<Value> {
     ]
 }
 
+/// Outils dont le résultat porte aussi le texte visible de l'app.
+fn with_page_text(name: &str) -> bool {
+    matches!(
+        name,
+        "browser_open" | "browser_snapshot" | "browser_click" | "browser_click_xy" | "browser_type" | "browser_key"
+    )
+}
+
 /// Un outil `browser_*` en contenu MCP (`None` pour un autre nom).
+///
+/// `browser_open` sur `localhost:<port>` vise l'app de la sandbox de la
+/// session, par un sas (`appgate.rs`). Tant que l'onglet est sur cette app,
+/// le résultat porte aussi le texte visible et les erreurs de la console ; à
+/// l'ouverture, la capture est jointe si le modèle voit les images.
 pub async fn call(state: &AppState, session_id: &str, name: &str, args: &Value) -> Option<(Vec<Value>, bool)> {
-    let empty = Map::new();
-    let args = args.as_object().unwrap_or(&empty);
+    if !enginex_browser::is_tool(name) {
+        return None;
+    }
+    let b = &state.0.browser;
+    let mut args = args.as_object().cloned().unwrap_or_default();
     let vision = crate::v1::active(state).await.ok().flatten().is_some_and(|a| a.vision);
-    let out = state.0.browser.exec(session_id, name, args, vision).await?;
+    let mut opened_app = false;
+    if name == "browser_open"
+        && !b.taken(session_id)
+        && let Some((port, path)) = appgate::local_target(args.get("url").and_then(Value::as_str).unwrap_or(""))
+    {
+        match appgate::open_app(state, session_id, port).await {
+            Ok(origin) => {
+                args.insert("url".into(), json!(format!("{origin}{path}")));
+                opened_app = true;
+            }
+            Err(e) => return Some((vec![json!({"type": "text", "text": format!("[erreur] {e}")})], true)),
+        }
+        // Les erreurs d'avant ne sont pas celles de cette page.
+        if let Some(tab) = b.current(session_id).await {
+            tab.take_console();
+        }
+    }
+    let out = b.exec(session_id, name, &args, vision).await?;
+    let (mut text, mut image) = (out.result, out.image);
+    let hub = crate::bridge::hub(state, session_id);
+    let gates = &state.0.gates;
+    if !text.starts_with("[attente]")
+        && gates.has(session_id)
+        && let Some(tab) = b.current(session_id).await
+    {
+        let origin = tab
+            .eval("location.origin")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        if gates.port_of(session_id, &origin).is_some() {
+            hub.app_seen();
+            if with_page_text(name)
+                && let Some(t) = tab.page_text(PAGE_TEXT_MAX).await
+            {
+                if t.is_empty() {
+                    text.push_str("\n\nTexte visible : aucun (page blanche ?)");
+                } else if gates.text_changed(session_id, &t) {
+                    text.push_str("\n\nTexte visible de la page :\n");
+                    text.push_str(&t);
+                } else {
+                    text.push_str("\n\n(texte visible inchangé)");
+                }
+            }
+            let errors = enginex_browser::format_console(&tab.take_console());
+            if !errors.is_empty() {
+                text.push_str("\n\n");
+                text.push_str(&errors);
+            }
+            if opened_app
+                && vision
+                && image.is_none()
+                && !text.starts_with("[erreur]")
+                && let Ok(png) = tab.screenshot().await
+            {
+                text.push_str(
+                    "\n\nCapture jointe : regarde le rendu (mise en page, éléments manquants ou mal placés, textes coupés).",
+                );
+                image = Some(png);
+            }
+        }
+    }
+    let text = gates.rewrite(session_id, &text);
     // Le texte des pages peut contenir un secret du coffre affiché par un site.
-    let text = state.masker().mask(&out.result).into_owned();
+    let text = state.masker().mask(&text).into_owned();
     let is_error = text.starts_with("[erreur]");
     let mut content = vec![json!({"type": "text", "text": text})];
-    if let Some(png) = out.image {
+    if let Some(png) = image {
         content.push(json!({"type": "image", "data": STANDARD.encode(png), "mimeType": "image/png"}));
     }
-    crate::bridge::hub(state, session_id).touch_activity();
+    hub.touch_activity();
     Some((content, is_error))
 }
 

@@ -93,6 +93,8 @@ pub(crate) struct Inner {
     pub agents: crate::agents::Agents,
     /// Laissez-passer de l'aperçu des apps.
     pub previews: crate::preview::Grants,
+    /// Sas vers les apps des sandboxes pour le navigateur piloté.
+    pub gates: crate::appgate::Gates,
     /// Onglets des sessions sur le navigateur de la stack.
     pub browser: enginex_browser::Browser,
 }
@@ -147,6 +149,7 @@ impl AppState {
             crons: Default::default(),
             agents: Default::default(),
             previews: Default::default(),
+            gates: Default::default(),
             browser,
         }))
     }
@@ -163,6 +166,11 @@ impl AppState {
 
     pub fn db(&self) -> &SqlitePool {
         &self.0.db
+    }
+
+    /// Les sas d'app ouverts au navigateur (voir `appgate`).
+    pub fn gates(&self) -> &crate::appgate::Gates {
+        &self.0.gates
     }
 
     pub fn config(&self) -> &Config {

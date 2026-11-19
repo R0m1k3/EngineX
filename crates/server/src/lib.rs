@@ -2,6 +2,7 @@
 
 pub mod agents;
 pub mod api_keys;
+pub mod appgate;
 pub mod attachments;
 pub mod auth;
 pub mod autoupdate;

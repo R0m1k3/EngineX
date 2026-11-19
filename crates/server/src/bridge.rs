@@ -75,11 +75,26 @@ pub struct VerifyState {
     pub cancelled: bool,
 }
 
+/// Suivi de l'essai de l'app par l'agent.
+#[derive(Default)]
+struct AppCheck {
+    /// L'agent a eu son app sous les yeux (outil `browser_*`) pendant le tour.
+    seen: bool,
+    /// Des fichiers d'interface ont changé sans que l'app soit ouverte depuis.
+    dirty: bool,
+    /// Tours d'essai lancés depuis le dernier message de Michael.
+    checks: u32,
+    /// Le tour en cours est un tour d'essai.
+    turn: bool,
+}
+
 struct HubState {
     sandbox: (String, Option<String>),
     verify: Option<VerifyState>,
     /// Tours de correction lancés depuis le dernier message de Michael.
     fixes_done: u32,
+    /// Essai de l'app au navigateur (`verify.rs`).
+    app: AppCheck,
     /// Terminaux ouverts : `processId` → sortie vers le WebSocket.
     terminals: HashMap<String, Arc<crate::terminal::Sink>>,
     conn: Option<Conn>,
@@ -126,6 +141,7 @@ pub fn hub(state: &AppState, session_id: &str) -> Arc<Hub> {
                     sandbox: ("stopped".into(), None),
                     verify: None,
                     fixes_done: 0,
+                    app: AppCheck::default(),
                     terminals: HashMap::new(),
                     conn: None,
                     generation: 0,
@@ -353,6 +369,38 @@ impl Hub {
         self.st.lock().expect("verrou").fixes_done += 1;
     }
 
+    /// Un outil `browser_*` vient de montrer l'app de la sandbox à l'agent.
+    pub(crate) fn app_seen(&self) {
+        self.st.lock().expect("verrou").app.seen = true;
+    }
+
+    /// Fin d'un tour : `ui_changed` si ses fichiers d'interface ont changé.
+    /// Rend `true` si ce tour était un tour d'essai de l'app.
+    pub(crate) fn app_turn_done(&self, ui_changed: bool) -> bool {
+        let mut st = self.st.lock().expect("verrou");
+        if st.app.seen {
+            st.app.dirty = false;
+        } else if ui_changed {
+            st.app.dirty = true;
+        }
+        st.app.turn
+    }
+
+    /// Un tour d'essai est-il dû : interface changée, pas regardée, et pas
+    /// encore de tour d'essai depuis le dernier message de Michael.
+    pub(crate) fn app_check_due(&self) -> bool {
+        let st = self.st.lock().expect("verrou");
+        st.app.dirty && st.app.checks == 0
+    }
+
+    /// Le tour qui vient d'être ouvert (`begin`) est un tour d'essai.
+    pub(crate) fn app_check_started(&self) {
+        let mut st = self.st.lock().expect("verrou");
+        st.app.checks += 1;
+        st.app.dirty = false;
+        st.app.turn = true;
+    }
+
     /// Client et dossier de travail de la sandbox vivante.
     pub(crate) fn client_cwd(&self) -> Option<(Client, String)> {
         let st = self.st.lock().expect("verrou");
@@ -488,7 +536,10 @@ impl Hub {
         }
         if matches!(origin, "user" | "cron" | "agent") {
             st.fixes_done = 0;
+            st.app.checks = 0;
         }
+        st.app.seen = false;
+        st.app.turn = false;
         st.turn = Some(TurnState {
             id: None,
             user: user.clone(),

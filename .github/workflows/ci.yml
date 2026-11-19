@@ -80,7 +80,7 @@ jobs:
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:23750/_ping && break; sleep 1; done
       - name: Navigateur (vrai Chromium de la stack)
         run: |
-          docker run -d --name browser -p 127.0.0.1:9222:9222 --shm-size=1g docker.io/chromedp/headless-shell:latest
+          docker run -d --name browser --network host --shm-size=1g docker.io/chromedp/headless-shell:latest
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9222/json/version && break; sleep 1; done
       - name: Tests du navigateur
         run: |

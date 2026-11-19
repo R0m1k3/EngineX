@@ -108,3 +108,31 @@ async fn save_writes_the_detected_recipe_once() {
         .await;
     assert_eq!(r.body["error"], "recipe_exists");
 }
+
+#[test]
+fn interface_files() {
+    use enginex_server::verify::ui_changed;
+    let v = |p: &[&str], idx: bool| ui_changed(&p.iter().map(|s| s.to_string()).collect::<Vec<_>>(), idx);
+    assert!(v(&["index.html"], false));
+    assert!(v(&["src/App.svelte"], false) && v(&["web/style.SCSS"], false) && v(&["a/b/Page.tsx"], false));
+    // Scripts : seulement dans un dossier qui a une page.
+    assert!(!v(&["src/main.ts", "lib/util.js"], false));
+    assert!(v(&["src/main.ts"], true) && v(&["game.js"], true));
+    // Ni code serveur, ni tests, ni dossiers générés.
+    assert!(!v(&["src/main.rs", "README.md", "app.py", "Cargo.toml"], true));
+    assert!(!v(&["src/app.test.ts", "e2e/login.spec.js"], true));
+    assert!(!v(
+        &["dist/index.html", "node_modules/x/a.css", "web/build/app.js"],
+        true
+    ));
+    assert!(!v(&[], true));
+}
+
+#[test]
+fn app_check_message_lists_ports() {
+    use enginex_server::verify::app_check_message;
+    assert!(app_check_message(&[]).contains("Rien n'écoute dans la sandbox"));
+    let m = app_check_message(&[3000, 5173]);
+    assert!(m.contains("Ports ouverts dans la sandbox : 3000, 5173."), "{m}");
+    assert!(m.starts_with("Essai de l'app (demandé par EngineX)"));
+}

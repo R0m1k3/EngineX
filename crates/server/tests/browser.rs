@@ -168,3 +168,150 @@ async fn real_chromium_through_mcp_and_watch() {
     enginex_server::sandboxes::stop(&e.state, &sid).await;
     assert!(e.state.browser().current(&sid).await.is_none());
 }
+
+/// App de la sandbox : un compteur, l'hôte reçu, une erreur de console et une
+/// ressource absente.
+async fn counter_app() -> u16 {
+    use axum::{Router, http::HeaderMap, response::Html, routing::get};
+    let r = Router::new().route(
+        "/",
+        get(|h: HeaderMap| async move {
+            let host = h.get("host").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+            Html(format!(
+                "<!doctype html><title>Essai</title><h1>Compteur : <span id=n>0</span></h1><p>Hôte : {host}</p>\
+                 <button onclick=\"n.textContent=+n.textContent+1\">Ajouter</button>\
+                 <script src=\"/absent.js\"></script><script>console.error('oups', 42)</script>"
+            ))
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(l, r).await.unwrap() });
+    port
+}
+
+/// Le sas sans navigateur : seul le pair « navigateur » passe, l'app reçoit
+/// `Host: localhost:<port>`, et le sas tombe avec la session.
+#[tokio::test]
+async fn app_gate_serves_the_browser_only() {
+    // Le « navigateur » : une simple écoute sur une autre adresse de bouclage.
+    let chrome = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
+    let url = format!("http://{}", chrome.local_addr().unwrap());
+    let (e, _fake) = env_sessions_cfg(&script_with("text", |_| {}), "", |c| c.web.browser_url = Some(url)).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let app = counter_app().await;
+    let stopped = enginex_server::appgate::open_app(&e.state, &sid, app).await;
+    assert!(stopped.unwrap_err().contains("sandbox de la session est arrêtée"));
+
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "Bonjour").await;
+    ev.until("turn_stored", |_| true).await;
+    let origin = enginex_server::appgate::open_app(&e.state, &sid, app).await.unwrap();
+    // Même (session, port) : même sas.
+    assert_eq!(
+        enginex_server::appgate::open_app(&e.state, &sid, app).await.unwrap(),
+        origin
+    );
+    assert_eq!(e.state.gates().port_of(&sid, &origin), Some(app));
+
+    let from = |ip: [u8; 4]| {
+        reqwest::Client::builder()
+            .local_address(std::net::IpAddr::from(ip))
+            .build()
+            .unwrap()
+    };
+    let r = from([127, 0, 0, 2]).get(&origin).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let body = r.text().await.unwrap();
+    assert!(body.contains(&format!("Hôte : localhost:{app}")), "{body}");
+    // Tout autre pair (une autre sandbox, le réseau local) est refusé.
+    let r = from([127, 0, 0, 3]).get(&origin).send().await.unwrap();
+    assert_eq!(r.status(), 403);
+
+    e.state.gates().close_session(&sid);
+    assert!(!e.state.gates().has(&sid));
+    assert!(from([127, 0, 0, 2]).get(&origin).send().await.is_err());
+}
+
+/// Vrai Chromium : l'agent ouvre l'app de sa sandbox par `localhost`, lit le
+/// texte, la console et la capture, puis clique.
+#[tokio::test]
+#[ignore = "lancé par la CI avec un vrai Chromium (ENGINEX_TEST_BROWSER)"]
+async fn real_chromium_opens_the_sandbox_app() {
+    let url = std::env::var("ENGINEX_TEST_BROWSER").expect("ENGINEX_TEST_BROWSER");
+    let (e, _fake) = env_sessions_cfg(&script_with("text", |_| {}), "", |c| c.web.browser_url = Some(url)).await;
+    make_active_vision_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "Bonjour").await;
+    ev.until("turn_stored", |_| true).await;
+    // La sandbox vivante a déjà sa clé : le test en prend la place.
+    let key = format!("ex_test{}", uuid::Uuid::new_v4().simple());
+    let done = sqlx::query("UPDATE api_keys SET hash = ? WHERE name = ?")
+        .bind(<sha2::Sha256 as sha2::Digest>::digest(key.as_bytes()).to_vec())
+        .bind(format!("sandbox:{sid}"))
+        .execute(e.state.db())
+        .await
+        .unwrap();
+    assert_eq!(done.rows_affected(), 1);
+
+    // Rien n'écoute : message clair, pas de page d'erreur du navigateur.
+    let dead = free_port();
+    let (text, err) = mcp_tool(
+        &e,
+        &key,
+        "browser_open",
+        json!({"url": format!("http://localhost:{dead}")}),
+    )
+    .await;
+    assert!(
+        err && text.contains(&format!("rien n'écoute sur le port {dead}")),
+        "{text}"
+    );
+
+    let port = counter_app().await;
+    let r = rpc(
+        &e,
+        &key,
+        "tools/call",
+        json!({"name": "browser_open", "arguments": {"url": format!("localhost:{port}")}}),
+    )
+    .await;
+    let content = r["result"]["content"].as_array().unwrap();
+    let text = content[0]["text"].as_str().unwrap();
+    assert_eq!(r["result"]["isError"], false, "{text}");
+    eprintln!("--- browser_open (app) ---\n{text}\n---");
+    // L'adresse du sas ne paraît jamais : le modèle lit celle qu'il a écrite.
+    assert!(text.contains(&format!("http://localhost:{port}/")), "{text}");
+    assert!(!text.contains("http://127.0.0.1"), "{text}");
+    assert!(text.contains("button \"Ajouter\""), "{text}");
+    assert!(
+        text.contains("Texte visible de la page :") && text.contains("Compteur : 0"),
+        "{text}"
+    );
+    // L'app reçoit `Host: localhost:<port>` (Vite refuse les autres hôtes).
+    assert!(text.contains(&format!("Hôte : localhost:{port}")), "{text}");
+    assert!(text.contains("console.error : oups 42"), "{text}");
+    assert!(text.contains("404") && text.contains("/absent.js"), "{text}");
+    // Preset avec vision : la capture est jointe d'office.
+    assert!(text.contains("Capture jointe"), "{text}");
+    assert_eq!(content[1]["type"], "image", "{r}");
+    assert!(content[1]["data"].as_str().unwrap().len() > 1000);
+
+    let (text, err) = mcp_tool(&e, &key, "browser_click", json!({"ref": 1})).await;
+    assert!(!err && text.contains("Compteur : 1"), "{text}");
+    assert!(!text.contains("console.error"), "erreurs déjà rendues : {text}");
+    let (text, _) = mcp_tool(&e, &key, "browser_snapshot", json!({})).await;
+    assert!(text.contains("(texte visible inchangé)"), "{text}");
+
+    // Hors de l'app : ni texte ni console ajoutés.
+    let (text, _) = mcp_tool(
+        &e,
+        &key,
+        "browser_open",
+        json!({"url": "data:text/html,%3Ctitle%3EA%3C/title%3E%3Cp%3EAilleurs%3C/p%3E"}),
+    )
+    .await;
+    assert!(!text.contains("Texte visible"), "{text}");
+}

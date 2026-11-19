@@ -713,6 +713,7 @@ export interface SessionSettings {
   max: number;
   verify_enabled?: boolean;
   verify_max_fixes?: number;
+  verify_app_check?: boolean;
   memory_auto?: boolean;
   git_name?: string;
   git_email?: string;

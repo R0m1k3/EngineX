@@ -242,3 +242,50 @@ async fn vrai_chromium() {
     b.close("s1").await;
     b.close("s2").await;
 }
+
+#[test]
+fn console_lines() {
+    use serde_json::json;
+    let ex = json!({"exceptionDetails": {"text": "Uncaught", "lineNumber": 11, "url": "http://h/app.js",
+        "exception": {"description": "TypeError: x is not a function\n    at http://h/app.js:12:3"}}});
+    assert_eq!(
+        console_line("Runtime.exceptionThrown", &ex).unwrap(),
+        "exception : TypeError: x is not a function (http://h/app.js:12)"
+    );
+    let call = json!({"type": "error", "args": [{"type": "string", "value": "oups"}, {"type": "number", "value": 42},
+        {"type": "object", "description": "Error: boum\n    at f"}],
+        "stackTrace": {"callFrames": [{"url": "http://h/", "lineNumber": 0}]}});
+    assert_eq!(
+        console_line("Runtime.consoleAPICalled", &call).unwrap(),
+        "console.error : oups 42 Error: boum (http://h/:1)"
+    );
+    assert!(console_line("Runtime.consoleAPICalled", &json!({"type": "log", "args": []})).is_none());
+    let log = json!({"entry": {"level": "error", "url": "http://h/absent.js",
+        "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"}});
+    assert_eq!(
+        console_line("Log.entryAdded", &log).unwrap(),
+        "Failed to load resource: the server responded with a status of 404 (Not Found) (http://h/absent.js)"
+    );
+    assert!(console_line("Log.entryAdded", &json!({"entry": {"level": "warning", "text": "x"}})).is_none());
+    let icon = json!({"entry": {"level": "error", "url": "http://h/favicon.ico", "text": "Failed to load resource"}});
+    assert!(console_line("Log.entryAdded", &icon).is_none());
+    assert!(console_line("Page.loadEventFired", &json!({})).is_none());
+    let long = json!({"type": "error", "args": [{"value": "a".repeat(1000)}]});
+    assert!(console_line("Runtime.consoleAPICalled", &long).unwrap().chars().count() < 330);
+}
+
+#[test]
+fn console_block() {
+    assert_eq!(format_console(&[]), "");
+    let lines: Vec<String> = ["a", "a", "a", "b"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        format_console(&lines),
+        "Erreurs de la page (console du navigateur) :\n- a (×3)\n- b"
+    );
+    let many: Vec<String> = (0..20).map(|i| format!("e{i}")).collect();
+    let out = format_console(&many);
+    assert!(
+        out.contains("- e14") && !out.contains("- e15") && out.ends_with("… et 5 autre(s)"),
+        "{out}"
+    );
+}

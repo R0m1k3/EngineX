@@ -323,6 +323,7 @@ pub async fn stop(state: &AppState, session_id: &str) {
     if !state.0.browser.taken(session_id) {
         state.0.browser.close(session_id).await;
     }
+    state.0.gates.close_session(session_id);
     if let Ok(b) = state.0.sandboxes.backend()
         && let Err(e) = b.stop(session_id).await
     {
@@ -495,6 +496,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Value>, 
         "max": max_live(&state).await,
         "verify_enabled": crate::verify::enabled(&state).await,
         "verify_max_fixes": crate::verify::max_fixes(&state).await,
+        "verify_app_check": crate::verify::app_check_enabled(&state).await,
         "memory_auto": crate::memory::auto_enabled(&state).await,
         "git_name": git_name,
         "git_email": git_email,
@@ -509,6 +511,7 @@ pub struct SettingsBody {
     max: Option<i64>,
     verify_enabled: Option<bool>,
     verify_max_fixes: Option<i64>,
+    verify_app_check: Option<bool>,
     memory_auto: Option<bool>,
     git_name: Option<String>,
     git_email: Option<String>,
@@ -542,6 +545,9 @@ pub async fn put_settings(
     }
     if let Some(v) = b.verify_enabled {
         set_setting(&state, "verify.enabled", Some(if v { "1" } else { "0" })).await?;
+    }
+    if let Some(v) = b.verify_app_check {
+        set_setting(&state, crate::verify::APP_CHECK_KEY, Some(if v { "1" } else { "0" })).await?;
     }
     if let Some(v) = b.verify_max_fixes {
         set_setting(&state, "verify.max_fixes", Some(&v.to_string())).await?;

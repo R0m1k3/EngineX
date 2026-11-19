@@ -366,7 +366,13 @@ fn assemble(mut parts: Vec<Part>) -> String {
 pub fn instructions(state: &AppState, p: &str, t: &str) -> (String, String) {
     let (b, sha) = block(state, p, t);
     let fixed = FIXED_TEXT.replace("<p>", p).replace("<t>", t);
-    let mut s = format!("{}\n\n{fixed}", crate::verify::DEVELOPER_INSTRUCTIONS);
+    let mut s = crate::verify::DEVELOPER_INSTRUCTIONS.to_string();
+    if state.0.browser.enabled() {
+        s.push_str("\n\n");
+        s.push_str(crate::verify::APP_INSTRUCTIONS);
+    }
+    s.push_str("\n\n");
+    s.push_str(&fixed);
     if !b.is_empty() {
         s.push_str("\n\n");
         s.push_str(&b);

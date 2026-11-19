@@ -156,7 +156,7 @@ struct EnterQuery {
     g: String,
 }
 
-fn page(status: StatusCode, msg: &str) -> Response<Body> {
+pub fn page(status: StatusCode, msg: &str) -> Response<Body> {
     let html = format!(
         "<!doctype html><meta charset=utf-8><title>Aperçu EngineX</title>\
          <body style=\"font:15px system-ui;margin:3em;color:#333\"><p>{msg}</p></body>"
@@ -251,7 +251,7 @@ pub fn upstream_headers(h: &HeaderMap, port: u16, upgrade: bool) -> HeaderMap {
     out
 }
 
-async fn proxy(State(state): State<AppState>, mut req: Request) -> Response<Body> {
+async fn proxy(State(state): State<AppState>, req: Request) -> Response<Body> {
     // Toutes les valeurs : l'app peut poser son propre `enginex_preview` sur un
     // chemin plus long, envoyé en premier par le navigateur.
     let grant = cookie_pairs(req.headers())
@@ -264,7 +264,15 @@ async fn proxy(State(state): State<AppState>, mut req: Request) -> Response<Body
             "Pas d'aperçu ouvert dans ce navigateur : ouvre-le depuis l'onglet Aperçu d'une session.",
         );
     };
-    let hub = bridge::hub(&state, &sid);
+    forward(&state, &sid, port, req).await
+}
+
+/// Relaie une requête (HTTP ou WebSocket) vers l'app de la sandbox de `sid`
+/// qui écoute sur `port` : `Host: localhost:<port>`, cookies `enginex_*`
+/// retirés dans les deux sens. Sert le port d'aperçu et les sas du
+/// navigateur piloté (`appgate.rs`).
+pub async fn forward(state: &AppState, sid: &str, port: u16, mut req: Request) -> Response<Body> {
+    let hub = bridge::hub(state, sid);
     let Some((fwd, token)) = hub.preview_target() else {
         return page(
             StatusCode::SERVICE_UNAVAILABLE,

@@ -1074,3 +1074,68 @@ async fn terminal_requires_the_same_origin() {
         Some(401)
     );
 }
+
+/// Tours `turn/start` reçus par le faux app-server.
+fn starts(fake: &FakeAs) -> Vec<String> {
+    fake.received("turn/start")
+        .iter()
+        .map(|s| s["params"]["input"][0]["text"].as_str().unwrap_or("").to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn ui_change_without_opening_the_app_starts_one_app_check_turn() {
+    let mut script = slow(text_script());
+    script.extend(second_turn("text"));
+    let (e, fake) = env_sessions_cfg(&script, "", |c| {
+        c.web.browser_url = Some("http://127.0.0.1:9".into());
+    })
+    .await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn_writing(&e, &mut ev, &sid, "Fais la page", &[("index.html", "<h1>Bonjour</h1>")]).await;
+    e.until(&format!("/api/sessions/{sid}"), |v| {
+        v["turns"].as_array().is_some_and(|t| t.len() == 2) && v["busy"] != true
+    })
+    .await;
+    let st = starts(&fake);
+    assert_eq!(st.len(), 2, "{st:?}");
+    assert!(st[1].starts_with("Essai de l'app (demandé par EngineX)"), "{}", st[1]);
+    assert!(st[1].contains("http://localhost:<port>"), "{}", st[1]);
+    let s = session_body(&e, &sid).await;
+    assert_eq!(s["turns"][1]["origin"], "verify");
+    // Le tour d'essai n'a rien modifié : ni vérification ni autre tour.
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    assert_eq!(starts(&fake).len(), 2);
+    assert!(fake.received("command/exec").is_empty());
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+#[tokio::test]
+async fn no_app_check_without_browser_or_when_switched_off() {
+    for browser in [false, true] {
+        let (e, fake) = env_sessions_cfg(&slow(text_script()), "", |c| {
+            if browser {
+                c.web.browser_url = Some("http://127.0.0.1:9".into());
+            }
+        })
+        .await;
+        make_active_preset(&e).await;
+        let st = e.get("/api/settings/sessions").await.body;
+        assert_eq!(st["verify_app_check"], true, "{st}");
+        if browser {
+            let r = e
+                .send("PUT", "/api/settings/sessions", json!({"verify_app_check": false}))
+                .await;
+            assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+            assert_eq!(e.get("/api/settings/sessions").await.body["verify_app_check"], false);
+        }
+        let sid = new_session(&e, "auto").await;
+        let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+        turn_writing(&e, &mut ev, &sid, "Fais la page", &[("index.html", "<h1>Bonjour</h1>")]).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        assert_eq!(starts(&fake).len(), 1, "navigateur : {browser}");
+        assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+    }
+}

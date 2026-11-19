@@ -204,7 +204,8 @@ pub fn spawn_after_turn(
 }
 
 /// Après `turn/completed` : vérification si activée, s'il y a une recette,
-/// et si le tour a changé des fichiers ou est un tour de correction.
+/// et si le tour a changé des fichiers ou est un tour de correction ; puis,
+/// si rien n'est rouge, le tour d'essai de l'app quand il est dû.
 pub async fn after_turn(
     state: &AppState,
     hub: &Arc<Hub>,
@@ -217,26 +218,145 @@ pub async fn after_turn(
     if origin == "memory" {
         return;
     }
-    if status != "completed" || !enabled(state).await {
+    if status != "completed" {
         return;
     }
+    let paths: Vec<String> = changes
+        .and_then(|c| c["files"].as_array())
+        .into_iter()
+        .flatten()
+        .filter(|f| f["status"] != "D")
+        .filter_map(|f| f["path"].as_str().map(str::to_string))
+        .collect();
     let changed = changes
         .and_then(|c| c["files"].as_array())
         .is_some_and(|f| !f.is_empty());
-    if !changed && origin != "verify" {
+    let ui = !paths.is_empty() && ui_changed_in(state, hub, paths).await;
+    // Un tour d'essai qui n'a rien modifié ne relance pas le build et les tests.
+    let app_turn = hub.app_turn_done(ui);
+    let mut end = VerifyEnd::Clear;
+    if enabled(state).await && (changed || (origin == "verify" && !app_turn)) {
+        end = run(state, hub, tid).await;
+    }
+    if end == VerifyEnd::Clear {
+        app_check(state, hub).await;
+    }
+}
+
+/// Issue d'une vérification, pour la suite du tour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerifyEnd {
+    /// Verte, sans recette, ou pas lancée : rien n'empêche la suite.
+    Clear,
+    /// Un tour de correction est parti.
+    Fix,
+    /// Rouge sans correction possible, ou annulée.
+    Red,
+}
+
+// ---- Essai de l'app au navigateur ----
+
+pub const APP_CHECK_KEY: &str = "verify.app_check";
+
+/// Consigne ajoutée aux instructions du fil quand le navigateur est là.
+pub const APP_INSTRUCTIONS: &str = "App ou site web : essaie-la toi-même avant de dire que c'est fini. 1) Lance-la en tâche de fond dans la sandbox (`npm run dev`, ou `python3 -m http.server 8000` pour des fichiers statiques) ; elle reste lancée d'un tour à l'autre. 2) Ouvre-la avec mcp__enginex__browser_open sur http://localhost:<port> : tu reçois ses éléments numérotés, son texte visible, les erreurs de la console et, si tu vois les images, une capture. 3) Utilise-la comme Michael le ferait : browser_click, browser_type, browser_key sur ce que tu viens de coder, et browser_screenshot pour juger le rendu. 4) Corrige ce qui ne marche pas ou s'affiche mal, puis recontrôle. Termine en disant ce que tu as essayé et ce que tu as vu.";
+
+const UI_EXT: [&str; 18] = [
+    "html", "htm", "css", "scss", "sass", "less", "jsx", "tsx", "vue", "svelte", "astro", "php", "ejs", "hbs", "pug",
+    "erb", "j2", "twig",
+];
+const SCRIPT_EXT: [&str; 4] = ["js", "mjs", "cjs", "ts"];
+const INDEX_DIRS: [&str; 6] = ["", "public", "src", "static", "app", "www"];
+
+/// Des fichiers d'interface parmi `paths` (chemins relatifs au dossier de
+/// travail) : pages, styles, composants ; les scripts seulement si
+/// `has_index` (le dossier a une page `index.html`). Tests et dossiers
+/// générés ignorés.
+pub fn ui_changed(paths: &[String], has_index: bool) -> bool {
+    paths.iter().any(|p| {
+        let low = p.to_ascii_lowercase();
+        let skipped = low.split('/').any(|part| {
+            matches!(
+                part,
+                "node_modules" | "dist" | "build" | "target" | ".enginex" | "coverage"
+            )
+        }) || low.contains(".test.")
+            || low.contains(".spec.");
+        if skipped {
+            return false;
+        }
+        let ext = low.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+        UI_EXT.contains(&ext) || (has_index && SCRIPT_EXT.contains(&ext))
+    })
+}
+
+async fn ui_changed_in(state: &AppState, hub: &Arc<Hub>, paths: Vec<String>) -> bool {
+    let Ok(row) = sessions::row(state, &hub.id).await else {
+        return false;
+    };
+    let Ok(folder) = snapshots::folder(state, &row).await else {
+        return false;
+    };
+    let work = folder.work.clone();
+    tokio::task::spawn_blocking(move || {
+        let has_index = INDEX_DIRS.iter().any(|d| work.join(d).join("index.html").is_file());
+        ui_changed(&paths, has_index)
+    })
+    .await
+    .unwrap_or(false)
+}
+
+pub async fn app_check_enabled(state: &AppState) -> bool {
+    setting(state, APP_CHECK_KEY).await.ok().flatten().as_deref() != Some("0")
+}
+
+/// Message du tour d'essai ; `ports` : ceux qui écoutent dans la sandbox.
+pub fn app_check_message(ports: &[u16]) -> String {
+    let running = if ports.is_empty() {
+        "Rien n'écoute dans la sandbox : lance d'abord l'app en tâche de fond.".to_string()
+    } else {
+        let l: Vec<String> = ports.iter().map(u16::to_string).collect();
+        format!("Ports ouverts dans la sandbox : {}.", l.join(", "))
+    };
+    format!(
+        "Essai de l'app (demandé par EngineX) : tu as modifié l'interface sans l'ouvrir dans le navigateur. {running}\n         Ouvre-la avec mcp__enginex__browser_open sur http://localhost:<port>, lis le texte et les erreurs de la          console, regarde le rendu (browser_screenshot si tu vois les images), puis utilise ce que tu viens de coder          (browser_click, browser_type). Corrige ce qui ne marche pas ou s'affiche mal et recontrôle. Termine en disant          ce que tu as essayé et vu. Si ce changement ne se voit pas dans un navigateur, dis-le en une phrase sans          rien lancer."
+    )
+}
+
+/// Lance le tour d'essai s'il est dû (interface changée sans que l'agent ait
+/// ouvert l'app, un seul par message de Michael).
+async fn app_check(state: &AppState, hub: &Arc<Hub>) {
+    if !hub.app_check_due() || !state.0.browser.enabled() || !app_check_enabled(state).await {
         return;
     }
-    run(state, hub, tid).await;
+    let ports = match hub.preview_target() {
+        Some((fwd, token)) => enginex_sandbox::fwd::list(fwd.as_deref(), &token)
+            .await
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let text = app_check_message(&ports);
+    let user = json!({
+        "type": "userMessage",
+        "id": format!("ex-{}", uuid::Uuid::new_v4()),
+        "text": text,
+        "images": [],
+        "origin": "verify",
+    });
+    if hub.begin(user, "verify").is_ok() {
+        hub.app_check_started();
+        tokio::spawn(hub.clone().run_turn(state.clone(), text, Vec::new()));
+    }
 }
 
 /// Une vérification du tour `tid` (puis, sur échec, un tour de correction
 /// si le compte le permet).
-pub async fn run(state: &AppState, hub: &Arc<Hub>, tid: &str) {
+pub async fn run(state: &AppState, hub: &Arc<Hub>, tid: &str) -> VerifyEnd {
     let Ok(row) = sessions::row(state, &hub.id).await else {
-        return;
+        return VerifyEnd::Red;
     };
     let Ok(folder) = snapshots::folder(state, &row).await else {
-        return;
+        return VerifyEnd::Red;
     };
     let recipe = {
         let w = folder.work.clone();
@@ -247,7 +367,7 @@ pub async fn run(state: &AppState, hub: &Arc<Hub>, tid: &str) {
     let steps = match recipe {
         Recipe::None => {
             hub.emit_event("verify", json!({"turn_id": tid, "status": "none"}));
-            return;
+            return VerifyEnd::Clear;
         }
         Recipe::Invalid(e) => {
             if hub.verify_begin(tid) {
@@ -256,14 +376,14 @@ pub async fn run(state: &AppState, hub: &Arc<Hub>, tid: &str) {
                 emit(state, hub, tid, id, "error", fixes + 1, &json!([{"error": e}])).await;
                 hub.verify_end();
             }
-            return;
+            return VerifyEnd::Red;
         }
         Recipe::File(s) | Recipe::Detected(s) => s,
     };
     // Un retour arrière en cours sur ce dossier finit d'abord.
     drop(snapshots::lock(state, &folder).await);
     if !hub.verify_begin(tid) {
-        return;
+        return VerifyEnd::Red;
     }
     let attempt = hub.fixes_done() + 1;
     let id = insert(state, &hub.id, tid, attempt, "running", &json!([])).await;
@@ -320,7 +440,13 @@ pub async fn run(state: &AppState, hub: &Arc<Hub>, tid: &str) {
         if hub.begin(user, "verify").is_ok() {
             hub.add_fix();
             tokio::spawn(hub.clone().run_turn(state.clone(), text, Vec::new()));
+            return VerifyEnd::Fix;
         }
+    }
+    if status == "passed" {
+        VerifyEnd::Clear
+    } else {
+        VerifyEnd::Red
     }
 }
 
