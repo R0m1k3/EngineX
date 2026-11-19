@@ -273,7 +273,7 @@ async fn refusals_before_a_turn() {
 
 #[tokio::test]
 async fn engine_not_ready_is_refused() {
-    let (e, _fake) = env_sessions_cfg(&text_script(), "FAKE_LOAD_MS=8000", |_| {}).await;
+    let (e, _fake) = env_sessions_cfg(&text_script(), "FAKE_LOAD_MS=30000", |_| {}).await;
     let r = e
         .send("POST", "/api/downloads", json!({"repo": REPO, "quant": "Q8_0"}))
         .await;
