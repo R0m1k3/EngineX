@@ -519,7 +519,7 @@ async fn run_prompt(state: &AppState, sid: &str, text: &str, timeout: Duration) 
     let mut end = tokio::time::Instant::now() + timeout;
     // Tour, puis vérification et corrections éventuelles. L'attente dans la
     // file commune ne compte pas dans le délai.
-    while hub.busy() {
+    while hub.busy_or_settling() {
         if hub.queued() {
             end += Duration::from_millis(250);
         }

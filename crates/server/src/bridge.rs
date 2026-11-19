@@ -223,6 +223,13 @@ impl Hub {
     /// Tour ou vérification en cours.
     pub fn busy(&self) -> bool {
         let st = self.st.lock().expect("verrou");
+        st.turn.is_some() || st.verify.is_some()
+    }
+
+    /// Occupée, ou tour à peine fini dont la fin n'est pas encore écrite ni
+    /// la vérification décidée (attente des crons et des agents).
+    pub fn busy_or_settling(&self) -> bool {
+        let st = self.st.lock().expect("verrou");
         st.turn.is_some() || st.verify.is_some() || st.settling
     }
 

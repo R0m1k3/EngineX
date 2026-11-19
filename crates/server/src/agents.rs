@@ -920,7 +920,7 @@ async fn drive(state: &AppState, a: &AgentRow, sid: &str, text: &str) -> Outcome
     let begun = Instant::now();
     let (mut paused, mut asked) = (Duration::ZERO, Duration::ZERO);
     let mut note = String::new();
-    while hub.busy() {
+    while hub.busy_or_settling() {
         if hub.queued() {
             paused += step;
         } else if hub.waiting_on_user() {
@@ -945,7 +945,7 @@ async fn drive(state: &AppState, a: &AgentRow, sid: &str, text: &str) -> Outcome
     }
     // Interruption demandée : attendre que le tour se ferme (borné).
     for _ in 0..40 {
-        if !hub.busy() {
+        if !hub.busy_or_settling() {
             break;
         }
         tokio::time::sleep(step).await;
