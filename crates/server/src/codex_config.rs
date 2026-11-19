@@ -102,7 +102,6 @@ pub async fn codex_config(State(state): State<AppState>, headers: HeaderMap) -> 
 mod tests {
     use super::compact_limit;
 
-
     #[test]
     fn compact_at_three_quarters() {
         assert_eq!(compact_limit(65536), 49152);
@@ -114,6 +113,11 @@ mod tests {
         let t = super::render("qwen", 65536, "http://x/v1", None);
         let v: toml::Value = toml::from_str(&t).expect("TOML valide");
         assert_eq!(v["model_auto_compact_token_limit"].as_integer(), Some(49152));
-        assert!(v["compact_prompt"].as_str().unwrap().contains("must NOT rewrite a file marked COMPLETE"));
+        assert!(
+            v["compact_prompt"]
+                .as_str()
+                .unwrap()
+                .contains("must NOT rewrite a file marked COMPLETE")
+        );
     }
 }

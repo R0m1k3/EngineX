@@ -150,7 +150,11 @@ fn heredocs(lines: &[&str]) -> Vec<Heredoc> {
         for (k, (d, strip)) in delims.iter().enumerate() {
             let start = j;
             while j < lines.len() {
-                let l = if *strip { lines[j].trim_start_matches('\t') } else { lines[j] };
+                let l = if *strip {
+                    lines[j].trim_start_matches('\t')
+                } else {
+                    lines[j]
+                };
                 if l.trim_end_matches('\r') == d {
                     break;
                 }
@@ -210,7 +214,11 @@ pub fn shrink_write(args: &str) -> Option<String> {
         out.extend(lines[i..h.body.0].iter().map(|l| l.to_string()));
         let body = &lines[h.body.0..h.body.1];
         let bytes: usize = body.iter().map(|l| l.len() + 1).sum();
-        out.push(format!("«{} lignes ({}) retirées du fil par EngineX»", body.len(), kib(bytes)));
+        out.push(format!(
+            "«{} lignes ({}) retirées du fil par EngineX»",
+            body.len(),
+            kib(bytes)
+        ));
         i = h.body.1;
     }
     out.extend(lines[i..].iter().map(|l| l.to_string()));
@@ -253,7 +261,9 @@ pub fn budget_note(calls: usize) -> Option<String> {
             "[EngineX] {calls} appels d'outils : tu tournes en rond. Relire un fichier déjà lu ou réécrire un \
              fichier déjà écrit n'apporte rien. Termine maintenant avec ce que tu as et dis ce qui reste incertain."
         ),
-        _ => format!("[EngineX] {calls} appels d'outils. Arrête-toi : écris ta réponse finale sans autre appel d'outil."),
+        _ => {
+            format!("[EngineX] {calls} appels d'outils. Arrête-toi : écris ta réponse finale sans autre appel d'outil.")
+        }
     })
 }
 
@@ -302,19 +312,31 @@ mod tests {
 
     #[test]
     fn small_heredoc_is_kept() {
-        assert_eq!(shrink_write(&cmd(&format!("cat > a.txt <<'EOF'\n{}\nEOF", body(5)))), None);
+        assert_eq!(
+            shrink_write(&cmd(&format!("cat > a.txt <<'EOF'\n{}\nEOF", body(5)))),
+            None
+        );
         assert_eq!(shrink_write(&cmd("ls -la")), None);
         assert_eq!(shrink_write("pas du json"), None);
     }
 
     #[test]
     fn big_heredoc_is_shrunk_and_rest_kept() {
-        let s = format!("mkdir -p web && cat > web/app.js <<'EOF'\n{}\nEOF\nnode --check web/app.js", body(400));
+        let s = format!(
+            "mkdir -p web && cat > web/app.js <<'EOF'\n{}\nEOF\nnode --check web/app.js",
+            body(400)
+        );
         let out = shrink_write(&cmd(&s)).expect("allégé");
         let v: Value = serde_json::from_str(&out).unwrap();
         let r = v["enginex_resume"].as_str().unwrap();
-        assert!(r.contains("mkdir -p web && cat > web/app.js <<'EOF'\n«400 lignes ("), "{r}");
-        assert!(r.ends_with("retirées du fil par EngineX»\nEOF\nnode --check web/app.js"), "{r}");
+        assert!(
+            r.contains("mkdir -p web && cat > web/app.js <<'EOF'\n«400 lignes ("),
+            "{r}"
+        );
+        assert!(
+            r.ends_with("retirées du fil par EngineX»\nEOF\nnode --check web/app.js"),
+            "{r}"
+        );
         assert!(!r.contains("ligne 1\n"));
         assert!(v.get("cmd").is_none(), "plus de commande exécutable dans le résumé");
         // Déterministe.
@@ -337,7 +359,10 @@ mod tests {
         let out = shrink_write(&cmd(&s)).unwrap();
         let r: Value = serde_json::from_str(&out).unwrap();
         let r = r["enginex_resume"].as_str().unwrap();
-        assert!(r.contains("cat > a.html <<'EOF'\nligne 1\nligne 2\nligne 3\nEOF"), "petit gardé : {r}");
+        assert!(
+            r.contains("cat > a.html <<'EOF'\nligne 1\nligne 2\nligne 3\nEOF"),
+            "petit gardé : {r}"
+        );
         assert!(r.contains("<<-\"FIN\" >> b.js\n«50 lignes"), "{r}");
         assert!(r.ends_with("\n\tFIN\necho ok"), "{r}");
     }
@@ -361,7 +386,10 @@ mod tests {
 
     #[test]
     fn full_write_targets() {
-        assert_eq!(full_writes(&cmd("cat > 'src/a b.js' <<'EOF'\nx\nEOF")), vec!["src/a b.js"]);
+        assert_eq!(
+            full_writes(&cmd("cat > 'src/a b.js' <<'EOF'\nx\nEOF")),
+            vec!["src/a b.js"]
+        );
         assert_eq!(full_writes(&cmd("cat >src/a.js <<'EOF'\nx\nEOF")), vec!["src/a.js"]);
         assert_eq!(full_writes(&cmd("cat <<'EOF' > a.js 2>&1\nx\nEOF")), vec!["a.js"]);
         assert!(full_writes(&cmd("cat >> a.js <<'EOF'\nx\nEOF")).is_empty());

@@ -342,7 +342,12 @@ fn old_big_writes_are_shrunk_last_step_kept() {
     ]);
     let m2 = msgs(base(next), &ctx());
     assert_eq!(m[..4], m2[..4]);
-    assert!(m2[5]["tool_calls"][0]["function"]["arguments"].as_str().unwrap().contains("enginex_resume"));
+    assert!(
+        m2[5]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap()
+            .contains("enginex_resume")
+    );
     assert_eq!(m2[6]["content"], m[6]["content"], "note gardée telle quelle");
 }
 
@@ -357,5 +362,9 @@ fn notes_only_count_the_current_turn() {
         write_call("b1", "x.js", 2), out("b1"),
     ]);
     let m = msgs(base(input), &ctx());
-    assert!(m.iter().filter(|x| x["role"] == "tool").all(|x| !x["content"].as_str().unwrap().contains("[EngineX]")));
+    assert!(
+        m.iter()
+            .filter(|x| x["role"] == "tool")
+            .all(|x| !x["content"].as_str().unwrap().contains("[EngineX]"))
+    );
 }
