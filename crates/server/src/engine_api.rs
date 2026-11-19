@@ -389,7 +389,7 @@ pub async fn engine(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
         "measured_at": others.map(|(t, _)| t),
         "caps": probe::help(&bin).await.ok().map(|h| {
             let c = probe::caps(&h);
-            json!({"fit": c.fit, "spec": c.spec, "moe": c.moe})
+            json!({"fit": c.fit, "spec": c.spec, "moe": c.moe, "budget": c.budget})
         }),
         "last_gen": state.0.last_gen.lock().expect("stats").clone(),
         "spec_fallback": state.supervisor().fell_back().map(|(preset_id, why)| json!({"preset_id": preset_id, "why": why})),

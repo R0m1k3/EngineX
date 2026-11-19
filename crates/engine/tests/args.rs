@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use enginex_engine::args::{
-    Caps, DraftKind, Launch, Moe, MoeMode, PresetSettings, Reasoning, Speculative, build_argv, fallback_argv,
-    launch_env, needs_reload,
+    BUDGET_MESSAGE, Caps, DraftKind, Launch, Moe, MoeMode, PresetSettings, Reasoning, Speculative, build_argv,
+    fallback_argv, launch_env, needs_reload,
 };
 use enginex_hub::sampling::Sampling;
 
@@ -250,4 +250,59 @@ fn batches_and_launch_queues() {
     p.moe = Moe::default();
     p.extra_args = vec!["-ot".into(), "exps=CPU".into()];
     assert!(launch_env(&p, &l, 2).is_empty());
+}
+
+#[test]
+fn reasoning_budget_and_max_output() {
+    let p = PresetSettings::default();
+    let m = Path::new("/models/m.gguf");
+    let mut l = launch(m, None, 8081, Caps::ALL);
+    let a = build_argv(&p, &l);
+    assert!(has(
+        &a,
+        &[
+            "--reasoning-budget",
+            "16384",
+            "--reasoning-budget-message",
+            BUDGET_MESSAGE
+        ]
+    ));
+    assert!(has(&a, &["-n", "32768"]));
+    // Réflexion coupée : budget 0, sans message.
+    let off = PresetSettings {
+        reasoning: Reasoning::Off,
+        ..p.clone()
+    };
+    let a = build_argv(&off, &l);
+    assert!(has(&a, &["--reasoning-budget", "0"]) && !a.iter().any(|x| x == "--reasoning-budget-message"));
+    // Illimité, ou moteur sans l'option : rien.
+    let free = PresetSettings {
+        reasoning_budget: None,
+        max_output: None,
+        ..p.clone()
+    };
+    let a = build_argv(&free, &l);
+    assert!(!a.iter().any(|x| x == "--reasoning-budget" || x == "-n"));
+    l.caps = Caps {
+        budget: false,
+        ..Caps::ALL
+    };
+    assert!(!build_argv(&p, &l).iter().any(|x| x == "--reasoning-budget"));
+    // Bornes.
+    assert_eq!(
+        PresetSettings {
+            reasoning_budget: Some(10),
+            ..p.clone()
+        }
+        .invalid(),
+        Some("reasoning_budget")
+    );
+    assert_eq!(
+        PresetSettings {
+            max_output: Some(10),
+            ..p
+        }
+        .invalid(),
+        Some("max_output")
+    );
 }

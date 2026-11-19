@@ -90,7 +90,8 @@ async fn main() {
             if std::env::var("FAKE_NO_ACCEL").as_deref() != Ok("1") {
                 println!(
                     "-cmoe, --cpu-moe   keep all MoE weights in the CPU\n-ncmoe, --n-cpu-moe N\n\
-                     --spec-type none,draft-simple,draft-mtp,ngram-mod\n--spec-draft-n-max N"
+                     --spec-type none,draft-simple,draft-mtp,ngram-mod\n--spec-draft-n-max N\n\
+                     --reasoning-budget N\n--reasoning-budget-message MESSAGE"
                 );
             }
             if std::env::var("FAKE_NO_FIT").as_deref() != Ok("1") {

@@ -185,6 +185,10 @@ export interface PresetSettings {
   moe: { mode: 'auto' | 'all_cpu' | 'layers'; cpu_layers: number; cache_mib: number };
   batch: number | null;
   ubatch: number | null;
+  /** Jetons de réflexion au plus par réponse (null = illimité). */
+  reasoning_budget: number | null;
+  /** Jetons écrits au plus par réponse, réflexion comprise (null = illimité). */
+  max_output: number | null;
   extra_args: string[];
 }
 
@@ -238,7 +242,7 @@ export interface EngineInfo {
   pending: { tag: string; build: string; since: number } | null;
   auto_last: { at: number; tag: string; ok: boolean; message: string } | null;
   skipped: string[];
-  caps: { fit: boolean; spec: boolean; moe: boolean } | null;
+  caps: { fit: boolean; spec: boolean; moe: boolean; budget?: boolean } | null;
   last_gen: {
     at: number;
     preset: string;

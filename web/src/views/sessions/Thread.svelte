@@ -409,7 +409,9 @@
           <Verify checks={end.verifications} green={green === end.id}
             rerun={live ? null : rerun} toGreen={green && green !== end.id && !live ? toGreen : null} />
         {/if}
-        {#if end.status === 'failed'}<p class="banner bad small">Tour en échec : {end.error ?? 'erreur inconnue'}</p>
+        {#if end.status === 'failed'}<p class="banner bad small">Tour en échec : {end.error ?? 'erreur inconnue'}
+          {#if end.error?.includes('max_output_tokens')}<br />Le modèle a écrit jusqu’à la limite (souvent une réflexion qui tourne en rond).
+            Réglages du preset : « Réflexion max par réponse » et « Sortie max par réponse » (Modèles → Presets).{/if}</p>
         {:else if end.status === 'interrupted'}<p class="muted small">Tour interrompu.</p>{/if}
         {#if tokens(end.usage)}<p class="muted tiny">{tokens(end.usage)}</p>{/if}
       {/if}

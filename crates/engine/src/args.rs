@@ -100,8 +100,21 @@ pub struct PresetSettings {
     /// (2048 / 512). Un MoE plus gros que la VRAM gagne à 4096 / 2048.
     pub batch: Option<u64>,
     pub ubatch: Option<u64>,
+    /// Jetons de réflexion au plus par réponse (`--reasoning-budget`) ; `None`
+    /// = illimité. Au-delà, llama.cpp ferme la réflexion et le modèle répond :
+    /// évite les réflexions qui tournent jusqu'à remplir le contexte.
+    pub reasoning_budget: Option<u64>,
+    /// Jetons écrits au plus par réponse (`-n`), réflexion comprise ; `None`
+    /// = jusqu'à la fin du contexte.
+    pub max_output: Option<u64>,
     pub extra_args: Vec<String>,
 }
+
+/// Réflexion par défaut : large pour du code, mais bornée.
+pub const REASONING_BUDGET: u64 = 16384;
+pub const MAX_OUTPUT: u64 = 32768;
+/// Injecté avant la fin de la réflexion quand le budget est épuisé.
+pub const BUDGET_MESSAGE: &str = "\n\nI have thought about this long enough. Time to stop thinking and act on it.\n";
 
 impl Default for PresetSettings {
     fn default() -> Self {
@@ -119,6 +132,8 @@ impl Default for PresetSettings {
             moe: Moe::default(),
             batch: None,
             ubatch: None,
+            reasoning_budget: Some(REASONING_BUDGET),
+            max_output: Some(MAX_OUTPUT),
             extra_args: Vec::new(),
         }
     }
@@ -163,6 +178,12 @@ impl PresetSettings {
         if lot(self.ubatch) || matches!((self.batch, self.ubatch), (Some(b), Some(u)) if u > b) {
             return Some("ubatch");
         }
+        if self.reasoning_budget.is_some_and(|v| !(256..=1_048_576).contains(&v)) {
+            return Some("reasoning_budget");
+        }
+        if self.max_output.is_some_and(|v| !(256..=1_048_576).contains(&v)) {
+            return Some("max_output");
+        }
         None
     }
 }
@@ -173,6 +194,8 @@ pub struct Caps {
     pub fit: bool,
     pub spec: bool,
     pub moe: bool,
+    /// Budget de réflexion en jetons avec message (`--reasoning-budget-message`).
+    pub budget: bool,
 }
 
 impl Caps {
@@ -180,11 +203,13 @@ impl Caps {
         fit: true,
         spec: true,
         moe: true,
+        budget: true,
     };
     pub const NONE: Caps = Caps {
         fit: false,
         spec: false,
         moe: false,
+        budget: false,
     };
 }
 
@@ -308,8 +333,18 @@ pub fn build_argv(p: &PresetSettings, l: &Launch) -> Vec<String> {
             }
         }
     }
-    if p.reasoning == Reasoning::Off {
-        a.extend(["--reasoning-budget".into(), "0".into()]);
+    match (p.reasoning, p.reasoning_budget) {
+        (Reasoning::Off, _) => a.extend(["--reasoning-budget".into(), "0".into()]),
+        (Reasoning::On, Some(n)) if l.caps.budget => a.extend([
+            "--reasoning-budget".into(),
+            n.to_string(),
+            "--reasoning-budget-message".into(),
+            BUDGET_MESSAGE.into(),
+        ]),
+        (Reasoning::On, _) => {}
+    }
+    if let Some(n) = p.max_output {
+        a.extend(["-n".into(), n.to_string()]);
     }
     a.extend(p.extra_args.iter().cloned());
     a

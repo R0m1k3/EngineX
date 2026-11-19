@@ -197,6 +197,7 @@ pub fn caps(help: &str) -> crate::args::Caps {
         fit: has_fit(help),
         spec: has_flag(help, "--spec-type") && help.contains("draft-mtp") && has_flag(help, "--spec-draft-n-max"),
         moe: has_flag(help, "--cpu-moe") && has_flag(help, "--n-cpu-moe"),
+        budget: has_flag(help, "--reasoning-budget-message"),
     }
 }
 

@@ -117,6 +117,18 @@
     <label>Raisonnement
       <select bind:value={s.reasoning}><option value="on">activé</option><option value="off">désactivé</option></select>
     </label>
+    {#if s.reasoning === 'on'}
+      <label title="Au-delà, llama.cpp ferme la réflexion et le modèle passe à la réponse. Vide = illimitée (risque de réflexion qui tourne jusqu’à remplir le contexte).">
+        Réflexion max par réponse (jetons)
+        <input type="number" min="256" step="1024" placeholder="illimitée" value={s.reasoning_budget ?? ''}
+          oninput={(e) => (s.reasoning_budget = optNum(e.currentTarget.value))} />
+      </label>
+    {/if}
+    <label title="Réflexion comprise. Vide = jusqu’à la fin du contexte.">
+      Sortie max par réponse (jetons)
+      <input type="number" min="256" step="1024" placeholder="illimitée" value={s.max_output ?? ''}
+        oninput={(e) => (s.max_output = optNum(e.currentTarget.value))} />
+    </label>
     <label class="check"><input type="checkbox" bind:checked={s.flash_attn} /> Flash attention</label>
     {#if model?.mmproj}<label class="check"><input type="checkbox" bind:checked={s.mmproj} /> Vision (mmproj)</label>{/if}
     <label>Options llama-server en plus <input placeholder="ex. --no-mmap" bind:value={extra} /></label>
