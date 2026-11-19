@@ -485,6 +485,37 @@ export function message(e: unknown): string {
       return 'Skill refusée : le frontmatter doit avoir name (égal au nom de la skill) et description.';
     case 'copy_failed':
       return `La copie séparée a échoué.${e.detail ? `\n${e.detail}` : ''}`;
+    case 'file_changed':
+      return 'Fichier modifié ailleurs depuis son ouverture : rechargez-le (vos changements sont encore dans l’éditeur).';
+    case 'protected':
+      return 'Dossier géré par EngineX (projets, topics, mémoire, skills) : passez par sa page.';
+    case 'dirty':
+      return 'Modifications non validées dans le dossier : validez-les ou annulez-les d’abord.';
+    case 'merge_conflict':
+      return 'Conflit : fusion abandonnée, rien n’a changé.';
+    case 'not_fast_forward':
+      return 'La branche a divergé de son amont : pas d’avance rapide possible (fusionnez à la main).';
+    case 'nothing_to_commit':
+      return 'Rien à valider.';
+    case 'push_rejected':
+      return 'Push refusé par le dépôt distant (il a avancé : faites un pull d’abord). Jamais forcé.';
+    case 'no_remote':
+      return `Pas de remote origin utilisable.${e.detail ? ` ${e.detail}` : ''}`;
+    case 'no_forge':
+      return 'Remote ni GitHub ni Gitea : pour Gitea, ajoutez GITEA_URL dans Clés.';
+    case 'no_token':
+      return `Jeton absent : ${e.detail ?? 'GITHUB_TOKEN ou GITEA_TOKEN'} (page Clés).`;
+    case 'no_upstream':
+      return 'Cette branche n’a pas d’amont : poussez-la d’abord.';
+    case 'no_branch':
+      return 'HEAD détachée : choisissez une branche.';
+    case 'same_branch':
+      return 'La branche est déjà la branche de base.';
+    case 'merge_refused':
+      return `Fusion refusée par la forge.${e.detail ? ` ${e.detail}` : ''}`;
+    case 'git_failed':
+    case 'forge_error':
+      return `Échec git.${e.detail ? `\n${e.detail}` : ''}`;
     default:
       return `Erreur : ${e.code}`;
   }
@@ -652,6 +683,7 @@ export interface SessionSettings {
   memory_auto?: boolean;
   git_name?: string;
   git_email?: string;
+  disk_alert_pct?: number;
 }
 
 export const projects = () => request<{ projects: Project[] }>('GET', '/api/projects').then((r) => r.projects);
@@ -869,3 +901,163 @@ export const runCron = (id: number) => request('POST', `/api/crons/${id}/run`, {
 export const cronRuns = (id: number) => request<CronRun[]>('GET', `/api/crons/${id}/runs`);
 export const cronPreview = (schedule: string, tz?: string) =>
   request<{ next: number[] }>('POST', '/api/crons/preview', { schedule, tz });
+
+// ---- Page Fichiers (workspace) ----
+
+export interface WsEntry extends TreeEntry {
+  managed: boolean;
+  readonly: boolean;
+}
+
+export interface DiskUsage {
+  total_bytes: number;
+  free_bytes: number;
+  used_pct: number;
+  alert_pct: number;
+  alert: boolean;
+  workspace_bytes: number;
+  sessions_bytes: number;
+}
+
+const F = '/api/files';
+export const wsTree = (path: string) =>
+  request<{ path: string; entries: WsEntry[]; truncated: boolean; readonly: boolean }>('GET', `${F}/tree?path=${q(path)}`);
+export const wsText = (path: string) =>
+  request<{ text: string; truncated: boolean; binary: boolean; version: number; size: number; readonly: boolean }>(
+    'GET',
+    `${F}/text?path=${q(path)}`,
+  );
+/** `version` absente : création (refusée si le fichier existe). */
+export const wsSave = (path: string, text: string, version?: number) =>
+  request<{ version: number }>('PUT', `${F}/text`, { path, text, version });
+export const wsMkdir = (path: string) => request('POST', `${F}/mkdir`, { path });
+export const wsMove = (from: string, to: string) => request('POST', `${F}/move`, { from, to });
+export const wsDelete = (paths: string[]) => request<{ deleted: number }>('POST', `${F}/delete`, { paths });
+export const wsRawUrl = (path: string) => `${F}/raw?path=${q(path)}`;
+export const wsDownloadUrl = (path: string) => `${wsRawUrl(path)}&download=1`;
+export const wsZipUrl = (paths: string[]) => `${F}/zip?paths=${q(paths.join('\n'))}`;
+export const diskUsage = () => request<DiskUsage>('GET', `${F}/usage`);
+
+export async function wsUpload(path: string, file: Blob, overwrite = false): Promise<void> {
+  const res = await fetch(`${F}/upload?path=${q(path)}${overwrite ? '&overwrite=true' : ''}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, data.error ?? 'internal', null, data.detail ?? null);
+}
+
+// ---- Page Git ----
+
+export interface GitRepo {
+  topic_id: number;
+  project: string;
+  topic: string;
+  path: string;
+  head: string | null;
+  origin: string | null;
+}
+
+export interface GitBranch {
+  name: string;
+  sha: string;
+  current: boolean;
+  upstream: string | null;
+  upstream_gone: boolean;
+  ahead: number;
+  behind: number;
+}
+
+export interface GitRefName {
+  name: string;
+  kind: 'branch' | 'remote' | 'tag';
+}
+
+export interface GitCommit {
+  sha: string;
+  parents: string[];
+  author: string;
+  email: string;
+  time: number;
+  subject: string;
+  refs: GitRefName[];
+}
+
+export interface GitRepoDetail {
+  head: string | null;
+  head_sha: string | null;
+  detached: boolean;
+  branches: GitBranch[];
+  remotes: { name: string; sha: string }[];
+  commits: GitCommit[];
+  truncated: boolean;
+  origin: string | null;
+  forge: 'github' | 'gitea' | null;
+}
+
+export interface GitCommitDetail {
+  sha: string;
+  parents: string[];
+  author: string;
+  email: string;
+  time: number;
+  message: string;
+  files: { path: string; status: string; additions: number; deletions: number; binary: boolean }[];
+  diff: string;
+  diff_truncated: boolean;
+}
+
+export interface PullRequest {
+  number: number;
+  title: string;
+  state: 'open' | 'closed' | 'merged';
+  draft: boolean;
+  author: string;
+  created_at: string;
+  updated_at: string;
+  head: string;
+  base: string;
+  body: string;
+  url: string;
+  mergeable: boolean | null;
+}
+
+export interface PullDetail extends PullRequest {
+  diff: string;
+  diff_truncated: boolean;
+  comments: { author: string; body: string; created_at: string; url: string }[];
+}
+
+const G = (id: number) => `/api/git/repos/${id}`;
+export const gitRepos = () => request<{ repos: GitRepo[] }>('GET', '/api/git/repos').then((r) => r.repos);
+export const gitRepo = (id: number, limit = 300) => request<GitRepoDetail>('GET', `${G(id)}?limit=${limit}`);
+export const gitCommit = (id: number, sha: string) => request<GitCommitDetail>('GET', `${G(id)}/commits/${sha}`);
+export const gitFetch = (id: number) => request('POST', `${G(id)}/fetch`);
+export const gitPull = (id: number) => request('POST', `${G(id)}/pull`);
+export const gitPush = (id: number, branch?: string) => request('POST', `${G(id)}/push`, { branch });
+export const gitCheckout = (id: number, branch: string) => request('POST', `${G(id)}/checkout`, { branch });
+export const gitMerge = (id: number, branch: string) => request('POST', `${G(id)}/merge`, { branch });
+export const gitBranch = (id: number, branch: string, sha?: string) => request('POST', `${G(id)}/branches`, { branch, sha });
+export const gitPulls = (id: number, state: 'open' | 'closed' | 'all') =>
+  request<{ pulls: PullRequest[] }>('GET', `${G(id)}/pulls?state=${state}`).then((r) => r.pulls);
+export const gitPullDetail = (id: number, n: number) => request<PullDetail>('GET', `${G(id)}/pulls/${n}`);
+export const gitComment = (id: number, n: number, body: string) => request('POST', `${G(id)}/pulls/${n}/comments`, { body });
+export const gitMergePull = (id: number, n: number, method: 'merge' | 'squash' | 'rebase') =>
+  request('POST', `${G(id)}/pulls/${n}/merge`, { method });
+export const gitCreatePull = (id: number, title: string, body: string, head: string, base?: string) =>
+  request<PullRequest>('POST', `${G(id)}/pulls`, { title, body, head, base });
+
+export interface SessionGit {
+  git: boolean;
+  branch?: string | null;
+  origin?: string | null;
+  ahead?: number | null;
+  forge?: 'github' | 'gitea' | null;
+}
+export const sessionGit = (id: string) => request<SessionGit>('GET', `${S(id)}/git`);
+export const sessionCommit = (id: string, message: string) => request<{ sha: string }>('POST', `${S(id)}/git/commit`, { message });
+export const sessionPush = (id: string) => request<{ branch: string }>('POST', `${S(id)}/git/push`);
+export const sessionPullRequest = (id: string, title: string, body: string) =>
+  request<PullRequest>('POST', `${S(id)}/git/pull-request`, { title, body });

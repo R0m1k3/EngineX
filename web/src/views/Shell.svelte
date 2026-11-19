@@ -3,6 +3,8 @@
   import { onDestroy } from 'svelte';
   import Memory from './Memory.svelte';
   import Crons from './Crons.svelte';
+  import Files from './Files.svelte';
+  import Git from './Git.svelte';
   import Models from './Models.svelte';
   import Sessions from './Sessions.svelte';
   import Settings from './Settings.svelte';
@@ -23,6 +25,8 @@
     { id: 'sessions', label: 'Sessions' },
     { id: 'tasks', label: 'Tâches' },
     { id: 'crons', label: 'Crons' },
+    { id: 'files', label: 'Fichiers' },
+    { id: 'git', label: 'Git' },
     { id: 'memory', label: 'Mémoire' },
     { id: 'models', label: 'Modèles' },
     { id: 'system', label: 'Système' },
@@ -83,6 +87,10 @@
       <Tasks />
     {:else if page === 'crons'}
       <Crons />
+    {:else if page === 'files'}
+      <Files />
+    {:else if page === 'git'}
+      <Git sub={route.split('/').slice(1).join('/')} />
     {:else if page === 'memory'}
       <Memory />
     {:else if page === 'models'}

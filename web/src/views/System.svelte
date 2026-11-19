@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { system, message, type SystemInfo } from '../lib/api';
+  import { system, message, diskUsage, type SystemInfo, type DiskUsage } from '../lib/api';
 
   let info = $state<SystemInfo | null>(null);
   let error = $state('');
+  let disk = $state<DiskUsage | null>(null);
 
   async function load(refresh = false) {
     try {
       info = await system(refresh);
+      diskUsage().then((d) => (disk = d)).catch(() => {});
       error = '';
     } catch (e) {
       error = message(e);
@@ -31,6 +33,9 @@
 </header>
 
 {#if error}<p class="error">{error}</p>{/if}
+{#if disk?.alert}
+  <p class="error">Disque de /data rempli à {disk.used_pct} % (alerte à {disk.alert_pct} %) : libérez de la place depuis Fichiers ou Sessions.</p>
+{/if}
 
 {#if info}
   <section class="grid">

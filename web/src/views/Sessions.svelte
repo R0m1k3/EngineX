@@ -15,9 +15,9 @@
 
   const open = (id: string) => (location.hash = `sessions/${id}`);
   // Panneau latéral (Fichiers, Terminal) : fermé par défaut.
-  let side = $state<'files' | 'terminal' | null>(null);
-  let tab = $state<'files' | 'terminal'>('files');
-  const panel = (t: 'files' | 'terminal') => {
+  let side = $state<'files' | 'terminal' | 'git' | null>(null);
+  let tab = $state<'files' | 'terminal' | 'git'>('files');
+  const panel = (t: 'files' | 'terminal' | 'git') => {
     if (side === t) side = null;
     else side = tab = t;
   };

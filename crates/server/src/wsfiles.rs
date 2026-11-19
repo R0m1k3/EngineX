@@ -124,10 +124,11 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, ApiError> + S
         .map_err(|e| ApiError::Internal(e.into()))?
 }
 
-/// Version d'un fichier pour l'éditeur : mtime en nanosecondes.
+/// Version d'un fichier pour l'éditeur : mtime en microsecondes (exact en
+/// JavaScript, où les nanosecondes dépasseraient 2^53).
 fn version_of(m: &std::fs::Metadata) -> i64 {
     use std::os::unix::fs::MetadataExt;
-    m.mtime() * 1_000_000_000 + m.mtime_nsec()
+    m.mtime() * 1_000_000 + m.mtime_nsec() / 1000
 }
 
 #[derive(Deserialize)]
@@ -342,7 +343,7 @@ fn current_version(pfd: &OwnedFd, name: &CString) -> Option<Option<i64>> {
     if st.st_mode & libc::S_IFMT != libc::S_IFREG {
         return Some(None);
     }
-    Some(Some(st.st_mtime * 1_000_000_000 + st.st_mtime_nsec))
+    Some(Some(st.st_mtime * 1_000_000 + st.st_mtime_nsec / 1000))
 }
 
 pub async fn put_text(State(state): State<AppState>, ApiJson(b): ApiJson<TextBody>) -> Result<Json<Value>, ApiError> {

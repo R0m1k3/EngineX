@@ -14,7 +14,7 @@
   import Verify from './Verify.svelte';
   import Revert from './Revert.svelte';
 
-  let { id, changed, panel }: { id: string; changed: () => void; panel: (tab: 'files' | 'terminal') => void } = $props();
+  let { id, changed, panel }: { id: string; changed: () => void; panel: (tab: 'files' | 'terminal' | 'git') => void } = $props();
 
   interface Live {
     id: string | null;
@@ -353,6 +353,7 @@
       {/if}
       <button class="link" onclick={() => panel('files')}>Fichiers</button>
       <button class="link" onclick={() => panel('terminal')}>Terminal</button>
+      <button class="link" onclick={() => panel('git')}>Git</button>
       <span class="pill state-{sandbox.state}" title={sandbox.detail ?? ''}>{SANDBOX[sandbox.state] ?? sandbox.state}{pull}</span>
       {#if preset}<span class="muted" title="Preset actif (Modèles)">{preset}</span>{/if}
       <label class="mode">

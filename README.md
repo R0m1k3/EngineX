@@ -186,7 +186,7 @@ Les boutons **Fichiers** et **Terminal** du fil ouvrent un panneau à droite. Le
 sandbox de la session (il la démarre au besoin) ; un seul par session, les secrets affichés sont masqués. Fermer le
 panneau ou l'onglet termine le shell. Le panneau Fichiers montre l'arborescence du dossier de travail (sans `.git`),
 l'aperçu des images, PDF, vidéos, Markdown et textes (masqués), et le téléchargement. Il est en lecture seule et ne
-suit pas les liens symboliques.
+suit pas les liens symboliques. L'onglet **Git** valide, pousse et ouvre une pull request (voir Fichiers et Git).
 
 ### Secrets
 
@@ -206,6 +206,36 @@ interne que les sandboxes ne voient pas. Les sandboxes ont accès à Internet et
 
 Docker attend des chemins de l'hôte. EngineX lit donc le montage de son propre conteneur pour savoir où se trouve
 `/data` sur l'hôte. Si la détection échoue, donnez ce chemin avec `ENGINEX_HOST_DATA`.
+
+## Fichiers et Git
+
+La page **Fichiers** montre tout le workspace : projets, topics (le code des sessions), skills et `tasks.json`.
+Elle permet d'ouvrir un fichier (images, PDF, vidéos et Markdown en aperçu, textes dans l'éditeur CodeMirror, Ctrl+S
+pour enregistrer), de créer, envoyer (200 Mo par fichier), renommer, déplacer, supprimer, et de télécharger en zip
+plusieurs éléments cochés. Si une session a modifié le fichier entre-temps, l'enregistrement est refusé : on recharge
+ou on écrase. Les dossiers gérés par EngineX (projets, topics, mémoire, skills) se créent et se suppriment depuis leur
+page ; la mémoire s'édite depuis la page Mémoire. Les liens symboliques ne sont jamais suivis. Un bandeau prévient quand
+le disque de `/data` dépasse le seuil réglé dans Paramètres → Sessions (90 % par défaut).
+
+La page **Git** liste les topics qui sont des dépôts git : branches (en avance, en retard sur leur amont), graphe des
+commits, détail d'un commit avec son diff, fetch, pull (avance rapide seulement), push (jamais forcé), nouvelle branche,
+changement de branche et fusion (refusés si un tour tourne dans le topic ou s'il reste des modifications). Si le remote
+est GitHub ou Gitea, l'onglet **Pull requests** permet de lire, commenter, fusionner et créer. L'onglet **Git** du
+panneau d'une session valide tout le dossier (commit), pousse et ouvre une pull request.
+
+Identifiants, dans Paramètres → Clés (globaux ou par projet) :
+
+| Clé | Rôle |
+|---|---|
+| `GITHUB_TOKEN` (ou `GH_TOKEN`) | push et API vers github.com uniquement |
+| `GITEA_URL` | adresse de votre Gitea, par exemple `https://git.exemple.fr` |
+| `GITEA_TOKEN` | push et API vers l'hôte de `GITEA_URL` uniquement |
+
+Le `.git` d'un topic est écrit par la sandbox, donc EngineX ne lui fait pas confiance. Il le lit avec gitoxide, sans
+lancer de commande ni de filtre. Les opérations locales tournent dans le conteneur d'aide, sans réseau ni jeton. Fetch et
+push se font dans un dépôt nu vierge, créé par ce conteneur, qui lit les objets du topic. L'URL est vérifiée par
+EngineX et le jeton ne part que vers son hôte. Une config de dépôt piégée ne peut donc pas détourner le jeton. Une URL
+SSH (`git@github.com:o/r.git`) est poussée en https avec le jeton.
 
 ## Mémoire et skills
 
@@ -276,6 +306,8 @@ EngineX ne fait pas de HTTPS. Sur le réseau local, l'accès direct suffit. Hors
 | `ENGINEX_SANDBOX_MEMORY` | `8g` | mémoire maximale d'une sandbox |
 | `ENGINEX_HOST_DATA` | absent | chemin de `/data` sur l'hôte, si la détection échoue |
 | `ENGINEX_CODEX_BIN` | `codex` | binaire Codex du mode `local` |
+| `ENGINEX_SEARXNG_URL` | `http://searxng:8080` | SearXNG de la stack (outil `web_search`) |
+| `ENGINEX_GITHUB_API` | `https://api.github.com` | API GitHub des pull requests (tests) |
 | `RUST_LOG` | `info` | niveau des logs |
 
 ## Développement

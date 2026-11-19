@@ -11,6 +11,7 @@
   let memoryAuto = $state(true);
   let gitName = $state('');
   let gitEmail = $state('');
+  let diskPct = $state(90);
   let error = $state('');
   let saved = $state(false);
 
@@ -24,6 +25,7 @@
       memoryAuto = s.memory_auto ?? true;
       gitName = s.git_name ?? '';
       gitEmail = s.git_email ?? '';
+      diskPct = s.disk_alert_pct ?? 90;
       status = await sandboxStatus();
       error = '';
     } catch (e) {
@@ -44,6 +46,7 @@
         memory_auto: memoryAuto,
         git_name: gitName.trim() || undefined,
         git_email: gitEmail.trim() || undefined,
+        disk_alert_pct: diskPct,
       });
       idle = s.idle_minutes;
       max = s.max;
@@ -83,6 +86,10 @@
     </label>
     <label>E-mail git
       <input type="email" bind:value={gitEmail} placeholder="enginex@localhost" maxlength="200" />
+    </label>
+    <label>Alerte disque de /data au-delà de (%, 50 à 99)
+      <input class="num" type="number" min="50" max="99" bind:value={diskPct} required />
+      <span class="small muted">Bandeau sur les pages Fichiers et Système ; les fichiers des sessions sont gardés jusqu’à leur suppression.</span>
     </label>
     <div class="actions"><button type="submit">Enregistrer</button>{#if saved}<span class="ok small">Enregistré.</span>{/if}</div>
   </form>

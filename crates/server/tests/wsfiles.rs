@@ -66,6 +66,7 @@ async fn tree_text_and_conflict() {
     assert_eq!(r.body["text"], "# Bonjour\n");
     assert_eq!(r.body["version"], v1);
     assert_eq!(r.body["readonly"], false);
+    assert!(v1 < 1 << 53, "version exacte en JavaScript : {v1}");
 
     // Modifié ailleurs entre-temps : 409 file_changed.
     std::thread::sleep(std::time::Duration::from_millis(20));
