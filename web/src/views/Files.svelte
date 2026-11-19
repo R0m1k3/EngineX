@@ -16,8 +16,30 @@
     type DiskUsage,
     type WsEntry,
   } from '../lib/api';
+  import { Button, EmptyState, Icon, IconButton, ProgressBar, Segmented, confirmDialog, toast } from '../lib/ui';
+  import ArrowLeft from '@lucide/svelte/icons/arrow-left';
+  import ChevronRight from '@lucide/svelte/icons/chevron-right';
+  import Download from '@lucide/svelte/icons/download';
+  import FileArchive from '@lucide/svelte/icons/file-archive';
+  import FilePlus from '@lucide/svelte/icons/file-plus';
+  import Files from '@lucide/svelte/icons/files';
+  import Folder from '@lucide/svelte/icons/folder';
+  import FolderInput from '@lucide/svelte/icons/folder-input';
+  import FolderOpen from '@lucide/svelte/icons/folder-open';
+  import FolderPlus from '@lucide/svelte/icons/folder-plus';
+  import HardDrive from '@lucide/svelte/icons/hard-drive';
+  import Link2 from '@lucide/svelte/icons/link-2';
+  import Pencil from '@lucide/svelte/icons/pencil';
+  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import Save from '@lucide/svelte/icons/save';
+  import Trash from '@lucide/svelte/icons/trash-2';
+  import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
+  import Upload from '@lucide/svelte/icons/upload';
+  import X from '@lucide/svelte/icons/x';
   import Markdown from './sessions/Markdown.svelte';
   import Editor from './files/Editor.svelte';
+  import Ask from './files/Ask.svelte';
+  import { fileIcon } from './files/icons';
 
   interface Dir {
     entries: WsEntry[];
@@ -31,8 +53,9 @@
   /** Dossier cible (nouveau, envoi). */
   let folder = $state('');
   let error = $state('');
-  let notice = $state('');
   let disk = $state<DiskUsage | null>(null);
+  /** Téléphone : l'arbre ou le fichier ouvert, en plein écran. */
+  let pane = $state<'tree' | 'doc'>('tree');
 
   type Doc = { kind: string; text?: string; version?: number; readonly?: boolean; truncated?: boolean };
   let doc = $state<Doc | null>(null);
@@ -41,19 +64,19 @@
   let conflict = $state(false);
   let mdSource = $state(false);
   let editor = $state<ReturnType<typeof Editor> | null>(null);
+  let asker = $state<ReturnType<typeof Ask> | null>(null);
   let uploadInput: HTMLInputElement;
 
   const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
   const parent = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
   const base = (p: string) => p.split('/').pop() ?? p;
+  const nf = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 });
   const size = (n: number) =>
-    n < 1024 ? `${n} o` : n < 1 << 20 ? `${(n / 1024).toFixed(0)} Kio` : n < 1 << 30 ? `${(n / (1 << 20)).toFixed(1)} Mio` : `${(n / (1 << 30)).toFixed(1)} Gio`;
+    n < 1024 ? `${n} o` : n < 1 << 20 ? `${Math.round(n / 1024)} Kio` : n < 1 << 30 ? `${nf.format(n / (1 << 20))} Mio` : `${nf.format(n / (1 << 30))} Gio`;
 
   let picked = $derived(Object.keys(checked).filter((p) => checked[p]));
-
-  function entryOf(path: string): WsEntry | undefined {
-    return dirs[parent(path)]?.entries.find((e) => e.name === base(path));
-  }
+  let crumbs = $derived(selected ? selected.split('/') : []);
+  let editable = $derived(!!doc && (doc.kind === 'text' || (doc.kind === 'markdown' && mdSource)) && !doc.readonly);
 
   async function load(path: string) {
     try {
@@ -85,13 +108,22 @@
     zip: 'binary', gz: 'binary', tar: 'binary', gguf: 'binary', exe: 'binary', bin: 'binary',
   };
 
-  function leave(): boolean {
-    return !dirty || confirm('Modifications non enregistrées : les abandonner ?');
+  async function leave(): Promise<boolean> {
+    return (
+      !dirty ||
+      confirmDialog(`Les modifications de ${base(selected)} ne sont pas enregistrées.`, {
+        title: 'Abandonner les modifications ?',
+        confirm: 'Abandonner',
+        cancel: 'Continuer à modifier',
+        danger: true,
+      })
+    );
   }
 
   async function open(path: string) {
-    if (path !== selected && !leave()) return;
+    if (path !== selected && !(await leave())) return;
     selected = path;
+    pane = 'doc';
     folder = parent(path);
     dirty = false;
     conflict = false;
@@ -122,11 +154,10 @@
       doc.text = text;
       dirty = false;
       conflict = false;
-      notice = 'Enregistré.';
-      setTimeout(() => (notice = ''), 2000);
+      toast(`${base(selected)} enregistré.`, 'ok', 2000);
     } catch (e) {
       if (e instanceof ApiError && e.code === 'file_changed') conflict = true;
-      error = message(e);
+      else toast(message(e), 'error');
     } finally {
       saving = false;
     }
@@ -140,25 +171,25 @@
   }
 
   async function act(f: () => Promise<unknown>, done?: string) {
-    error = '';
     try {
       await f();
-      if (done) notice = done;
-      setTimeout(() => (notice = ''), 2500);
+      if (done) toast(done, 'ok', 2500);
     } catch (e) {
-      error = message(e);
+      toast(message(e), 'error');
     }
     await refresh();
   }
 
-  function newFolder() {
-    const name = prompt(`Nouveau dossier dans /${folder || ''}`);
+  const where = (d: string) => `/${d}`;
+
+  async function newFolder() {
+    const name = await asker?.ask({ title: 'Nouveau dossier', label: `Nom du dossier, dans ${where(folder)}`, confirm: 'Créer le dossier', mono: true });
     if (!name?.trim()) return;
     act(() => wsMkdir(join(folder, name.trim())));
   }
 
-  function newFile() {
-    const name = prompt(`Nouveau fichier dans /${folder || ''}`);
+  async function newFile() {
+    const name = await asker?.ask({ title: 'Nouveau fichier', label: `Nom du fichier, dans ${where(folder)}`, confirm: 'Créer le fichier', mono: true });
     if (!name?.trim()) return;
     const p = join(folder, name.trim());
     act(async () => {
@@ -177,23 +208,27 @@
         try {
           await wsUpload(p, f);
         } catch (e) {
-          if (e instanceof ApiError && e.code === 'name_taken' && confirm(`${p} existe : le remplacer ?`)) {
+          if (
+            e instanceof ApiError &&
+            e.code === 'name_taken' &&
+            (await confirmDialog(`${p} existe déjà.`, { title: 'Remplacer le fichier ?', confirm: 'Remplacer', danger: true }))
+          ) {
             await wsUpload(p, f, true);
           } else throw e;
         }
       }
       opened[folder] = true;
-    }, `${files.length} fichier(s) envoyé(s).`);
+    }, files.length === 1 ? `${files[0].name} envoyé.` : `${files.length} fichiers envoyés.`);
   }
 
   function targets(): string[] {
     return picked.length ? picked : selected ? [selected] : [];
   }
 
-  function rename() {
+  async function rename() {
     const t = targets();
-    if (t.length !== 1) return alert('Cochez un seul élément à renommer.');
-    const name = prompt('Nouveau nom', base(t[0]));
+    if (t.length !== 1) return toast('Cochez un seul élément à renommer.', 'warn');
+    const name = await asker?.ask({ title: 'Renommer', label: 'Nouveau nom', value: base(t[0]), confirm: 'Renommer', mono: true });
     if (!name?.trim() || name === base(t[0])) return;
     const to = join(parent(t[0]), name.trim());
     act(async () => {
@@ -203,11 +238,18 @@
     });
   }
 
-  function move() {
+  async function move() {
     const t = targets();
     if (!t.length) return;
-    const dest = prompt('Déplacer vers le dossier (chemin depuis la racine)', folder);
-    if (dest === null) return;
+    const dest = await asker?.ask({
+      title: t.length === 1 ? `Déplacer ${base(t[0])}` : `Déplacer ${t.length} éléments`,
+      label: 'Vers le dossier',
+      hint: 'Chemin depuis la racine du workspace, vide pour la racine.',
+      value: folder,
+      confirm: 'Déplacer',
+      mono: true,
+    });
+    if (dest == null) return;
     const d = dest.trim().replace(/^\/+|\/+$/g, '');
     act(async () => {
       for (const p of t) await wsMove(p, join(d, base(p)));
@@ -216,9 +258,15 @@
     }, 'Déplacé.');
   }
 
-  function remove() {
+  async function remove() {
     const t = targets();
-    if (!t.length || !confirm(`Supprimer définitivement ${t.length === 1 ? t[0] : `${t.length} éléments`} ?`)) return;
+    if (!t.length) return;
+    const ok = await confirmDialog(`${t.length === 1 ? t[0] : `${t.length} éléments`} : la suppression est définitive.`, {
+      title: 'Supprimer ?',
+      confirm: 'Supprimer',
+      danger: true,
+    });
+    if (!ok) return;
     act(async () => {
       await wsDelete(t);
       checked = {};
@@ -226,6 +274,7 @@
         selected = '';
         doc = null;
         dirty = false;
+        pane = 'tree';
       }
     }, 'Supprimé.');
   }
@@ -247,138 +296,311 @@
 {#snippet level(path: string, depth: number)}
   {#each dirs[path]?.entries ?? [] as e (e.name)}
     {@const p = join(path, e.name)}
-    <div class="line" style:padding-left="{depth * 14}px">
-      <input type="checkbox" bind:checked={checked[p]} disabled={e.managed} aria-label="Choisir {e.name}" />
-      {#if e.kind === 'dir'}
-        <button class="link entry" class:here={folder === p} onclick={() => toggle(p)}>
-          {opened[p] ? '▾' : '▸'} {e.name}/{#if e.managed}<span class="tag">géré</span>{/if}
+    {@const dir = e.kind === 'dir'}
+    <div
+      class="node"
+      class:sel={!dir && selected === p}
+      class:here={dir && folder === p}
+      class:picked={checked[p]}
+      style:--d={depth}
+    >
+      {#if dir}
+        <button class="hit" onclick={() => toggle(p)} aria-expanded={!!opened[p]}>
+          <span class="chev" class:open={opened[p]}><Icon icon={ChevronRight} size={16} /></span>
+          <Icon icon={opened[p] ? FolderOpen : Folder} size={16} class="ficon" />
+          <span class="nm">{e.name}</span>
+          {#if e.managed}<span class="tag" title="Se crée et se supprime depuis Sessions, Mémoire ou Skills">géré</span>{/if}
         </button>
       {:else}
-        <button class="link entry" class:sel={selected === p} onclick={() => e.kind === 'file' && open(p)}
-          disabled={e.kind !== 'file'} title={e.kind === 'link' ? 'Lien symbolique (jamais suivi)' : size(e.size)}>
-          {e.name}{e.kind === 'link' ? ' →' : ''}
+        <button
+          class="hit"
+          onclick={() => e.kind === 'file' && open(p)}
+          disabled={e.kind !== 'file'}
+          title={e.kind === 'link' ? 'Lien symbolique (jamais suivi)' : size(e.size)}
+        >
+          <span class="chev"></span>
+          <Icon icon={e.kind === 'link' ? Link2 : fileIcon(e.name)} size={16} class="ficon" />
+          <span class="nm">{e.name}</span>
+          {#if selected === p && dirty}<span class="dirty" aria-label="modifié"></span>{/if}
         </button>
       {/if}
+      {#if !e.managed}
+        <label class="ck">
+          <input type="checkbox" bind:checked={checked[p]} aria-label="Choisir {e.name}" />
+        </label>
+      {/if}
     </div>
-    {#if e.kind === 'dir' && opened[p]}{@render level(p, depth + 1)}{/if}
+    {#if dir && opened[p]}{@render level(p, depth + 1)}{/if}
   {/each}
-  {#if dirs[path]?.truncated}<p class="muted tiny" style:padding-left="{depth * 14}px">1000 entrées au plus.</p>{/if}
+  {#if dirs[path]?.truncated}<p class="more" style:--d={depth}>1000 entrées au plus.</p>{/if}
 {/snippet}
 
-<section class="page">
-  <div class="row head">
-    <h1>Fichiers</h1>
-    {#if disk}
-      <span class="muted small">
-        Workspace {size(disk.workspace_bytes)} · sessions {size(disk.sessions_bytes)} · disque {disk.used_pct} % utilisé, {size(disk.free_bytes)} libres
+<div class="fx" class:doc={pane === 'doc'} class:picking={picked.length > 0}>
+  <aside class="side" aria-label="Arbre du workspace">
+    <header class="side-h">
+      <h1>Fichiers</h1>
+      <span class="tools">
+        <IconButton icon={FilePlus} label="Nouveau fichier dans {where(folder)}" onclick={newFile} tip="bottom" />
+        <IconButton icon={FolderPlus} label="Nouveau dossier dans {where(folder)}" onclick={newFolder} tip="bottom" />
+        <IconButton icon={Upload} label="Envoyer des fichiers dans {where(folder)}" onclick={() => uploadInput.click()} tip="bottom" />
+        <IconButton icon={RefreshCw} label="Actualiser" onclick={refresh} tip="bottom" />
       </span>
-    {/if}
-  </div>
-  {#if disk?.alert}
-    <p class="banner">Disque de /data rempli à {disk.used_pct} % (alerte à {disk.alert_pct} %, réglable dans Paramètres → Sessions) : supprimez des sessions ou des fichiers.</p>
-  {/if}
-  <div class="actions">
-    <span class="muted small">Dossier : <code>/{folder}</code></span>
-    <button class="secondary" onclick={newFolder}>Nouveau dossier</button>
-    <button class="secondary" onclick={newFile}>Nouveau fichier</button>
-    <button class="secondary" onclick={() => uploadInput.click()}>Envoyer…</button>
-    <input type="file" multiple hidden bind:this={uploadInput} onchange={onUpload} />
-    <span class="sep"></span>
-    <span class="muted small">{picked.length ? `${picked.length} coché(s)` : selected ? 'Fichier ouvert' : ''}</span>
-    <button class="secondary" onclick={rename} disabled={!targets().length}>Renommer</button>
-    <button class="secondary" onclick={move} disabled={!targets().length}>Déplacer</button>
-    <button class="secondary" onclick={zip} disabled={!targets().length}>Zip</button>
-    <button class="secondary danger" onclick={remove} disabled={!targets().length}>Supprimer</button>
-    <button class="link" onclick={refresh}>Actualiser</button>
-  </div>
-  {#if error}<p class="error small pre">{error}</p>{/if}
-  {#if notice}<p class="muted small">{notice}</p>{/if}
+      <input type="file" multiple hidden bind:this={uploadInput} onchange={onUpload} />
+    </header>
 
-  <div class="split">
-    <div class="tree card">
-      <button class="link entry" class:here={folder === ''} onclick={() => (folder = '')}>/ (workspace)</button>
+    {#if error}
+      <p class="alert err" role="alert"><Icon icon={TriangleAlert} size={16} /><span>{error}</span></p>
+    {/if}
+
+    <div class="tree">
+      <div class="node root" class:here={folder === ''} style:--d={0}>
+        <button class="hit" onclick={() => (folder = '')}>
+          <Icon icon={HardDrive} size={16} class="ficon" />
+          <span class="nm">workspace</span>
+        </button>
+      </div>
       {@render level('', 0)}
     </div>
-    <div class="view card">
-      {#if selected && doc}
-        <div class="row small filebar">
-          <code class="name">{selected}{dirty ? ' •' : ''}</code>
-          <span class="tools">
-            {#if doc.kind === 'markdown'}
-              <button class="link" onclick={() => (mdSource = !mdSource)}>{mdSource ? 'Aperçu' : doc.readonly ? 'Source' : 'Modifier'}</button>
-            {/if}
-            {#if (doc.kind === 'text' || (doc.kind === 'markdown' && mdSource)) && !doc.readonly}
-              <button onclick={() => save()} disabled={!dirty || saving}>{saving ? 'Enregistrement…' : 'Enregistrer'}</button>
-            {/if}
-            <a href={wsDownloadUrl(selected)} download>Télécharger</a>
-          </span>
+
+    {#if picked.length}
+      <div class="selbar" role="toolbar" aria-label="Éléments cochés">
+        <span class="count">{picked.length} coché{picked.length > 1 ? 's' : ''}</span>
+        <IconButton icon={Pencil} label="Renommer" onclick={rename} disabled={picked.length !== 1} />
+        <IconButton icon={FolderInput} label="Déplacer" onclick={move} />
+        <IconButton icon={FileArchive} label="Télécharger en zip" onclick={zip} />
+        <IconButton icon={Trash} label="Supprimer" onclick={remove} class="del" />
+        <IconButton icon={X} label="Tout décocher" onclick={() => (checked = {})} />
+      </div>
+    {/if}
+
+    {#if disk}
+      <footer class="disk" class:alarm={disk.alert}>
+        <div class="disk-l">
+          <span>Disque {nf.format(disk.used_pct)} %</span>
+          <span class="faint">{size(disk.free_bytes)} libres</span>
         </div>
-        {#if conflict}
-          <p class="banner small">
-            Le fichier a changé sur le disque depuis son ouverture (une session ?).
-            <button class="link" onclick={reload}>Recharger (perdre mes changements)</button> ·
-            <button class="link" onclick={() => save(true)}>Écraser avec ma version</button>
-          </p>
+        <ProgressBar value={disk.used_pct} size="sm" tone={disk.alert ? 'warn' : 'accent'} label="Disque de /data utilisé" />
+        <div class="faint">Workspace {size(disk.workspace_bytes)}, sessions {size(disk.sessions_bytes)}</div>
+        {#if disk.alert}
+          <p class="alarm-t">Alerte à {nf.format(disk.alert_pct)} % (réglable dans Paramètres, Sessions) : supprimez des sessions ou des fichiers.</p>
         {/if}
-        {#if doc.readonly && (doc.kind === 'text' || doc.kind === 'markdown')}
-          <p class="muted tiny">
-            {doc.truncated ? 'Trop gros pour l’éditeur (2 Mio au plus) : lecture seule, téléchargez-le.' : 'Lecture seule (la mémoire se modifie depuis la page Mémoire).'}
-          </p>
-        {/if}
-        <div class="body">
-          {#if doc.kind === 'image'}<img src={wsRawUrl(selected)} alt={selected} />
-          {:else if doc.kind === 'pdf'}<iframe src={wsRawUrl(selected)} title={selected}></iframe>
-          {:else if doc.kind === 'video'}<!-- svelte-ignore a11y_media_has_caption --><video src={wsRawUrl(selected)} controls></video>
-          {:else if doc.kind === 'audio'}<audio src={wsRawUrl(selected)} controls></audio>
-          {:else if doc.kind === 'markdown' && !mdSource}<div class="md"><Markdown text={doc.text ?? ''} /></div>
-          {:else if doc.kind === 'text' || doc.kind === 'markdown'}
-            {#key selected}
-              <Editor bind:this={editor} path={selected} text={doc.text ?? ''} readonly={doc.readonly}
-                onsave={() => save()} ondirty={() => (dirty = true)} />
-            {/key}
-          {:else if doc.kind === 'binary'}<p class="muted small">Fichier binaire : téléchargez-le pour l’ouvrir.</p>
-          {:else if doc.kind === 'error'}<p class="error small">{doc.text}</p>
-          {:else}<p class="muted small">Chargement…</p>{/if}
+      </footer>
+    {/if}
+  </aside>
+
+  <section class="main" aria-label="Fichier ouvert">
+    {#if selected && doc}
+      <header class="fbar">
+        <IconButton icon={ArrowLeft} label="Retour à l’arbre" size="lg" class="back" onclick={() => (pane = 'tree')} />
+        <div class="crumbs" title={selected}>
+          <Icon icon={fileIcon(base(selected))} size={16} class="ficon" />
+          {#each crumbs as c, i}
+            {#if i < crumbs.length - 1}<span class="cr">{c}</span><span class="cr-sep" aria-hidden="true">/</span>
+            {:else}<span class="cr last">{c}</span>{/if}
+          {/each}
+          {#if dirty}<span class="mod"><span class="dirty"></span>Modifié</span>{/if}
+          {#if doc.readonly && (doc.kind === 'text' || doc.kind === 'markdown')}<span class="ro">lecture seule</span>{/if}
         </div>
-      {:else}
-        <p class="muted small">
-          Tout le workspace : projets, topics (le code des sessions), skills, tâches. Cochez pour agir sur plusieurs éléments.
-          Les dossiers marqués « géré » se créent et se suppriment depuis Sessions, Mémoire ou Skills.
-        </p>
+        <div class="ftools">
+          {#if doc.kind === 'markdown'}
+            <Segmented
+              label="Affichage du Markdown"
+              value={mdSource ? 'src' : 'view'}
+              options={[{ value: 'view', label: 'Aperçu' }, { value: 'src', label: doc.readonly ? 'Source' : 'Modifier' }]}
+              onchange={(v) => (mdSource = v === 'src')}
+            />
+          {/if}
+          {#if !picked.length}
+            <span class="fileacts">
+              <IconButton icon={Pencil} label="Renommer" onclick={rename} tip="bottom" />
+              <IconButton icon={FolderInput} label="Déplacer" onclick={move} tip="bottom" />
+              <IconButton icon={FileArchive} label="Télécharger en zip" onclick={zip} tip="bottom" />
+              <IconButton icon={Trash} label="Supprimer" onclick={remove} tip="bottom" class="del" />
+            </span>
+          {/if}
+          <IconButton icon={Download} label="Télécharger" href={wsDownloadUrl(selected)} tip="bottom" />
+          {#if editable}
+            <Button variant="primary" size="sm" icon={Save} onclick={() => save()} disabled={!dirty} busy={saving}>
+              {saving ? 'Enregistrement…' : 'Enregistrer'}
+            </Button>
+          {/if}
+        </div>
+      </header>
+      {#if conflict}
+        <div class="alert warn" role="alert">
+          <Icon icon={TriangleAlert} size={16} />
+          <span class="grow">Le fichier a changé sur le disque depuis son ouverture (une session ?).</span>
+          <Button size="sm" onclick={reload}>Recharger, perdre mes changements</Button>
+          <Button size="sm" variant="danger" onclick={() => save(true)}>Écraser avec ma version</Button>
+        </div>
       {/if}
-    </div>
-  </div>
-</section>
+      {#if doc.readonly && doc.truncated && (doc.kind === 'text' || doc.kind === 'markdown')}
+        <p class="alert note">Trop gros pour l’éditeur (2 Mio au plus) : lecture seule, téléchargez-le.</p>
+      {:else if doc.readonly && (doc.kind === 'text' || doc.kind === 'markdown')}
+        <p class="alert note">Lecture seule : la mémoire se modifie depuis la page Mémoire.</p>
+      {/if}
+      <div class="body" class:padded={doc.kind !== 'text' && !(doc.kind === 'markdown' && mdSource)}>
+        {#if doc.kind === 'image'}<div class="media"><img src={wsRawUrl(selected)} alt={selected} /></div>
+        {:else if doc.kind === 'pdf'}<iframe src={wsRawUrl(selected)} title={selected}></iframe>
+        {:else if doc.kind === 'video'}<div class="media"><!-- svelte-ignore a11y_media_has_caption --><video src={wsRawUrl(selected)} controls></video></div>
+        {:else if doc.kind === 'audio'}<div class="media"><audio src={wsRawUrl(selected)} controls></audio></div>
+        {:else if doc.kind === 'markdown' && !mdSource}<article class="md-doc"><Markdown text={doc.text ?? ''} /></article>
+        {:else if doc.kind === 'text' || doc.kind === 'markdown'}
+          {#key selected}
+            <Editor bind:this={editor} path={selected} text={doc.text ?? ''} readonly={doc.readonly}
+              onsave={() => save()} ondirty={() => (dirty = true)} />
+          {/key}
+        {:else if doc.kind === 'binary'}
+          <EmptyState icon={fileIcon(base(selected))} title="Fichier binaire">
+            {#snippet action()}<Button icon={Download} href={wsDownloadUrl(selected)}>Télécharger pour l’ouvrir</Button>{/snippet}
+          </EmptyState>
+        {:else if doc.kind === 'error'}<p class="alert err" role="alert"><Icon icon={TriangleAlert} size={16} /><span>{doc.text}</span></p>
+        {:else}<p class="loading">Chargement…</p>{/if}
+      </div>
+    {:else}
+      <div class="body padded">
+        <EmptyState
+          icon={Files}
+          title="Ouvrez un fichier dans l’arbre"
+          text="Tout le workspace : projets, topics (le code des sessions), skills, tâches. Cochez pour agir sur plusieurs éléments. Les dossiers marqués « géré » se créent et se suppriment depuis Sessions, Mémoire ou Skills."
+        />
+      </div>
+    {/if}
+  </section>
+</div>
+
+<Ask bind:this={asker} />
 
 <style>
-  .page { display: flex; flex-direction: column; gap: var(--s3); height: calc(100vh - 2 * var(--s6)); min-height: 0; min-width: 0; }
-  .head { justify-content: flex-start; gap: var(--s4); flex-wrap: wrap; }
-  .head h1 { margin: 0; }
-  .actions { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
-  .actions button { padding: var(--s1) var(--s3); font-size: var(--fs-sm); }
-  .sep { flex: 1; }
-  .danger { color: var(--error); }
-  .split { display: grid; grid-template-columns: minmax(240px, 340px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: var(--s3); flex: 1; min-height: 0; }
-  .tree { overflow: auto; min-height: 0; padding: var(--s3); }
-  .view { overflow: hidden; min-height: 0; min-width: 0; padding: var(--s3); display: flex; flex-direction: column; gap: var(--s2); }
+  /* Page bord à bord : la vue de la coquille perd sa marge tant que Fichiers est affiché. */
+  :global(.view:has(> .fx)) { padding: 0; height: 100%; }
+
+  .fx {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr);
+    background: var(--bg);
+  }
+
+  /* ---------- Arbre ---------- */
+  .side { display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-right: 1px solid var(--line); }
+  .side-h { display: flex; align-items: center; gap: var(--s2); height: 48px; flex: none; padding: 0 var(--s2) 0 var(--s4); border-bottom: 1px solid var(--line); }
+  h1 { flex: 1; margin: 0; font-size: var(--fs-lg); font-weight: 600; }
+  .tools { display: flex; gap: 2px; }
+  .tree { flex: 1; min-height: 0; overflow: auto; padding: var(--s2) 0; font-size: var(--fs-sm); }
+
+  .node { position: relative; display: flex; align-items: center; height: 32px; padding-right: var(--s2); }
+  .node:hover { background: var(--raised); }
+  .node.sel { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+  .node.picked { background: var(--raised); }
+  .hit {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
+    padding: 0 0 0 calc(var(--s2) + var(--d) * 16px);
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-sm);
+    font-weight: 400;
+    text-align: left;
+    filter: none;
+  }
+  .hit:disabled { color: var(--muted); opacity: 1; }
+  .hit:focus-visible { outline-offset: -2px; }
+  .root .hit { padding-left: var(--s4); color: var(--muted); }
+  .chev { width: 16px; flex: none; display: grid; place-items: center; color: var(--faint); transition: transform 0.12s; }
+  .chev.open { transform: rotate(90deg); }
+  .node :global(.ficon) { color: var(--faint); }
+  .node.here > .hit :global(.ficon) { color: var(--accent); }
+  .node.here > .hit .nm { color: var(--text); font-weight: 600; }
+  .node.sel :global(.ficon) { color: var(--accent); }
+  .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .tag { flex: none; font-size: 12px; line-height: 18px; padding: 0 6px; border-radius: var(--r-sm); color: var(--faint); background: var(--raised); }
+  .node:hover .tag, .node.picked .tag { background: var(--bg); }
+  .dirty { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+  .ck { flex: none; display: grid; place-items: center; width: 28px; height: 28px; cursor: pointer; opacity: 0; }
+  .node:hover .ck, .ck:focus-within, .node.picked .ck, .picking .ck { opacity: 1; }
+  .more { margin: var(--s1) 0; padding-left: calc(var(--s4) + 22px + var(--d) * 16px); color: var(--faint); font-size: var(--fs-sm); }
+
+  .selbar { display: flex; align-items: center; gap: 2px; flex: none; padding: var(--s1) var(--s2) var(--s1) var(--s4); border-top: 1px solid var(--line); background: var(--bg); }
+  .count { flex: 1; font-size: var(--fs-sm); color: var(--text); font-variant-numeric: tabular-nums; }
+  .fx :global(.del:hover:not(:disabled)) { color: var(--danger); background: var(--danger-soft); }
+
+  .disk { flex: none; display: flex; flex-direction: column; gap: 6px; padding: var(--s3) var(--s4); border-top: 1px solid var(--line); font-size: var(--fs-sm); }
+  .disk-l { display: flex; justify-content: space-between; gap: var(--s2); font-variant-numeric: tabular-nums; }
+  .disk.alarm { background: var(--warn-soft); }
+  .alarm-t { margin: 0; color: var(--warn); }
+
+  /* ---------- Fichier ouvert ---------- */
+  .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .fbar { display: flex; align-items: center; gap: var(--s3); height: 48px; flex: none; padding: 0 var(--s3) 0 var(--s4); background: var(--panel); border-bottom: 1px solid var(--line); }
+  .fbar :global(.back) { display: none; }
+  .crumbs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; font-size: var(--fs-sm); }
+  .crumbs :global(.ficon) { color: var(--accent); }
+  .cr { color: var(--muted); flex: 0 1 auto; min-width: 2ch; overflow: hidden; text-overflow: ellipsis; }
+  .cr-sep { color: var(--faint); flex: none; }
+  .cr.last { color: var(--text); font-weight: 600; flex: 0 0 auto; min-width: 0; max-width: 100%; }
+  .mod { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-left: var(--s2); color: var(--warn); }
+  .ro { flex: none; margin-left: var(--s2); color: var(--faint); }
+  .ftools { display: flex; align-items: center; gap: var(--s2); flex: none; }
+  .fileacts { display: flex; gap: 2px; padding-right: var(--s2); border-right: 1px solid var(--line); }
+
+  .alert { display: flex; align-items: center; gap: var(--s2); flex: none; margin: 0; padding: var(--s2) var(--s4); font-size: var(--fs-sm); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .alert.warn { background: var(--warn-soft); color: var(--text); }
+  .alert.warn > :global(.ui-icon) { color: var(--warn); }
+  .alert.err { color: var(--danger); background: var(--danger-soft); white-space: pre-wrap; }
+  .alert.note { color: var(--muted); background: var(--panel); }
+  .grow { flex: 1; min-width: 20ch; }
+
   .body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+  .body.padded { padding: var(--s6); }
   .body > :global(.cm) { flex: 1; }
-  .line { display: flex; align-items: center; gap: var(--s1); }
-  .line input { margin: 0; }
-  .entry { display: block; flex: 1; padding-top: 1px; padding-bottom: 1px; font-size: var(--fs-sm); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .entry:disabled { color: var(--muted); opacity: 1; }
-  .entry.sel, .entry.here { color: var(--accent); }
-  .tag { margin-left: var(--s2); font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
-  .filebar { gap: var(--s3); flex: none; }
-  .view > p, .view > .banner { flex: none; }
-  .tools { display: flex; gap: var(--s3); align-items: center; }
-  .tools button:not(.link) { padding: var(--s1) var(--s3); font-size: var(--fs-sm); }
-  .name { overflow: hidden; text-overflow: ellipsis; }
-  .banner { background: color-mix(in srgb, var(--error) 15%, transparent); border: 1px solid var(--error); border-radius: var(--radius); padding: var(--s2) var(--s3); margin: 0; }
-  .body img, .body video { max-width: 100%; }
-  iframe { width: 100%; height: 100%; min-height: 70vh; border: 1px solid var(--line); border-radius: var(--radius); background: white; }
-  .tiny { font-size: var(--fs-sm); margin: 0; }
-  .pre { white-space: pre-wrap; }
-  a { color: var(--accent); }
-  @media (max-width: 800px) { .split { grid-template-columns: 1fr; } }
+  .body > .alert.err { border: 1px solid var(--danger); border-radius: var(--r); }
+  .md-doc { max-width: 760px; width: 100%; line-height: 1.6; }
+  .md-doc :global(h1) { font-size: var(--fs-xl); }
+  .md-doc :global(h2) { font-size: var(--fs-lg); margin-top: var(--s6); }
+  .media { flex: 1; display: grid; place-items: center; min-height: 0; }
+  .media img, .media video { max-width: 100%; max-height: 100%; object-fit: contain; border: 1px solid var(--line); background: var(--panel); }
+  .body.padded:has(> iframe) { padding: 0; }
+  iframe { flex: 1; width: 100%; border: 0; background: white; }
+  .loading { color: var(--faint); font-size: var(--fs-sm); margin: 0; }
+
+  @media (hover: none) {
+    .ck { opacity: 1; }
+  }
+
+  /* ---------- Téléphone : arbre plein écran, puis fichier plein écran avec retour ---------- */
+  @media (max-width: 767px) {
+    .fx { grid-template-columns: minmax(0, 1fr); padding: 0 var(--safe-right) 0 var(--safe-left); }
+    .fx:not(.doc) .main, .fx.doc .side { display: none; }
+    .side { border-right: 0; }
+    .side-h { height: 56px; }
+    .side-h :global(.ib) { width: var(--touch); height: var(--touch); }
+    .node { height: 44px; }
+    .hit { font-size: var(--fs-md); padding-left: calc(var(--s3) + var(--d) * 16px); }
+    .ck { width: var(--touch); height: var(--touch); opacity: 1; }
+    .ck input { width: 20px; height: 20px; }
+    .selbar :global(.ib) { width: var(--touch); height: var(--touch); }
+
+    .fbar { height: auto; min-height: 56px; flex-wrap: wrap; padding: 0 var(--s2) 0 0; gap: var(--s1) var(--s2); }
+    .fbar :global(.back) { display: inline-grid; }
+    .crumbs { font-size: var(--fs-md); }
+    .cr:not(.last), .cr-sep { display: none; }
+    .ro { display: none; }
+    .ftools { width: 100%; justify-content: flex-end; padding: 0 0 var(--s2) var(--s3); }
+    .ftools :global(.ib) { width: var(--touch); height: var(--touch); }
+    .fileacts { margin-right: auto; }
+    .ftools :global(.btn) { height: var(--touch); }
+    .body.padded { padding: var(--s4); }
+  }
 </style>

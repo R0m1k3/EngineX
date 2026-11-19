@@ -1,12 +1,25 @@
 <script lang="ts">
   import type { GitCommit } from '../../lib/api';
+  import Icon from '../../lib/ui/Icon.svelte';
+  import Tag from '@lucide/svelte/icons/tag';
+  import Cloud from '@lucide/svelte/icons/cloud';
 
   let { commits, selected, select }: { commits: GitCommit[]; selected: string; select: (sha: string) => void } = $props();
 
-  const W = 14;
-  const H = 26;
-  const COLORS = ['#6fb3a3', '#d6a35c', '#8fa6e0', '#d97a9e', '#9cc76b', '#c08fe0', '#e0c46f', '#6fc9d6'];
-  const color = (i: number) => COLORS[i % COLORS.length];
+  const W = 16;
+  // Hauteur d'une ligne : 36 au bureau, 48 au téléphone (cible tactile).
+  const phone = typeof matchMedia === 'function' ? matchMedia('(max-width: 767px)') : null;
+  let small = $state(phone?.matches ?? false);
+  $effect(() => {
+    if (!phone) return;
+    const on = () => (small = phone.matches);
+    phone.addEventListener('change', on);
+    return () => phone.removeEventListener('change', on);
+  });
+  let H = $derived(small ? 48 : 36);
+  // Couleurs des couloirs tirées des jetons (clair et sombre suivent le thème).
+  const COLORS = ['--accent', '--code-fn', '--warn', '--code-type', '--code-tag', '--term-cyan', '--code-number', '--accent-2'];
+  const color = (i: number) => `var(${COLORS[i % COLORS.length]})`;
 
   interface Row {
     c: GitCommit;
@@ -59,39 +72,102 @@
       maxw = Math.max(maxw, width);
       out.push({ c, lane, segs, width });
     }
-    return { rows: out, width: maxw * W };
+    return { rows: out, width: maxw * W + 4 };
   });
+
+  // Courbe douce quand un trait change de couloir, droite sinon.
+  const path = (s: Row['segs'][number]) =>
+    s[0] === s[2] ? `M${s[0]} ${s[1]}V${s[3]}` : `M${s[0]} ${s[1]}C${s[0]} ${(s[1] + s[3]) / 2} ${s[2]} ${(s[1] + s[3]) / 2} ${s[2]} ${s[3]}`;
 
   const when = (t: number) => new Date(t * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
 </script>
 
-<div class="graph">
+<div class="graph-rows">
   {#each rows.rows as r (r.c.sha)}
-    <button class="row-c" class:sel={selected === r.c.sha} onclick={() => select(r.c.sha)}>
+    <button class="crow" class:sel={selected === r.c.sha} onclick={() => select(r.c.sha)} aria-current={selected === r.c.sha || undefined}>
       <svg width={rows.width} height={H} aria-hidden="true">
-        {#each r.segs as s}<line x1={s[0]} y1={s[1]} x2={s[2]} y2={s[3]} stroke={s[4]} stroke-width="2" />{/each}
-        <circle cx={r.lane * W + W / 2} cy={H / 2} r={r.c.parents.length > 1 ? 3 : 4} fill={color(r.lane)} />
+        {#each r.segs as s}<path d={path(s)} style:stroke={s[4]} />{/each}
+        {#if r.c.parents.length > 1}
+          <circle class="merge" cx={r.lane * W + W / 2} cy={H / 2} r="4" style:stroke={color(r.lane)} />
+        {:else}
+          <circle class="dot" cx={r.lane * W + W / 2} cy={H / 2} r="4.5" style:fill={color(r.lane)} />
+        {/if}
       </svg>
       <span class="subject">
-        {#each r.c.refs as ref}<span class="ref {ref.kind}">{ref.name}</span>{/each}
-        {r.c.subject}
+        {#each r.c.refs as ref}
+          <span class="ref {ref.kind}">
+            {#if ref.kind === 'tag'}<Icon icon={Tag} size={12} />{:else if ref.kind === 'remote'}<Icon icon={Cloud} size={12} />{/if}{ref.name}
+          </span>
+        {/each}
+        <span class="txt">{r.c.subject}</span>
       </span>
-      <span class="meta muted">{r.c.author} · {when(r.c.time)} · <code>{r.c.sha.slice(0, 7)}</code></span>
+      <span class="author">{r.c.author}</span>
+      <span class="time">{when(r.c.time)}</span>
+      <code class="sha">{r.c.sha.slice(0, 7)}</code>
     </button>
   {/each}
 </div>
 
 <style>
-  .graph { display: flex; flex-direction: column; min-width: 0; }
-  .row-c { all: unset; box-sizing: border-box; width: 100%; min-width: 0; display: flex; align-items: center; gap: var(--s2); height: 26px; cursor: pointer; font-size: var(--fs-sm); padding-right: var(--s2); border-radius: 4px; }
-  .row-c:hover { background: var(--bg); }
-  .row-c.sel { background: color-mix(in srgb, var(--accent) 15%, transparent); }
-  svg { flex: none; }
-  .subject { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .meta { flex: none; font-size: var(--fs-sm); white-space: nowrap; }
-  .ref { font-size: 11px; border-radius: 3px; padding: 0 5px; margin-right: 4px; border: 1px solid var(--line); }
-  .ref.branch { color: var(--accent); border-color: var(--accent); }
-  .ref.remote { color: #8fa6e0; border-color: #8fa6e0; }
-  .ref.tag { color: #d6a35c; border-color: #d6a35c; }
-  @media (max-width: 900px) { .meta { display: none; } }
+  .graph-rows { display: flex; flex-direction: column; min-width: 0; padding: var(--s1) 0; }
+  .crow {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    height: 36px;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--s3);
+    padding: 0 var(--s4) 0 var(--s3);
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-sm);
+    font-weight: 400;
+    text-align: left;
+    cursor: pointer;
+    filter: none;
+  }
+  .crow:hover { background: var(--raised); }
+  .crow.sel { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+  .crow:focus-visible { outline-offset: -2px; }
+  svg { flex: none; overflow: visible; }
+  path { fill: none; stroke-width: 2; stroke-linecap: round; }
+  .dot { stroke: var(--bg); stroke-width: 2; }
+  .crow:hover .dot { stroke: var(--raised); }
+  .crow.sel .dot { stroke: var(--accent-soft); }
+  .merge { fill: var(--bg); stroke-width: 2; }
+  .subject { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
+  .txt { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .ref {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: var(--r-sm);
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--raised);
+    color: var(--muted);
+  }
+  .ref.branch { background: var(--accent-soft); color: var(--accent); }
+  .ref.tag { background: var(--warn-soft); color: var(--warn); }
+  .crow:hover .ref.remote { background: var(--bg); }
+  .author { flex: none; width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .time { flex: none; width: 116px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .sha { flex: none; width: 7ch; color: var(--faint); }
+
+  .graph-rows { container-type: inline-size; }
+  @container (max-width: 760px) { .author { display: none; } }
+  @container (max-width: 540px) { .time { display: none; } }
+  @container (max-width: 400px) { .sha { display: none; } }
+  @media (max-width: 767px) {
+    .crow { height: 48px; padding-right: var(--s3); }
+  }
 </style>

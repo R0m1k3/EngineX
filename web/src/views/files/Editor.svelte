@@ -35,9 +35,11 @@
   onDestroy(() => ed?.destroy());
 </script>
 
-{#if failed}<p class="error small">Éditeur indisponible : {failed}</p>{/if}
+{#if failed}<p class="failed" role="alert">Éditeur indisponible : {failed}</p>{/if}
 <div class="cm" bind:this={host}></div>
 
 <style>
-  .cm { flex: 1; height: 100%; min-height: 300px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  /* Éditeur bord à bord : le cadre est celui du panneau. */
+  .cm { flex: 1; height: 100%; min-height: 240px; overflow: hidden; background: var(--bg); }
+  .failed { margin: 0; padding: var(--s2) var(--s4); color: var(--danger); background: var(--danger-soft); font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }
 </style>
