@@ -15,12 +15,14 @@ pub mod error;
 pub mod files;
 pub mod limiter;
 pub mod mask;
+pub mod mcp;
 pub mod memory;
 pub mod models;
 pub mod presets;
 pub mod recall;
 pub mod sandboxes;
 pub mod sessions;
+pub mod skills;
 pub mod snapshots;
 pub mod state;
 pub mod system;
@@ -114,6 +116,9 @@ pub fn app(state: AppState) -> Router {
         .route("/api/memory/file", get(memory::get_file).put(memory::put_file))
         .route("/api/memory/revisions", get(memory::revisions))
         .route("/api/memory/revisions/{id}", get(memory::revision))
+        .route("/api/skills", get(skills::list))
+        .route("/api/skills/{name}", get(skills::get).put(skills::put))
+        .route("/api/skills/{name}/enabled", put(skills::put_enabled))
         .route("/api/sessions", get(sessions::list).post(sessions::create))
         .route(
             "/api/sessions/{id}",
@@ -169,7 +174,11 @@ pub fn app(state: AppState) -> Router {
             header::REFERRER_POLICY,
             HeaderValue::from_static("same-origin"),
         ));
-    // `/v1` hors des couches de l'UI (session, même origine) : seule la clé
-    // d'API le protège. Le seul fallback est celui de `ui`.
-    Router::new().merge(v1::router(&state)).merge(ui).with_state(state)
+    // `/v1` et `/mcp` hors des couches de l'UI (session, même origine) : seule
+    // la clé d'API les protège. Le seul fallback est celui de `ui`.
+    Router::new()
+        .merge(v1::router(&state))
+        .merge(mcp::router(&state))
+        .merge(ui)
+        .with_state(state)
 }

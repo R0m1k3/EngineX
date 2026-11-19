@@ -37,6 +37,8 @@ pub struct SandboxTimings {
     pub idle_override: Option<Duration>,
     /// Tirage de l'image devbox en fond (`None` : jamais).
     pub pull_every: Option<Duration>,
+    /// Durée maximale du tour de mémoire de fin de session.
+    pub memory_turn_timeout: Duration,
 }
 
 impl Default for SandboxTimings {
@@ -47,6 +49,7 @@ impl Default for SandboxTimings {
             idle_tick: Duration::from_secs(30),
             idle_override: None,
             pull_every: Some(Duration::from_secs(24 * 3600)),
+            memory_turn_timeout: Duration::from_secs(600),
         }
     }
 }

@@ -71,10 +71,10 @@ pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) ->
     Ok(Json(json!({ "ok": true })))
 }
 
-/// `(id, internal)` de la clé, si elle existe (recherche du hash) ; pose
-/// `last_used_at`.
-pub(crate) async fn find(state: &AppState, key: &str) -> Result<Option<(i64, bool)>, sqlx::Error> {
-    sqlx::query_as("UPDATE api_keys SET last_used_at = ? WHERE hash = ? RETURNING id, internal")
+/// `(id, internal, name)` de la clé, si elle existe (recherche du hash) ;
+/// pose `last_used_at`.
+pub(crate) async fn find(state: &AppState, key: &str) -> Result<Option<(i64, bool, String)>, sqlx::Error> {
+    sqlx::query_as("UPDATE api_keys SET last_used_at = ? WHERE hash = ? RETURNING id, internal, name")
         .bind(now())
         .bind(sha256(key.as_bytes()))
         .fetch_optional(state.db())

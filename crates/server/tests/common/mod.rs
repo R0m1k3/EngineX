@@ -283,6 +283,7 @@ pub fn test_timings() -> Timings {
             idle_tick: Duration::from_millis(100),
             idle_override: None,
             pull_every: None,
+            memory_turn_timeout: Duration::from_secs(600),
         },
     }
 }

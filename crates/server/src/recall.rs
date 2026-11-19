@@ -190,14 +190,23 @@ mod tests {
 
     #[test]
     fn query_forms() {
-        assert_eq!(match_query("vérif port", false).as_deref(), Some("\"vérif\"* \"port\"*"));
-        assert_eq!(match_query("vérif port", true).as_deref(), Some("\"vérif\"* OR \"port\"*"));
+        assert_eq!(
+            match_query("vérif port", false).as_deref(),
+            Some("\"vérif\"* \"port\"*")
+        );
+        assert_eq!(
+            match_query("vérif port", true).as_deref(),
+            Some("\"vérif\"* OR \"port\"*")
+        );
         assert_eq!(match_query("a \"b\" cc", false).as_deref(), Some("\"cc\"*"));
         assert_eq!(match_query("  ; a ", false), None);
         assert_eq!(match_query("", true), None);
         let many = (0..20).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ");
         assert_eq!(match_query(&many, false).unwrap().matches('*').count(), 12);
         // Guillemets et opérateurs FTS ne passent pas : seuls les mots restent.
-        assert_eq!(match_query("x\" OR NEAR(y", false).as_deref(), Some("\"OR\"* \"NEAR\"*"));
+        assert_eq!(
+            match_query("x\" OR NEAR(y", false).as_deref(),
+            Some("\"OR\"* \"NEAR\"*")
+        );
     }
 }

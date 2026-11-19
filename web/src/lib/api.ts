@@ -437,6 +437,12 @@ export function message(e: unknown): string {
       return 'Aucune recette de vérification (ni .enginex/verify.toml, ni projet reconnu).';
     case 'not_git':
       return 'Ce topic n’est pas un dépôt git.';
+    case 'memory_changed':
+      return 'Modifié entre-temps (par une session ?) : recharger.';
+    case 'too_large':
+      return 'Trop long : 16 Kio au plus pour memory.md, 4 Kio pour instructions.md, 64 Kio pour une skill.';
+    case 'invalid_skill':
+      return 'Skill refusée : le frontmatter doit avoir name (égal au nom de la skill) et description.';
     case 'copy_failed':
       return `La copie séparée a échoué.${e.detail ? `\n${e.detail}` : ''}`;
     default:
@@ -603,6 +609,7 @@ export interface SessionSettings {
   max: number;
   verify_enabled?: boolean;
   verify_max_fixes?: number;
+  memory_auto?: boolean;
   git_name?: string;
   git_email?: string;
 }
@@ -679,3 +686,63 @@ export const fileText = (id: string, path: string) =>
 export const downloadUrl = (id: string, path: string) => `${fileUrl(id, path)}&download=1`;
 export const bringBack = (id: string) =>
   request<{ result: 'merged' | 'branch_only'; reason?: 'topic_dirty' | 'conflict'; branch: string }>('POST', `${S(id)}/bring-back`);
+
+// ---- Mémoire et skills ----
+
+export interface MemFileInfo {
+  size: number;
+  limit: number;
+  author: string | null;
+  updated: number | null;
+}
+
+export interface MemScope {
+  path: string;
+  slug?: string;
+  name?: string;
+  instructions: MemFileInfo;
+  memory: MemFileInfo;
+}
+
+export interface MemProject extends MemScope {
+  topics: MemScope[];
+}
+
+export interface MemTree {
+  global: MemScope;
+  projects: MemProject[];
+  warn: number;
+}
+
+export interface MemRevision {
+  id: number;
+  author: string;
+  created_at: number;
+  size: number;
+}
+
+export type MemFile = 'memory' | 'instructions';
+const M = (path: string, file: MemFile) => `/api/memory/file?path=${q(path)}&file=${file}`;
+export const memoryTree = () => request<MemTree>('GET', '/api/memory');
+export const memoryFile = (path: string, file: MemFile) => request<{ content: string; sha: string }>('GET', M(path, file));
+export const saveMemoryFile = (path: string, file: MemFile, content: string, base_sha: string) =>
+  request<{ sha: string; size: number }>('PUT', M(path, file), { content, base_sha });
+export const memoryRevisions = (path: string, file: MemFile) =>
+  request<{ revisions: MemRevision[] }>('GET', `/api/memory/revisions?path=${q(path)}&file=${file}`).then((r) => r.revisions);
+export const memoryRevision = (id: number) =>
+  request<{ id: number; content: string; author: string; created_at: number }>('GET', `/api/memory/revisions/${id}`);
+
+export interface Skill {
+  name: string;
+  description: string | null;
+  valid: boolean;
+  shipped: boolean;
+  enabled: boolean;
+}
+
+export const skills = () => request<{ skills: Skill[] }>('GET', '/api/skills').then((r) => r.skills);
+export const skill = (name: string) =>
+  request<{ name: string; content: string; shipped: boolean; enabled: boolean }>('GET', `/api/skills/${q(name)}`);
+export const saveSkill = (name: string, content: string) => request('PUT', `/api/skills/${q(name)}`, { content });
+export const enableSkill = (name: string, enabled: boolean) =>
+  request('PUT', `/api/skills/${q(name)}/enabled`, { enabled });

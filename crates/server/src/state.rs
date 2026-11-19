@@ -174,6 +174,7 @@ impl AppState {
     pub async fn start_background(&self) -> anyhow::Result<()> {
         crate::vault::Vault::open(self).await?;
         crate::workspace::boot(self).await?;
+        crate::skills::boot(self)?;
         crate::sandboxes::boot(self).await?;
         crate::engine_api::measure_vram_others(self).await;
         crate::engine_api::boot(self).await?;

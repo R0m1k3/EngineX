@@ -89,8 +89,14 @@ pub fn exec_terminate(process_id: &str) -> Value {
     json!({"processId": process_id})
 }
 
-pub fn thread_resume(thread_id: &str, cwd: &str, approval: &str) -> Value {
-    json!({"threadId": thread_id, "cwd": cwd, "sandbox": "danger-full-access", "approvalPolicy": approval})
+/// `developer_instructions` : Codex garde le message developer d'origine,
+/// mais se sert de ces instructions s'il compacte le fil ensuite.
+pub fn thread_resume(thread_id: &str, cwd: &str, approval: &str, developer_instructions: Option<&str>) -> Value {
+    let mut v = json!({"threadId": thread_id, "cwd": cwd, "sandbox": "danger-full-access", "approvalPolicy": approval});
+    if let Some(d) = developer_instructions {
+        v["developerInstructions"] = json!(d);
+    }
+    v
 }
 
 pub fn text_input(text: &str) -> Value {

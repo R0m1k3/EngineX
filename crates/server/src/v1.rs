@@ -67,19 +67,20 @@ const INTERNAL_ROUTES: &[&str] = &["/v1/responses", "/v1/models"];
 
 // ---- Clé d'API ----
 
-fn bearer(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<&str> {
     let v = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let (scheme, key) = v.split_once(' ')?;
     scheme.eq_ignore_ascii_case("bearer").then(|| key.trim())
 }
 
-pub async fn require_api_key(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let peer = req
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|c| c.0)
-        .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)));
-    let ip = ip_of(&state, &peer, req.headers());
+/// Contrôle de la clé d'API (limiteur d'échecs par IP compris) : rend
+/// `(id, internal, name)` de la clé, ou la réponse d'erreur au format `/v1`.
+pub(crate) async fn authenticate(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
+) -> Result<(i64, bool, String), V1Error> {
+    let ip = ip_of(state, &peer, headers);
     let wait = state
         .0
         .v1_limiter
@@ -87,23 +88,57 @@ pub async fn require_api_key(State(state): State<AppState>, req: Request, next: 
         .expect("verrou")
         .locked_for(&ip, Instant::now());
     if !wait.is_zero() {
-        return V1Error::new(
+        return Err(V1Error::new(
             StatusCode::TOO_MANY_REQUESTS,
             "too_many_failures",
             format!(
                 "trop de clés refusées depuis cette adresse : réessayer dans {} s",
                 wait.as_secs().max(1)
             ),
-        )
-        .into_response();
+        ));
     }
-    let found = match bearer(req.headers()) {
-        Some(k) if k.starts_with(api_keys::PREFIX) => api_keys::find(&state, k).await,
+    let found = match bearer(headers) {
+        Some(k) if k.starts_with(api_keys::PREFIX) => api_keys::find(state, k).await,
         _ => Ok(None),
     };
     match found {
-        Ok(Some((_, internal))) => {
+        Ok(Some(k)) => {
             state.0.v1_limiter.lock().expect("verrou").clear(&ip);
+            Ok(k)
+        }
+        Ok(None) => {
+            state
+                .0
+                .v1_limiter
+                .lock()
+                .expect("verrou")
+                .record_failure(&ip, Instant::now());
+            Err(V1Error::new(
+                StatusCode::UNAUTHORIZED,
+                "invalid_api_key",
+                "clé d'API absente ou inconnue (Paramètres → API)",
+            ))
+        }
+        Err(e) => {
+            tracing::error!("clé d'API : {e}");
+            Err(V1Error::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "base de données",
+            ))
+        }
+    }
+}
+
+pub(crate) fn peer_of(ext: &axum::http::Extensions) -> SocketAddr {
+    ext.get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0)
+        .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)))
+}
+
+pub async fn require_api_key(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    match authenticate(&state, peer_of(req.extensions()), req.headers()).await {
+        Ok((_, internal, _)) => {
             if internal && !INTERNAL_ROUTES.contains(&req.uri().path()) {
                 return V1Error::new(
                     StatusCode::FORBIDDEN,
@@ -114,24 +149,7 @@ pub async fn require_api_key(State(state): State<AppState>, req: Request, next: 
             }
             next.run(req).await
         }
-        Ok(None) => {
-            state
-                .0
-                .v1_limiter
-                .lock()
-                .expect("verrou")
-                .record_failure(&ip, Instant::now());
-            V1Error::new(
-                StatusCode::UNAUTHORIZED,
-                "invalid_api_key",
-                "clé d'API absente ou inconnue (Paramètres → API)",
-            )
-            .into_response()
-        }
-        Err(e) => {
-            tracing::error!("clé d'API : {e}");
-            V1Error::new(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "base de données").into_response()
-        }
+        Err(e) => e.into_response(),
     }
 }
 

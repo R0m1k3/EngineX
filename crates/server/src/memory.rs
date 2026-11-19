@@ -125,7 +125,10 @@ pub fn read(state: &AppState, rel: &str) -> String {
 }
 
 pub fn sha_hex(s: &str) -> String {
-    crate::auth::sha256(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+    crate::auth::sha256(s.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Date locale `AAAA-MM-JJ` d'un horodatage Unix (secondes).
@@ -176,7 +179,9 @@ pub struct Outcome {
 }
 
 fn write_atomic(path: &std::path::Path, data: &str) -> std::io::Result<()> {
-    let dir = path.parent().ok_or_else(|| std::io::Error::other("chemin sans dossier"))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("chemin sans dossier"))?;
     std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, data)?;
@@ -287,7 +292,11 @@ async fn insert_revision(state: &AppState, rel: &str, content: &str, author: &st
 /// (global, puis projet, puis topic). Rend le bloc et son empreinte.
 pub fn block(state: &AppState, p: &str, t: &str) -> (String, String) {
     let parts = [
-        ("Instructions globales".to_string(), read(state, "instructions.md"), None),
+        (
+            "Instructions globales".to_string(),
+            read(state, "instructions.md"),
+            None,
+        ),
         (
             "Mémoire globale".to_string(),
             read(state, "memory.md"),
@@ -365,7 +374,11 @@ pub fn instructions(state: &AppState, p: &str, t: &str) -> (String, String) {
 
 /// Entrée ajoutée devant le texte d'un tour quand la mémoire a changé.
 pub fn refresh_text(bloc: &str) -> String {
-    let b = if bloc.trim().is_empty() { "(vide)" } else { bloc.trim_end() };
+    let b = if bloc.trim().is_empty() {
+        "(vide)"
+    } else {
+        bloc.trim_end()
+    };
     format!("<memoire_enginex>\n{b}\n</memoire_enginex>\nCette version remplace la précédente.")
 }
 
@@ -414,24 +427,31 @@ pub async fn remove_scope(state: &AppState, scope: &str) -> Result<(), ApiError>
 
 /// Contrôle `path` (`""`, `<p>` ou `<p>/<t>`, slugs existants en base).
 async fn check_scope(state: &AppState, path: &str) -> Result<(), ApiError> {
-    let parts: Vec<&str> = if path.is_empty() { vec![] } else { path.split('/').collect() };
-    let ok = match parts.as_slice() {
-        [] => true,
-        [p] => sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects WHERE slug = ?")
+    let parts: Vec<&str> = if path.is_empty() {
+        vec![]
+    } else {
+        path.split('/').collect()
+    };
+    let ok =
+        match parts.as_slice() {
+            [] => true,
+            [p] => {
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM projects WHERE slug = ?")
+                    .bind(p)
+                    .fetch_one(state.db())
+                    .await?
+                    == 1
+            }
+            [p, t] => sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM topics t JOIN projects p ON p.id = t.project_id WHERE p.slug = ? AND t.slug = ?",
+            )
             .bind(p)
+            .bind(t)
             .fetch_one(state.db())
             .await?
-            == 1,
-        [p, t] => sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM topics t JOIN projects p ON p.id = t.project_id WHERE p.slug = ? AND t.slug = ?",
-        )
-        .bind(p)
-        .bind(t)
-        .fetch_one(state.db())
-        .await?
-            == 1,
-        _ => false,
-    };
+                == 1,
+            _ => false,
+        };
     if ok { Ok(()) } else { Err(ApiError::NotFound) }
 }
 

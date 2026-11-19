@@ -200,6 +200,10 @@ pub async fn after_turn(
     origin: &str,
     changes: Option<&Value>,
 ) {
+    // Pas de vérification après la mise à jour de la mémoire.
+    if origin == "memory" {
+        return;
+    }
     if status != "completed" || !enabled(state).await {
         return;
     }

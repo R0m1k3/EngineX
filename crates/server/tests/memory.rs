@@ -1,11 +1,18 @@
-//! Mémoire (API, versions, suppression, migration) et recall (FTS, filtres).
+//! Mémoire (API, versions, suppression, migration), recall (FTS, filtres),
+//! pont (instructions, renvoi du bloc) et tour de fin de session.
 
 mod common;
 
+use std::time::Duration;
+
 use axum::{http::StatusCode, response::IntoResponse};
-use common::{Env, env, inbox, new_session};
+use common::{
+    Env, FakeAs, env, env_sessions_cfg, inbox, is_expect, is_send, make_active_preset, new_session, script_with, sse,
+    step_pos, turn,
+};
 use enginex_server::{error::ApiError, recall, state::now};
-use serde_json::json;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 async fn put(e: &Env, path: &str, file: &str, content: &str) -> common::Resp {
     let cur = e.get(&format!("/api/memory/file?path={path}&file={file}")).await;
@@ -83,7 +90,10 @@ async fn file_api_versions_and_limits() {
     assert_eq!(r.status, StatusCode::OK);
     let r = e.get("/api/memory/file?path=general&file=memory").await;
     assert_eq!(r.body["content"], "- version 15\n");
-    assert_eq!(e.get("/api/memory/revisions/999999").await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        e.get("/api/memory/revisions/999999").await.status,
+        StatusCode::NOT_FOUND
+    );
 
     // Arbre : tailles, limites, auteur.
     let t = e.get("/api/memory").await.body;
@@ -159,16 +169,14 @@ async fn deleting_a_topic_removes_its_memory() {
 // ---- Recall ----
 
 async fn add_turn(e: &Env, sid: &str, turn: &str, origin: &str) {
-    sqlx::query(
-        "INSERT INTO chat_turns (id, session_id, status, started_at, origin) VALUES (?, ?, 'completed', ?, ?)",
-    )
-    .bind(turn)
-    .bind(sid)
-    .bind(now())
-    .bind(origin)
-    .execute(e.state.db())
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO chat_turns (id, session_id, status, started_at, origin) VALUES (?, ?, 'completed', ?, ?)")
+        .bind(turn)
+        .bind(sid)
+        .bind(now())
+        .bind(origin)
+        .execute(e.state.db())
+        .await
+        .unwrap();
 }
 
 async fn add_item(e: &Env, sid: &str, turn: &str, item: &str, kind: &str, text: &str) {
@@ -223,7 +231,9 @@ async fn recall_finds_user_turns_only() {
     assert!(h[0].from_user);
     let line = h[0].line();
     assert!(
-        line.contains(&format!("general/inbox · « Nouvelle session » (session {a}, n° 1) Michael : ")),
+        line.contains(&format!(
+            "general/inbox · « Nouvelle session » (session {a}, n° 1) Michael : "
+        )),
         "{line}"
     );
     assert!(line.contains("«port»"), "{line}");
@@ -297,8 +307,12 @@ async fn session_list_search_uses_the_index() {
     add_turn(&e, &a, "t2", "verify").await;
     add_item(&e, &a, "t2", "i2", "agentMessage", "hippopotame").await;
     let b = new_session(&e, "auto").await;
-    e.send("PATCH", &format!("/api/sessions/{b}"), json!({"title": "Réglage du proxy"}))
-        .await;
+    e.send(
+        "PATCH",
+        &format!("/api/sessions/{b}"),
+        json!({"title": "Réglage du proxy"}),
+    )
+    .await;
 
     let ids = |v: serde_json::Value| -> Vec<String> {
         v["sessions"]
@@ -377,9 +391,470 @@ async fn migration_indexes_existing_messages() {
     assert_eq!(n, 1);
     pool.close().await;
     // Réouverture : la copie n'est pas refaite.
-    let before = std::fs::metadata(data.join("enginex.db.pre-0006")).unwrap().modified().unwrap();
+    let before = std::fs::metadata(data.join("enginex.db.pre-0006"))
+        .unwrap()
+        .modified()
+        .unwrap();
     let pool = enginex_server::db::open(&data).await.unwrap();
     pool.close().await;
-    let after = std::fs::metadata(data.join("enginex.db.pre-0006")).unwrap().modified().unwrap();
+    let after = std::fs::metadata(data.join("enginex.db.pre-0006"))
+        .unwrap()
+        .modified()
+        .unwrap();
     assert_eq!(before, after);
+}
+
+// ---- Pont ----
+
+/// Le tour du script `name` (de `turn/start` à `turn/completed`), renuméroté
+/// en tour `n` (éléments `$item:<n><k>`).
+fn turn_steps(name: &str, n: usize) -> Vec<Value> {
+    let steps = script_with(name, |_| {});
+    let start = step_pos(&steps, 0, is_expect("turn/start"));
+    let end = step_pos(&steps, 0, is_send("turn/completed"));
+    steps[start..=end]
+        .iter()
+        .map(|s| {
+            let mut t = s.to_string().replace("$turn:1", &format!("$turn:{n}"));
+            for k in 1..=9 {
+                t = t.replace(&format!("$item:{k}\""), &format!("$item:{n}{k}\""));
+            }
+            serde_json::from_str(&t).unwrap()
+        })
+        .collect()
+}
+
+/// Premier lancement du script `text` (connexion, fil, premier tour).
+fn first_segment() -> Vec<Value> {
+    let steps = script_with("text", |_| {});
+    let end = step_pos(&steps, 0, is_send("turn/completed"));
+    steps[..=end].to_vec()
+}
+
+/// Tour `n` qui ne finit que sur `turn/interrupt`.
+fn interruptible_turn(n: usize) -> Vec<Value> {
+    let start = turn_steps("text", n)[0].clone();
+    vec![
+        start,
+        json!({"send": {"method": "turn/started", "params": {"threadId": "$thread",
+               "turn": {"id": format!("$turn:{n}"), "items": [], "status": "inProgress"}}}}),
+        json!({"wait_interrupt": true}),
+        json!({"send": {"method": "turn/completed", "params": {"threadId": "$thread",
+               "turn": {"id": format!("$turn:{n}"), "items": [], "status": "interrupted", "error": null}}}}),
+    ]
+}
+
+/// Textes d'entrée du `n`-ième `turn/start` reçu.
+fn inputs(fake: &FakeAs, n: usize) -> Vec<String> {
+    fake.received("turn/start")[n]["params"]["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|i| i["text"].as_str().map(str::to_string))
+        .collect()
+}
+
+async fn seen(e: &Env, sid: &str) -> Option<String> {
+    sqlx::query_scalar("SELECT memory_seen FROM chat_sessions WHERE id = ?")
+        .bind(sid)
+        .fetch_one(e.state.db())
+        .await
+        .unwrap()
+}
+
+fn block_sha(e: &Env) -> String {
+    enginex_server::memory::block(&e.state, "general", "inbox").1
+}
+
+/// Clé interne de la sandbox d'une session, pour appeler `/mcp` comme elle.
+async fn sandbox_key(e: &Env, sid: &str) -> String {
+    let key = format!("ex_test{}", uuid::Uuid::new_v4().simple());
+    // Remplace la clé de la sandbox si elle existe (le faux Codex ne s'en sert pas).
+    sqlx::query(
+        "INSERT INTO api_keys (name, hash, created_at, internal) VALUES (?, ?, ?, 1) \
+         ON CONFLICT(name) DO UPDATE SET hash = excluded.hash",
+    )
+    .bind(format!("sandbox:{sid}"))
+    .bind(Sha256::digest(key.as_bytes()).to_vec())
+    .bind(now())
+    .execute(e.state.db())
+    .await
+    .unwrap();
+    key
+}
+
+async fn mem_add(e: &Env, key: &str, level: &str, text: &str) {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": "mem_add", "arguments": {"level": level, "text": text}}});
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("host", "enginex:8090")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {key}"))
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let res = e.router.clone().oneshot(req).await.unwrap();
+    let v: Value = serde_json::from_slice(&res.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(v["result"]["isError"], false, "{v}");
+}
+
+fn topic_file(e: &Env) -> std::path::PathBuf {
+    e.dir.path().join("data/workspace/memory/general/inbox/memory.md")
+}
+
+#[tokio::test]
+async fn block_is_sent_when_memory_changes() {
+    let mut script = first_segment();
+    for n in 2..=5 {
+        let mut t = turn_steps("text", n);
+        if n == 4 {
+            // Compactage : Codex refait son message developer.
+            let i = t.len() - 1;
+            t.insert(i, json!({"sleep_ms": 300}));
+            t.insert(
+                i + 1,
+                json!({"send": {"method": "item/completed", "params": {"threadId": "$thread", "turnId": "$turn:4",
+                       "item": {"type": "contextCompaction", "id": "$item:49"}}}}),
+            );
+        }
+        script.extend(t);
+    }
+    script.push(json!({"expect": "thread/revert", "result": {}}));
+    script.extend(turn_steps("text", 6));
+    let (e, fake) = env_sessions_cfg(&script, "", |_| {}).await;
+    make_active_preset(&e).await;
+    std::fs::create_dir_all(topic_file(&e).parent().unwrap()).unwrap();
+    std::fs::write(topic_file(&e), "- fait A\n").unwrap();
+    let sid = new_session(&e, "auto").await;
+    let other = new_session(&e, "auto").await;
+    let other_key = sandbox_key(&e, &other).await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    let done = |_: usize| |v: &Value| v["turn"]["status"] == "completed";
+
+    turn(&e, &sid, "un").await;
+    ev.until("turn_stored", done(1)).await;
+    let start = &fake.received("thread/start")[0]["params"];
+    let instr = start["developerInstructions"].as_str().unwrap();
+    assert!(instr.contains("EngineX garde des notes en 3 niveaux (global, projet general, topic inbox)"));
+    assert!(instr.contains("### Topic inbox : mémoire\n- fait A"), "{instr}");
+    assert!(instr.starts_with(enginex_server::verify::DEVELOPER_INSTRUCTIONS));
+    assert!(inputs(&fake, 0).iter().all(|t| !t.contains("<memoire_enginex>")));
+    let sha1 = block_sha(&e);
+    assert_eq!(seen(&e, &sid).await.as_deref(), Some(sha1.as_str()));
+
+    // Mémoire modifiée par Michael : le bloc part avec le tour suivant.
+    std::fs::write(topic_file(&e), "- fait A\n- fait B\n").unwrap();
+    turn(&e, &sid, "deux").await;
+    ev.until("turn_stored", done(2)).await;
+    let t = inputs(&fake, 1);
+    assert!(
+        t[0].starts_with("<memoire_enginex>\n") && t[0].contains("- fait B"),
+        "{t:?}"
+    );
+    assert!(t[0].ends_with("</memoire_enginex>\nCette version remplace la précédente."));
+    assert_eq!(t[1], "deux");
+    assert_eq!(seen(&e, &sid).await, Some(block_sha(&e)));
+
+    // Écriture de la session elle-même : pas de renvoi. (Clé posée après le
+    // démarrage de la sandbox, qui remplace la clé interne de la session.)
+    let key = sandbox_key(&e, &sid).await;
+    mem_add(&e, &key, "topic", "fait C").await;
+    turn(&e, &sid, "trois").await;
+    ev.until("turn_stored", done(3)).await;
+    assert_eq!(inputs(&fake, 2), vec!["trois"]);
+
+    // Écriture d'une autre session : renvoi ; puis compactage pendant ce tour.
+    mem_add(&e, &other_key, "project", "fait D").await;
+    turn(&e, &sid, "quatre").await;
+    ev.until("turn_stored", done(4)).await;
+    assert!(inputs(&fake, 3)[0].contains("fait D"));
+    // Codex a repris les instructions de la connexion : le bloc d'alors.
+    assert_eq!(seen(&e, &sid).await.as_deref(), Some(sha1.as_str()));
+    turn(&e, &sid, "cinq").await;
+    ev.until("turn_stored", done(5)).await;
+    assert!(inputs(&fake, 4)[0].starts_with("<memoire_enginex>"));
+
+    // Retour arrière avec la conversation : renvoi.
+    sqlx::query("UPDATE chat_sessions SET pending_revert = 'x' WHERE id = ?")
+        .bind(&sid)
+        .execute(e.state.db())
+        .await
+        .unwrap();
+    turn(&e, &sid, "six").await;
+    ev.until("turn_stored", done(6)).await;
+    assert!(inputs(&fake, 5)[0].starts_with("<memoire_enginex>"));
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+/// Script `resume` : segment 1 (premier lancement), segment 2 (relance).
+fn resume_segments() -> (Vec<Value>, Vec<Value>) {
+    let steps = script_with("resume", |_| {});
+    let i = steps.iter().position(|s| s.get("launch").is_some()).unwrap();
+    (steps[..i].to_vec(), steps[i + 1..].to_vec())
+}
+
+#[tokio::test]
+async fn resume_carries_instructions_and_refused_resume_starts_a_thread() {
+    let (seg1, seg2) = resume_segments();
+    // Troisième lancement : reprise refusée, nouveau fil.
+    let thread_start = seg1[step_pos(&seg1, 0, is_expect("thread/start"))].clone();
+    let mut seg3: Vec<Value> = seg2.clone();
+    let i = step_pos(&seg3, 0, is_expect("thread/resume"));
+    seg3[i] = json!({"expect": "thread/resume", "error": {"code": -32600, "message": "no rollout found"}});
+    seg3.insert(i + 1, thread_start);
+    seg3.retain(|s| s["expect"] != "thread/turns/list");
+    let mut script = seg1;
+    script.push(json!({"launch": true}));
+    script.extend(seg2);
+    script.push(json!({"launch": true}));
+    script.extend(seg3);
+    let (e, fake) = env_sessions_cfg(&script, "", |_| {}).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let hub = enginex_server::bridge::hub(&e.state, &sid);
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "un").await;
+    ev.until("turn_stored", |_| true).await;
+    hub.stop_conn(&e.state, "test").await;
+
+    std::fs::create_dir_all(topic_file(&e).parent().unwrap()).unwrap();
+    std::fs::write(topic_file(&e), "- port 8095\n").unwrap();
+    turn(&e, &sid, "deux").await;
+    ev.until("turn_stored", |_| true).await;
+    let resume = &fake.received("thread/resume")[0]["params"];
+    assert!(
+        resume["developerInstructions"]
+            .as_str()
+            .unwrap()
+            .contains("- port 8095"),
+        "{resume}"
+    );
+    // Le message developer d'origine reste chez Codex : bloc joint au tour.
+    assert!(inputs(&fake, 1)[0].contains("- port 8095"));
+    hub.stop_conn(&e.state, "test").await;
+
+    std::fs::write(topic_file(&e), "- port 8096\n").unwrap();
+    turn(&e, &sid, "trois").await;
+    ev.until("turn_stored", |_| true).await;
+    let starts = fake.received("thread/start");
+    assert_eq!(starts.len(), 2);
+    assert!(
+        starts[1]["params"]["developerInstructions"]
+            .as_str()
+            .unwrap()
+            .contains("- port 8096")
+    );
+    assert_eq!(seen(&e, &sid).await, Some(block_sha(&e)));
+    assert_eq!(inputs(&fake, 2), vec!["trois"]);
+}
+
+// ---- Tour de fin de session ----
+
+async fn turns_of(e: &Env, sid: &str) -> Vec<(String, String)> {
+    sqlx::query_as("SELECT origin, status FROM chat_turns WHERE session_id = ? ORDER BY rowid")
+        .bind(sid)
+        .fetch_all(e.state.db())
+        .await
+        .unwrap()
+}
+
+fn idle_cfg(c: &mut enginex_server::config::Config) {
+    c.timings.sandbox.idle_override = Some(Duration::from_millis(400));
+}
+
+#[tokio::test]
+async fn idle_session_runs_a_memory_turn_then_stops() {
+    let mut script = first_segment();
+    script.extend(turn_steps("text", 2));
+    let (e, fake) = env_sessions_cfg(&script, "", idle_cfg).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "un").await;
+    ev.until("turn_stored", |_| true).await;
+    let m = ev.until("user_message", |v| v["item"]["origin"] == "memory").await;
+    assert_eq!(m["item"]["text"], enginex_server::memory::END_PROMPT);
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["origin"], "memory");
+    let s = ev.until("sandbox", |v| v["state"] == "stopped").await;
+    assert_eq!(s["detail"], "inactivité");
+    assert_eq!(
+        turns_of(&e, &sid).await,
+        vec![
+            ("user".into(), "completed".into()),
+            ("memory".into(), "completed".into())
+        ]
+    );
+    let start = &fake.received("turn/start")[1]["params"];
+    assert_eq!(start["approvalPolicy"], "untrusted", "{start}");
+    assert_eq!(inputs(&fake, 1).last().unwrap(), enginex_server::memory::END_PROMPT);
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM verifications")
+        .fetch_one(e.state.db())
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+    // Une seule fois : pas de nouveau tour de Michael depuis.
+    assert!(!enginex_server::memory::should_close_with_turn(&e.state, &sid).await);
+    // Le message de fin est replié dans le fil (origine gardée).
+    let items = e.get(&format!("/api/sessions/{sid}")).await.body["items"].clone();
+    assert!(
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["data"]["origin"] == "memory"),
+        "{items}"
+    );
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+#[tokio::test]
+async fn memory_auto_off_stops_directly() {
+    let (e, fake) = env_sessions_cfg(&first_segment(), "", idle_cfg).await;
+    make_active_preset(&e).await;
+    let r = e
+        .send("PUT", "/api/settings/sessions", json!({"memory_auto": false}))
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(e.get("/api/settings/sessions").await.body["memory_auto"], false);
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "un").await;
+    ev.until("turn_stored", |_| true).await;
+    ev.until("sandbox", |v| v["state"] == "stopped").await;
+    assert_eq!(turns_of(&e, &sid).await.len(), 1);
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+#[tokio::test]
+async fn requests_during_memory_turn_are_declined_by_the_bridge() {
+    let mut script = first_segment();
+    let mut t = turn_steps("text", 2);
+    let req = |id: &str, method: &str| {
+        json!({"send": {"id": id, "method": method, "params": {"threadId": "$thread", "turnId": "$turn:2",
+               "itemId": "$item:29", "command": "rm -rf /", "questions": []}}})
+    };
+    t.insert(1, req("$req:1", "item/commandExecution/requestApproval"));
+    t.insert(2, json!({"expect_reply": "$req:1"}));
+    t.insert(3, req("$req:2", "item/tool/requestUserInput"));
+    t.insert(4, json!({"expect_reply": "$req:2"}));
+    script.extend(t);
+    let (e, fake) = env_sessions_cfg(&script, "", idle_cfg).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "prudent").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "un").await;
+    ev.until("turn_stored", |_| true).await;
+    ev.until("turn_stored", |v| v["turn"]["origin"] == "memory").await;
+    let replies: Vec<Value> = fake.log().into_iter().filter_map(|l| l.get("reply").cloned()).collect();
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert_eq!(replies[0]["result"], json!({"decision": "decline"}));
+    assert_eq!(replies[1]["result"], json!({"answers": {}}));
+    assert!(!ev.names().iter().any(|n| n == "request"), "{:?}", ev.names());
+}
+
+#[tokio::test]
+async fn user_message_preempts_memory_turn() {
+    let mut script = first_segment();
+    script.extend(interruptible_turn(2));
+    script.extend(turn_steps("text", 3));
+    script.extend(turn_steps("text", 4));
+    let (e, fake) = env_sessions_cfg(&script, "", idle_cfg).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "un").await;
+    ev.until("turn_stored", |_| true).await;
+    ev.until("user_message", |v| v["item"]["origin"] == "memory").await;
+    let r = turn(&e, &sid, "encore").await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+    ev.until("turn_stored", |v| v["turn"]["origin"] == "memory").await;
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["origin"], "user");
+    assert_eq!(t["turn"]["status"], "completed");
+    assert!(
+        !ev.seen.iter().any(|(n, v)| n == "sandbox" && v["state"] == "stopped"),
+        "{:?}",
+        ev.names()
+    );
+    let origins: Vec<String> = turns_of(&e, &sid).await.into_iter().map(|t| t.0).collect();
+    assert_eq!(&origins[..3], ["user", "memory", "user"]);
+    assert_eq!(turns_of(&e, &sid).await[1].1, "interrupted");
+    // Nouvelle inactivité : un tour de mémoire de nouveau, puis l'arrêt.
+    ev.until("sandbox", |v| v["state"] == "stopped").await;
+    assert_eq!(turns_of(&e, &sid).await.len(), 4);
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+#[tokio::test]
+async fn memory_turn_times_out() {
+    let mut script = first_segment();
+    script.extend(interruptible_turn(2));
+    let (e, fake) = env_sessions_cfg(&script, "", |c| {
+        idle_cfg(c);
+        c.timings.sandbox.memory_turn_timeout = Duration::from_secs(1);
+    })
+    .await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "un").await;
+    ev.until("turn_stored", |_| true).await;
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "interrupted");
+    let s = ev.until("sandbox", |v| v["state"] == "stopped").await;
+    assert_eq!(s["detail"], "inactivité");
+    assert_eq!(fake.received("turn/interrupt").len(), 1);
+}
+
+#[tokio::test]
+async fn make_room_interrupts_a_memory_turn() {
+    let mut script = first_segment();
+    script.extend(interruptible_turn(2));
+    script.push(json!({"launch": true}));
+    script.extend(first_segment());
+    script.extend(turn_steps("text", 2));
+    let (e, fake) = env_sessions_cfg(&script, "", idle_cfg).await;
+    make_active_preset(&e).await;
+    let r = e.send("PUT", "/api/settings/sessions", json!({"max": 1})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let a = new_session(&e, "auto").await;
+    let b = new_session(&e, "auto").await;
+    let mut ea = sse(&e, &format!("/api/sessions/{a}/events")).await;
+    let mut eb = sse(&e, &format!("/api/sessions/{b}/events")).await;
+    turn(&e, &a, "un").await;
+    ea.until("turn_stored", |_| true).await;
+    ea.until("user_message", |v| v["item"]["origin"] == "memory").await;
+    let r = turn(&e, &b, "à moi").await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
+    let s = ea.until("sandbox", |v| v["state"] == "stopped").await;
+    assert_eq!(s["detail"], "place libérée pour une autre session");
+    let t = eb.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}");
+    assert_eq!(turns_of(&e, &a).await[1], ("memory".into(), "interrupted".into()));
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
+
+#[tokio::test]
+async fn stop_if_idle_never_kills_an_open_turn() {
+    let mut script = first_segment();
+    let i = step_pos(&script, 0, is_send("turn/completed"));
+    script.insert(i, json!({"sleep_ms": 500}));
+    let (e, fake) = env_sessions_cfg(&script, "", |_| {}).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let hub = enginex_server::bridge::hub(&e.state, &sid);
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    let r = turn(&e, &sid, "un").await;
+    assert_eq!(r.status, StatusCode::ACCEPTED);
+    // Le tour est ouvert dès la réponse : l'arrêt pour inactivité s'abstient.
+    assert!(!hub.stop_if_idle(&e.state, Duration::ZERO, "inactivité").await);
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed");
+    assert!(hub.stop_if_idle(&e.state, Duration::ZERO, "inactivité").await);
+    assert!(!hub.has_conn());
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
 }

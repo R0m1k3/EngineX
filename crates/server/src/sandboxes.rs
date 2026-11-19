@@ -204,6 +204,12 @@ fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     std::fs::rename(tmp, path)
 }
 
+/// URL du serveur MCP vue de la sandbox : `api_url` sans `/v1`, plus `/mcp`.
+pub fn mcp_url(api_url: &str) -> String {
+    let base = api_url.trim_end_matches('/');
+    format!("{}/mcp", base.strip_suffix("/v1").unwrap_or(base))
+}
+
 /// Démarre la sandbox d'une session ; rend la poignée et le jeton.
 pub(crate) async fn start(
     state: &AppState,
@@ -253,8 +259,15 @@ pub(crate) async fn start(
     let token = auth::random_token();
     write_private(&mounts.run.join("token"), token.as_bytes())?;
     // 4. config.toml du preset actif.
-    let toml = crate::codex_config::render(&active.name, active.settings.ctx, &state.config().sandbox.api_url);
-    std::fs::write(mounts.codex_home.join("config.toml"), toml)?;
+    //    Écrit sans suivre un lien laissé dans CODEX_HOME (monté en écriture).
+    let api_url = &state.config().sandbox.api_url;
+    let mcp_url = mcp_url(api_url);
+    let toml = crate::codex_config::render(&active.name, active.settings.ctx, api_url, Some(&mcp_url));
+    write_private(&mounts.codex_home.join("config.toml"), toml.as_bytes())?;
+    //    Skills actives, copiées sans suivre de lien.
+    if let Err(e) = crate::skills::install_into(state, &mounts.codex_home).await {
+        tracing::warn!("session {session_id} : skills non installées : {e}");
+    }
     // 5. environnement, puis conteneur.
     // Ordre : identité git, secrets (un secret GIT_* l'emporte), variables d'EngineX.
     let secrets = vault::env_for(state, topic.project_id).await?;
@@ -338,9 +351,21 @@ async fn idle_loop(state: AppState) {
             None => std::time::Duration::from_secs(idle_minutes(&state).await as u64 * 60),
         };
         for hub in crate::bridge::hubs(&state) {
-            if hub.idle_for().is_some_and(|d| d >= idle) {
+            // Tour de mémoire trop long : interrompu, sa fin rend l'inactivité.
+            if hub.memory_turn_age().is_some_and(|d| d >= t.memory_turn_timeout) {
+                tracing::info!("session {} : tour de mémoire trop long, interrompu", hub.id);
+                if let Err(e) = hub.interrupt().await {
+                    tracing::warn!("session {} : turn/interrupt : {e}", hub.id);
+                }
+                continue;
+            }
+            if !hub.idle_for().is_some_and(|d| d >= idle) {
+                continue;
+            }
+            if crate::memory::should_close_with_turn(&state, &hub.id).await && hub.start_memory_turn(&state) {
+                tracing::info!("sandbox {} inactive : mise à jour de la mémoire avant l'arrêt", hub.id);
+            } else if hub.stop_if_idle(&state, idle, "inactivité").await {
                 tracing::info!("sandbox {} inactive : arrêtée", hub.id);
-                hub.stop_conn(&state, "inactivité").await;
             }
         }
     }
@@ -445,6 +470,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Value>, 
         "max": max_live(&state).await,
         "verify_enabled": crate::verify::enabled(&state).await,
         "verify_max_fixes": crate::verify::max_fixes(&state).await,
+        "memory_auto": crate::memory::auto_enabled(&state).await,
         "git_name": git_name,
         "git_email": git_email,
     })))
@@ -457,6 +483,7 @@ pub struct SettingsBody {
     max: Option<i64>,
     verify_enabled: Option<bool>,
     verify_max_fixes: Option<i64>,
+    memory_auto: Option<bool>,
     git_name: Option<String>,
     git_email: Option<String>,
 }
@@ -490,6 +517,9 @@ pub async fn put_settings(
     }
     if let Some(v) = b.verify_max_fixes {
         set_setting(&state, "verify.max_fixes", Some(&v.to_string())).await?;
+    }
+    if let Some(v) = b.memory_auto {
+        set_setting(&state, crate::memory::AUTO_KEY, Some(if v { "1" } else { "0" })).await?;
     }
     if let Some(v) = &b.git_name {
         set_setting(&state, "git.name", Some(v.trim())).await?;

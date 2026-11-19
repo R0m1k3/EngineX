@@ -50,10 +50,12 @@ struct TurnState {
     streams: HashMap<(String, &'static str), Stream>,
     usage: Option<Value>,
     started_at: i64,
-    /// `user` (message de Michael) ou `verify` (correction demandée par EngineX).
+    /// `user` (message de Michael), `verify` (correction demandée par EngineX)
+    /// ou `memory` (mise à jour de la mémoire en fin de session).
     origin: &'static str,
     /// Instantané d'avant le tour (avant que Codex ne connaisse l'id du tour).
     snap_pre: Option<String>,
+    begun: Instant,
 }
 
 struct PendingReq {
@@ -84,6 +86,14 @@ struct HubState {
     turn: Option<TurnState>,
     requests: Vec<PendingReq>,
     last_activity: Instant,
+    /// Empreinte de chaque fichier mémoire lu ou écrit par la session (outils
+    /// MCP), depuis l'ouverture de la connexion : `mem_write` l'exige à jour.
+    last_read: HashMap<String, String>,
+    /// Empreinte du bloc mémoire passé dans les instructions de la connexion
+    /// (`thread/start` ou `thread/resume`) : Codex le reprend s'il compacte.
+    conn_memory_sha: Option<String>,
+    /// Heure d'inactivité d'avant le tour de mémoire, rendue à sa fin.
+    memory_idle_base: Option<Instant>,
 }
 
 pub struct Hub {
@@ -114,6 +124,9 @@ pub fn hub(state: &AppState, session_id: &str) -> Arc<Hub> {
                     turn: None,
                     requests: Vec::new(),
                     last_activity: Instant::now(),
+                    last_read: HashMap::new(),
+                    conn_memory_sha: None,
+                    memory_idle_base: None,
                 }),
                 start: tokio::sync::Mutex::new(()),
                 revert: tokio::sync::Mutex::new(()),
@@ -163,6 +176,33 @@ impl Hub {
             d["detail"] = json!(x);
         }
         self.emit("sandbox", d);
+    }
+
+    /// Empreinte du fichier mémoire `rel` lu ou écrit en dernier par la session.
+    pub fn last_read(&self, rel: &str) -> Option<String> {
+        self.st.lock().expect("verrou").last_read.get(rel).cloned()
+    }
+
+    pub fn set_last_read(&self, rel: &str, sha: &str) {
+        self.st
+            .lock()
+            .expect("verrou")
+            .last_read
+            .insert(rel.to_string(), sha.to_string());
+    }
+
+    /// Origine du tour en cours.
+    pub fn turn_origin(&self) -> Option<&'static str> {
+        self.st.lock().expect("verrou").turn.as_ref().map(|t| t.origin)
+    }
+
+    /// Durée du tour de mémoire en cours, s'il y en a un.
+    pub fn memory_turn_age(&self) -> Option<Duration> {
+        let st = self.st.lock().expect("verrou");
+        st.turn
+            .as_ref()
+            .filter(|t| t.origin == "memory")
+            .map(|t| t.begun.elapsed())
     }
 
     pub fn running(&self) -> bool {
@@ -343,6 +383,13 @@ impl Hub {
         self.st.lock().expect("verrou").last_activity = Instant::now();
     }
 
+    /// Fin d'un tour de mémoire : la session redevient inactive depuis l'heure
+    /// d'avant ce tour (arrêt au prochain passage d'`idle_loop`).
+    fn end_memory_turn(&self) {
+        let mut st = self.st.lock().expect("verrou");
+        st.last_activity = st.memory_idle_base.take().unwrap_or_else(Instant::now);
+    }
+
     /// État pour un nouvel abonné.
     pub fn snapshot(&self, session: Value) -> Value {
         let st = self.st.lock().expect("verrou");
@@ -384,6 +431,7 @@ impl Hub {
             started_at: now(),
             origin,
             snap_pre: None,
+            begun: Instant::now(),
         });
         st.last_activity = Instant::now();
         drop(st);
@@ -398,6 +446,74 @@ impl Hub {
             st.generation += 1;
             st.conn.take()
         };
+        self.finish_stop(state, conn, reason).await;
+    }
+
+    /// Arrêt pour inactivité sans course avec un nouveau tour : sous le verrou
+    /// `start` (celui d'`ensure_conn`), la connexion n'est retirée que si la
+    /// session est toujours inactive depuis `idle`. Un `begin` arrivé ensuite
+    /// redémarre une sandbox après cet arrêt.
+    pub async fn stop_if_idle(self: &Arc<Self>, state: &AppState, idle: Duration, reason: &str) -> bool {
+        let _g = self.start.lock().await;
+        let conn = {
+            let mut st = self.st.lock().expect("verrou");
+            let still = st.conn.is_some()
+                && st.turn.is_none()
+                && st.verify.is_none()
+                && st.requests.is_empty()
+                && st.last_activity.elapsed() >= idle;
+            if !still {
+                return false;
+            }
+            st.generation += 1;
+            st.conn.take()
+        };
+        self.finish_stop(state, conn, reason).await;
+        true
+    }
+
+    /// Tour de mémoire de fin de session, lancé à la place de l'arrêt pour
+    /// inactivité ; l'appelant n'attend pas sa fin.
+    pub fn start_memory_turn(self: &Arc<Self>, state: &AppState) -> bool {
+        let base = self.st.lock().expect("verrou").last_activity;
+        let user = json!({
+            "type": "userMessage",
+            "id": format!("ex-{}", uuid::Uuid::new_v4()),
+            "text": crate::memory::END_PROMPT,
+            "images": [],
+            "origin": "memory",
+        });
+        if self.begin(user, "memory").is_err() {
+            return false;
+        }
+        self.st.lock().expect("verrou").memory_idle_base = Some(base);
+        let (me, st) = (self.clone(), state.clone());
+        tokio::spawn(async move { me.run_turn(st, crate::memory::END_PROMPT.to_string(), Vec::new()).await });
+        true
+    }
+
+    /// Interrompt le tour de mémoire en cours pour laisser passer Michael (ou
+    /// une autre session) et attend sa fin (5 s au plus). `true` : plus de tour.
+    pub async fn preempt_memory_turn(&self) -> bool {
+        if self.turn_origin() != Some("memory") {
+            return !self.running();
+        }
+        // Michael prend la main : l'inactivité repart de maintenant.
+        self.st.lock().expect("verrou").memory_idle_base = None;
+        if let Err(e) = self.interrupt().await {
+            tracing::warn!("session {} : interruption du tour de mémoire : {e}", self.id);
+        }
+        for _ in 0..50 {
+            if !self.running() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        !self.running()
+    }
+
+    /// Suite commune des arrêts : sandbox, terminaux, tour resté ouvert.
+    async fn finish_stop(self: &Arc<Self>, state: &AppState, conn: Option<Conn>, reason: &str) {
         let had = conn.is_some();
         if let Some(c) = conn {
             c.client.close();
@@ -456,7 +572,18 @@ impl Hub {
             self.fail_turn(&state, &e).await;
             return;
         }
-        let note = sessions::row(&state, &self.id).await.ok().and_then(|r| r.pending_note);
+        let row = sessions::row(&state, &self.id).await.ok();
+        let note = row.as_ref().and_then(|r| r.pending_note.clone());
+        // Mémoire modifiée depuis le dernier envoi : bloc joint en tête du tour.
+        let mut refresh = None;
+        if let Some(r) = &row
+            && let Ok(t) = workspace::topic(&state, r.topic_id).await
+        {
+            let (bloc, sha) = crate::memory::block(&state, &t.project_slug, &t.slug);
+            if r.memory_seen.as_deref() != Some(sha.as_str()) {
+                refresh = Some((bloc, sha));
+            }
+        }
         if let Some(n) = &note
             && let Some(t) = self.st.lock().expect("verrou").turn.as_mut()
         {
@@ -483,6 +610,9 @@ impl Hub {
             .await
             .unwrap_or_else(|_| "auto".into());
         let mut input = Vec::new();
+        if let Some((bloc, _)) = &refresh {
+            input.push(types::text_input(&crate::memory::refresh_text(bloc)));
+        }
         if let Some(n) = &note {
             input.push(types::text_input(n));
         }
@@ -492,7 +622,13 @@ impl Hub {
         for name in &images {
             input.push(types::local_image(&format!("{attachments}/{name}")));
         }
-        let policy = types::approval_policy(&approval);
+        // Tour de mémoire : toujours prudent (commandes et fichiers refusés par
+        // le pont), même en mode auto.
+        let policy = if self.turn_origin() == Some("memory") {
+            "untrusted"
+        } else {
+            types::approval_policy(&approval)
+        };
         match client
             .request("turn/start", types::turn_start(&thread_id, input, policy))
             .await
@@ -500,6 +636,9 @@ impl Hub {
             Ok(r) => {
                 if let Some(tid) = types::turn_id(&r) {
                     self.adopt_turn(&state, tid).await;
+                }
+                if let Some((_, sha)) = &refresh {
+                    let _ = sessions::set_session_field(&state, &self.id, "memory_seen", Some(sha)).await;
                 }
                 if note.is_some() {
                     let _ = sessions::set_session_field(&state, &self.id, "pending_note", None).await;
@@ -562,6 +701,7 @@ impl Hub {
             self.emit("request_resolved", json!({ "rid": r.rid }));
         }
         let Some(t) = turn else { return };
+        let memory_turn = t.origin == "memory";
         let tid = t.id.clone().unwrap_or_else(|| format!("ex-{}", uuid::Uuid::new_v4()));
         let error = state.masker().mask(error).into_owned();
         let _ = sessions::finish_turn(
@@ -585,7 +725,11 @@ impl Hub {
             "turn_stored",
             json!({"turn": {"id": tid, "status": "failed", "error": error, "usage": t.usage, "origin": t.origin}}),
         );
-        self.touch();
+        if memory_turn {
+            self.end_memory_turn();
+        } else {
+            self.touch();
+        }
         if let Some(pre) = t.snap_pre {
             let (me, st) = (self.clone(), state.clone());
             tokio::spawn(async move {
@@ -637,6 +781,8 @@ impl Hub {
         {
             Ok(_) => {
                 let _ = sessions::set_session_field(state, &self.id, "pending_revert", None).await;
+                // Le tour retiré pouvait porter le dernier envoi du bloc mémoire.
+                let _ = sessions::set_session_field(state, &self.id, "memory_seen", None).await;
                 sessions::emit_session(state, &self.id).await;
                 Ok(())
             }
@@ -809,10 +955,14 @@ impl Hub {
             return Err(fail(e.to_string()).await);
         }
         let policy = types::approval_policy(&session.approval);
+        let (instructions, memory_sha) = crate::memory::instructions(state, &topic.project_slug, &topic.slug);
         let mut lost_context = false;
         let thread_id = match &session.thread_id {
             Some(tid) => match client
-                .request("thread/resume", types::thread_resume(tid, &handle.cwd, policy))
+                .request(
+                    "thread/resume",
+                    types::thread_resume(tid, &handle.cwd, policy, Some(&instructions)),
+                )
                 .await
             {
                 Ok(_) => {
@@ -834,7 +984,7 @@ impl Hub {
             match client
                 .request(
                     "thread/start",
-                    types::thread_start(&handle.cwd, policy, Some(crate::verify::DEVELOPER_INSTRUCTIONS)),
+                    types::thread_start(&handle.cwd, policy, Some(&instructions)),
                 )
                 .await
             {
@@ -842,6 +992,8 @@ impl Hub {
                     Some(t) => {
                         let t = t.to_string();
                         let _ = sessions::set_thread(state, &self.id, &t).await;
+                        // Le bloc est dans le message developer du nouveau fil.
+                        let _ = sessions::set_session_field(state, &self.id, "memory_seen", Some(&memory_sha)).await;
                         // Nouveau fil : plus rien à retirer chez Codex.
                         let _ = sessions::set_session_field(state, &self.id, "pending_revert", None).await;
                         sessions::emit_session(state, &self.id).await;
@@ -864,6 +1016,8 @@ impl Hub {
                 preset: label,
             });
             st.last_activity = Instant::now();
+            st.last_read.clear();
+            st.conn_memory_sha = Some(memory_sha);
             st.generation
         };
         let detail =
@@ -956,6 +1110,26 @@ impl Hub {
             }
             return;
         }
+        // Tour de mémoire : personne devant l'écran, le pont refuse lui-même.
+        let memory = {
+            let st = self.st.lock().expect("verrou");
+            st.turn
+                .as_ref()
+                .is_some_and(|t| t.origin == "memory")
+                .then(|| st.conn.as_ref().map(|c| c.client.clone()))
+                .flatten()
+        };
+        if let Some(c) = memory {
+            let answer = if method == "item/tool/requestUserInput" {
+                json!({"answers": {}})
+            } else {
+                json!({"decision": "decline"})
+            };
+            if let Err(e) = c.respond(&id, answer) {
+                tracing::warn!("session {} : réponse à {method} : {e}", self.id);
+            }
+            return;
+        }
         state.masker().mask_json(&mut params);
         let rid = rid_of(&id);
         {
@@ -1035,6 +1209,14 @@ impl Hub {
                         }
                     }
                 }
+                if method == "item/completed" && item["type"] == "contextCompaction" {
+                    // Codex vient de refaire son message developer avec les
+                    // instructions de la connexion (essai E9).
+                    let sha = self.st.lock().expect("verrou").conn_memory_sha.clone();
+                    if let Some(sha) = sha {
+                        let _ = sessions::set_session_field(state, &self.id, "memory_seen", Some(&sha)).await;
+                    }
+                }
                 if method == "item/completed" {
                     let kind = item["type"].as_str().unwrap_or("unknown").to_string();
                     if let Err(e) = sessions::store_item(state, &self.id, tid.as_deref(), &iid, &kind, &item).await {
@@ -1077,8 +1259,12 @@ impl Hub {
         let error = turn["error"]["message"].as_str().map(str::to_string);
         let (t, reqs) = {
             let mut st = self.st.lock().expect("verrou");
-            st.last_activity = Instant::now();
-            (st.turn.take(), std::mem::take(&mut st.requests))
+            let t = st.turn.take();
+            st.last_activity = match &t {
+                Some(t) if t.origin == "memory" => st.memory_idle_base.take().unwrap_or_else(Instant::now),
+                _ => Instant::now(),
+            };
+            (t, std::mem::take(&mut st.requests))
         };
         for r in reqs {
             self.emit("request_resolved", json!({ "rid": r.rid }));

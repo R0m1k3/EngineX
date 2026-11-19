@@ -15,9 +15,11 @@ fn toml_str(s: &str) -> String {
 }
 
 /// Texte du `config.toml` (sans la clé, lue dans `ENGINEX_API_KEY`).
-pub fn render(model: &str, ctx: u64, base_url: &str) -> String {
+/// Config Codex ; `mcp` : URL du serveur MCP d'EngineX (sandboxes seulement,
+/// il exige leur clé interne).
+pub fn render(model: &str, ctx: u64, base_url: &str, mcp: Option<&str>) -> String {
     let compact = (ctx as f64 * 0.8).round() as u64;
-    format!(
+    let mut out = format!(
         "model = {model}\n\
          model_provider = \"enginex\"\n\
          model_context_window = {ctx}\n\
@@ -32,7 +34,19 @@ pub fn render(model: &str, ctx: u64, base_url: &str) -> String {
          env_key = \"{ENV_KEY}\"\n",
         model = toml_str(model),
         base = toml_str(base_url),
-    )
+    );
+    if let Some(url) = mcp {
+        // `default_tools_approval_mode` doit rester dans la section du serveur :
+        // sans elle, chaque appel d'outil demande une approbation en mode prudent.
+        out.push_str(&format!(
+            "\n[mcp_servers.enginex]\n\
+             url = {}\n\
+             bearer_token_env_var = \"{ENV_KEY}\"\n\
+             default_tools_approval_mode = \"approve\"\n",
+            toml_str(url)
+        ));
+    }
+    out
 }
 
 pub async fn codex_config(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
@@ -42,7 +56,7 @@ pub async fn codex_config(State(state): State<AppState>, headers: HeaderMap) -> 
     let base_url = format!("{}/v1", origin(&state, &headers));
     Ok(Json(json!({
         "base_url": base_url,
-        "toml": render(&p.name, s.ctx, &base_url),
+        "toml": render(&p.name, s.ctx, &base_url, None),
         "env_key": ENV_KEY,
     })))
 }

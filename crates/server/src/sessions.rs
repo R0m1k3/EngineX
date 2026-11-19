@@ -512,7 +512,8 @@ pub async fn post_turn(
         return Err(ApiError::BadRequest);
     }
     let hub = bridge::hub(&state, &id);
-    if hub.running() {
+    // Un tour de mémoire de fin de session cède la place au message de Michael.
+    if hub.running() && !hub.preempt_memory_turn().await {
         return Err(ApiError::TurnInProgress);
     }
     if hub.verifying() {
@@ -571,6 +572,14 @@ async fn make_room(state: &AppState, for_id: &str) -> Result<(), ApiError> {
         .filter(|h| h.id != for_id && h.has_conn())
         .collect();
     if live.len() < max {
+        return Ok(());
+    }
+    // Un tour de mémoire passe avant les sandboxes inactives : interrompu,
+    // puis sa sandbox arrêtée.
+    if let Some(h) = live.iter().find(|h| h.turn_origin() == Some("memory")) {
+        tracing::info!("limite de sandboxes : tour de mémoire de {} interrompu", h.id);
+        h.preempt_memory_turn().await;
+        h.stop_conn(state, "place libérée pour une autre session").await;
         return Ok(());
     }
     let oldest = live

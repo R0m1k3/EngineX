@@ -210,6 +210,7 @@ async fn as_env(scenario: &str, fake_env: &str, vision: bool) -> AsEnv {
             p["name"].as_str().unwrap(),
             p["settings"]["ctx"].as_u64().unwrap(),
             &format!("{base}/v1"),
+            None,
         ),
     )
     .unwrap();
@@ -468,7 +469,7 @@ async fn appserver_resume() {
 
     let (c, mut rx) = a.launch().await;
     let r = c
-        .request("thread/resume", types::thread_resume(&th, &a.cwd(), "never"))
+        .request("thread/resume", types::thread_resume(&th, &a.cwd(), "never", None))
         .await
         .expect("V3 faux : thread/resume refusé");
     assert_eq!(types::thread_id(&r), Some(th.as_str()));
