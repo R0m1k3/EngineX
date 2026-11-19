@@ -95,7 +95,10 @@ async fn mtp_moe_and_speed() {
             v["state"]["state"] == "ready" && v["state"]["preset_id"] == id
         })
         .await;
-    assert_eq!(eng["caps"], json!({"fit": true, "spec": true, "moe": true, "budget": true}));
+    assert_eq!(
+        eng["caps"],
+        json!({"fit": true, "spec": true, "moe": true, "budget": true})
+    );
     let logs = e.get("/api/engine/logs").await.body;
     let argv = logs["lines"]
         .as_array()
