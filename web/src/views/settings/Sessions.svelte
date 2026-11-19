@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { stamp } from '../../lib/ui/format';
   import Button from '../../lib/ui/Button.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import Switch from '../../lib/ui/Switch.svelte';
@@ -64,7 +65,7 @@
     }
   }
 
-  const date = (t: number | null) => (t ? new Date(t * 1000).toLocaleString('fr-FR') : 'jamais');
+  const date = (t: number | null) => (t ? stamp(t) : 'jamais');
   load();
 </script>
 

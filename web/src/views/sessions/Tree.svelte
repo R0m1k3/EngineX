@@ -20,10 +20,9 @@
   import StatusDot from '../../lib/ui/StatusDot.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import { tooltip } from '../../lib/ui/tooltip';
-  import { confirmDialog } from '../../lib/ui/dialog.svelte';
+  import { confirmDialog, promptDialog } from '../../lib/ui/dialog.svelte';
   import { toast } from '../../lib/ui/toast.svelte';
-  import PopMenu from './PopMenu.svelte';
-  import { ask } from './ask.svelte';
+  import Menu from '../../lib/ui/Menu.svelte';
   import { screen } from './phone.svelte';
 
   let { selected, version, open, onNew, projects = $bindable([]) }: {
@@ -92,11 +91,11 @@
   };
 
   async function newProject() {
-    const name = await ask({ title: 'Nouveau projet', label: 'Nom du projet', confirm: 'Créer le projet' });
+    const name = await promptDialog('Nom du projet', { title: 'Nouveau projet', confirm: 'Créer le projet' });
     if (name) act(() => createProject(name));
   }
   async function newTopic(p: Project) {
-    const name = await ask({ title: `Nouveau topic dans « ${p.name} »`, label: 'Nom du topic', confirm: 'Créer le topic' });
+    const name = await promptDialog('Nom du topic', { title: `Nouveau topic dans « ${p.name} »`, confirm: 'Créer le topic' });
     if (name) act(() => createTopic(p.id, name));
   }
   let creating = $state<number | null>(null);
@@ -121,7 +120,7 @@
     }
   }
   async function rename(s: Session) {
-    const title = await ask({ title: 'Renommer la session', label: 'Titre', value: s.title, confirm: 'Renommer' });
+    const title = await promptDialog('Titre', { title: 'Renommer la session', value: s.title, confirm: 'Renommer' });
     if (title) act(() => patchSession(s.id, { title }));
   }
   async function remove(s: Session) {
@@ -254,7 +253,7 @@
   </div>
 </aside>
 
-<PopMenu bind:open={menuOpen} anchor={menuAnchor} items={menuItems} label="Actions de la session" />
+<Menu side="bottom-end" bind:open={menuOpen} anchor={menuAnchor} items={menuItems} label="Actions de la session" />
 
 <style>
   .tree { display: flex; flex-direction: column; min-height: 0; height: 100%; background: var(--panel); }
@@ -292,7 +291,7 @@
   .proj:first-child { margin-top: 0; }
   .topic { padding-left: 28px; color: var(--muted); }
   .topic:hover, .proj:hover { color: var(--text); }
-  .n { font-size: var(--fs-count); color: var(--muted); background: var(--raised); border-radius: 8px; padding: 0 6px; }
+  .n { font-size: var(--fs-count); color: var(--muted); background: var(--raised); border-radius: var(--r-sm); padding: 0 6px; }
   .tools { display: flex; gap: 2px; opacity: 0; }
   .row-h:hover .tools, .row-h:focus-within .tools { opacity: 1; }
 

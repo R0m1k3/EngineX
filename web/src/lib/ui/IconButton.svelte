@@ -1,12 +1,13 @@
 <script lang="ts">
   // Bouton icône seule, sans fond au repos (barres d'outils, barre d'état).
   // `label` = aria-label + infobulle ; `count` = pastille (non lues…) ; `pressed` = état bascule.
-  import type { HTMLButtonAttributes } from 'svelte/elements';
+  import type { HTMLAnchorAttributes, HTMLButtonAttributes } from 'svelte/elements';
   import Icon from './Icon.svelte';
   import { tooltip, type TooltipSide } from './tooltip';
   import type { IconType } from './types';
 
-  type Props = Omit<HTMLButtonAttributes, 'children'> & {
+  // Avec `href`, les attributs restants (target, rel, download…) vont à l'<a>.
+  type Props = Omit<HTMLButtonAttributes, 'children'> & Pick<HTMLAnchorAttributes, 'target' | 'rel' | 'download' | 'hreflang'> & {
     icon: IconType;
     label: string;
     size?: 'sm' | 'md' | 'lg';
@@ -41,7 +42,7 @@
 {/snippet}
 
 {#if href}
-  <a {href} class="ib {size} {cls}" aria-label={count ? `${label} (${count})` : label} use:tooltip={{ text: label, side: tip, kbd }}>{@render inner()}</a>
+  <a {href} class="ib {size} {cls}" aria-label={count ? `${label} (${count})` : label} use:tooltip={{ text: label, side: tip, kbd }} {...rest as HTMLAnchorAttributes}>{@render inner()}</a>
 {:else}
   <button
     {type}
@@ -85,7 +86,7 @@
     border-radius: 8px;
     background: var(--accent-fill);
     color: var(--accent-ink);
-    font-size: 11px;
+    font-size: var(--fs-count);
     font-weight: 600;
     line-height: 16px;
     text-align: center;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { octets } from './fmt';
+  import { int, octets } from '../../lib/ui/format';
   import HardDrive from '@lucide/svelte/icons/hard-drive';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import Button from '../../lib/ui/Button.svelte';
@@ -7,7 +7,6 @@
   import EmptyState from '../../lib/ui/EmptyState.svelte';
   import { confirmDialog } from '../../lib/ui/dialog.svelte';
   import { toast } from '../../lib/ui/toast.svelte';
-  import { int } from '../../lib/ui/format';
   import Note from '../settings/Note.svelte';
   import { models, deleteModel, message, type LocalModel } from '../../lib/api';
 

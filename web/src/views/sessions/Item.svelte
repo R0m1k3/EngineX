@@ -164,7 +164,7 @@
     display: flex;
     align-items: center;
     gap: var(--s2);
-    min-height: 30px;
+    min-height: 32px;
     cursor: pointer;
     font-size: var(--fs-sm);
     color: var(--muted);
@@ -200,7 +200,7 @@
     overflow-wrap: anywhere;
   }
   .none { margin: 0; padding: var(--s2) var(--s4); border-top: 1px solid var(--line); font-size: var(--fs-sm); color: var(--faint); }
-  .fh { display: flex; align-items: center; gap: var(--s2); padding: 0 var(--s3); min-height: 34px; border-top: 1px solid var(--line); font-size: var(--fs-sm); background: var(--panel); }
+  .fh { display: flex; align-items: center; gap: var(--s2); padding: 0 var(--s3); min-height: 36px; border-top: 1px solid var(--line); font-size: var(--fs-sm); background: var(--panel); }
   .fh code { flex: 1; }
   .diff { white-space: pre; overflow-wrap: normal; padding: var(--s2) 0; color: var(--text); }
   .diff span { display: inline-block; min-width: 100%; padding: 0 var(--s4); }

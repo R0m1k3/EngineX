@@ -12,7 +12,6 @@
   import Thread from './sessions/Thread.svelte';
   import Side from './sessions/Side.svelte';
   import NewSession from './sessions/NewSession.svelte';
-  import AskHost from './sessions/AskHost.svelte';
   import { screen, stored, store } from './sessions/phone.svelte';
 
   let { sub }: { sub: string } = $props();
@@ -201,16 +200,14 @@
 {/if}
 
 <NewSession bind:open={creating} {projects} topic={suggested} created={(id) => { version++; open(id); }} />
-<AskHost />
 
 <style>
-  /* Bord à bord : la vue annule le retrait de la coquille et prend toute la hauteur de travail. */
+  /* Vue `fill` (shell/pages.ts) : toute la hauteur de travail, défilement dans les volets. */
   .sessions {
     position: relative;
     display: grid;
     grid-template-columns: var(--tree-w) minmax(0, 1fr);
-    margin: calc(-1 * var(--s6));
-    height: calc(100dvh - var(--status-h));
+    flex: 1;
     min-height: 0;
     background: var(--bg);
   }
@@ -263,7 +260,7 @@
   }
 
   /* Téléphone : liste plein écran, puis fil plein écran par-dessus la coquille. */
-  .sessions.phone { display: block; margin: 0; height: auto; background: none; }
+  .sessions.phone { display: block; background: none; }
   .phone .tree-slot { border-right: 0; }
   .main.full {
     position: fixed;

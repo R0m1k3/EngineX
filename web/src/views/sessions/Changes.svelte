@@ -118,7 +118,7 @@
   ul { list-style: none; margin: 0; padding: var(--s1) 0; border-top: 1px solid var(--line); }
   li.on { background: var(--panel); }
   .line { display: flex; align-items: center; gap: var(--s2); min-height: 32px; padding: 0 var(--s2) 0 var(--s3); }
-  .letter { font-family: var(--mono); font-size: 13px; width: 16px; text-align: center; flex: none; color: var(--muted); }
+  .letter { font-family: var(--mono); font-size: var(--fs-count); width: 16px; text-align: center; flex: none; color: var(--muted); }
   .s-A { color: var(--add-fg); }
   .s-M, .s-T { color: var(--warn); }
   .s-D { color: var(--del-fg); }

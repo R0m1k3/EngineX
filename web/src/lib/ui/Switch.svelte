@@ -31,9 +31,10 @@
     display: inline-flex;
     align-items: center;
     gap: var(--s2);
-    height: 32px;
-    min-height: 0;
+    min-height: 32px;
     padding: 0;
+    text-align: left;
+    white-space: normal;
     border: 0;
     background: none;
     color: var(--text);

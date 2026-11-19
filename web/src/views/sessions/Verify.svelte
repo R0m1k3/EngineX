@@ -70,7 +70,7 @@
   .verify.v-passed { border-left-color: var(--accent); }
   .verify.v-failed, .verify.v-error { border-left-color: var(--danger); }
   .verify.v-running { border-left-color: var(--warn); }
-  summary { list-style: none; display: flex; gap: var(--s2); align-items: center; min-height: 30px; cursor: pointer; color: var(--text); flex-wrap: wrap; }
+  summary { list-style: none; display: flex; gap: var(--s2); align-items: center; min-height: 32px; cursor: pointer; color: var(--text); flex-wrap: wrap; }
   summary::-webkit-details-marker { display: none; }
   summary :global(.chev) { color: var(--faint); transition: transform 0.12s; flex: none; }
   .verify[open] > summary :global(.chev) { transform: rotate(90deg); }

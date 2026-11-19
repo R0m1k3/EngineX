@@ -46,8 +46,8 @@
   import { tooltip } from '../../lib/ui/tooltip';
   import { confirmDialog } from '../../lib/ui/dialog.svelte';
   import { toast } from '../../lib/ui/toast.svelte';
-  import PopMenu from './PopMenu.svelte';
-  import { ask } from './ask.svelte';
+  import Menu from '../../lib/ui/Menu.svelte';
+  import { promptDialog } from '../../lib/ui/dialog.svelte';
   import { screen } from './phone.svelte';
 
   let { id, changed, panel, togglePanel, sideOpen }: {
@@ -453,7 +453,7 @@
   };
 
   async function rename() {
-    const t = await ask({ title: 'Renommer la session', label: 'Titre', value: session?.title ?? '', confirm: 'Renommer' });
+    const t = await promptDialog('Titre', { title: 'Renommer la session', value: session?.title ?? '', confirm: 'Renommer' });
     if (!t) return;
     try {
       await patchSession(id, { title: t });
@@ -550,7 +550,7 @@
       <button class="chip" onclick={() => (settings = true)}>{session?.approval === 'prudent' ? 'Prudent' : 'Automatique'}</button>
       {#if session?.copy_branch}<span class="chip static"><Icon icon={GitBranch} size={14} />{session.copy_branch}</span>{/if}
     </div>
-    <PopMenu bind:open={moreOpen} anchor={moreBtn} items={moreItems} label="Outils et réglages de la session" />
+    <Menu side="bottom-end" bind:open={moreOpen} anchor={moreBtn} items={moreItems} label="Outils et réglages de la session" />
     <Sheet bind:open={settings} title="Réglages de la session">
       <div class="settings">{@render controls(true)}</div>
     </Sheet>
@@ -755,7 +755,7 @@
   .msg-actions { align-self: flex-end; margin-top: calc(-1 * var(--s3)); opacity: 0; transition: opacity 0.12s; }
   :global(.user:hover) + .msg-actions, .msg-actions:hover, .msg-actions:focus-within { opacity: 1; }
   .auto { border-left: 2px solid var(--warn); padding-left: var(--s3); font-size: var(--fs-sm); color: var(--muted); }
-  .auto summary { list-style: none; display: flex; align-items: center; gap: var(--s2); min-height: 30px; cursor: pointer; }
+  .auto summary { list-style: none; display: flex; align-items: center; gap: var(--s2); min-height: 32px; cursor: pointer; }
   .auto summary::-webkit-details-marker { display: none; }
   .auto summary:hover { color: var(--text); }
   .auto :global(.chev) { color: var(--faint); transition: transform 0.12s; flex: none; }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { octets } from './fmt';
+  import { gb, int, octets } from '../../lib/ui/format';
   import type { Snippet } from 'svelte';
   import Save from '@lucide/svelte/icons/save';
   import ExternalLink from '@lucide/svelte/icons/external-link';
@@ -13,7 +13,6 @@
   import Icon from '../../lib/ui/Icon.svelte';
   import { confirmDialog } from '../../lib/ui/dialog.svelte';
   import { toast } from '../../lib/ui/toast.svelte';
-  import { gb, int } from '../../lib/ui/format';
   import type { GaugeRow, Tone } from '../../lib/ui/types';
   import Section from '../settings/Section.svelte';
   import Note from '../settings/Note.svelte';

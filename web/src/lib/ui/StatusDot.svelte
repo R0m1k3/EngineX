@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Point d'état 8 px : ok = prêt/actif, warn = attend ton accord, off = au repos, err = erreur.
+  // Point d'état 8 px : ok = prêt/actif, warn = attend votre accord, off = au repos, err = erreur.
   import type { DotKind } from './types';
   let { kind = 'ok', label }: { kind?: DotKind; label?: string } = $props();
 </script>

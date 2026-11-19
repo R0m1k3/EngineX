@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { stamp } from '../../lib/ui/format';
   import {
     gitComment,
     gitCreatePull,
@@ -97,7 +98,7 @@
       await open(r.number);
     });
 
-  const when = (s: string) => (s ? new Date(s).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '');
+  const when = (s: string) => (s ? stamp(Date.parse(s) / 1000) : '');
   const STATE: Record<string, string> = { open: 'ouverte', closed: 'fermée', merged: 'fusionnée' };
   const icon = (p: PullRequest) =>
     p.state === 'merged' ? GitMerge : p.state === 'closed' ? GitPullRequestClosed : p.draft ? GitPullRequestDraft : GitPullRequest;
@@ -160,7 +161,7 @@
             <span>{detail.author}, {when(detail.created_at)}</span>
           </p>
         </div>
-        <a class="ext" href={detail.url} target="_blank" rel="noopener noreferrer">Ouvrir sur {forgeName}<Icon icon={ExternalLink} size={16} /></a>
+        <Button variant="ghost" class="ext" iconEnd={ExternalLink} href={detail.url} target="_blank" rel="noopener noreferrer">Ouvrir sur {forgeName}</Button>
       </header>
 
       {#if detail.body}<div class="sec md-body"><Markdown text={detail.body} /></div>{/if}
@@ -262,8 +263,7 @@
   .d-h { display: flex; align-items: flex-start; gap: var(--s3); padding: var(--s4) var(--s4) var(--s4) var(--s6); border-bottom: 1px solid var(--line); }
   .d-h :global(.back) { display: none; }
   .d-title { flex: 1; min-width: 0; }
-  .ext { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 32px; padding: 0 var(--s2); border-radius: var(--r); color: var(--accent); font-size: var(--fs-sm); text-decoration: none; }
-  .ext:hover { background: var(--raised); text-decoration: underline; }
+  .d-h :global(.ext) { flex: none; }
   h2 { margin: 0 0 var(--s2); font-size: var(--fs-lg); font-weight: 600; line-height: 1.35; }
   h2 .num { font-weight: 400; }
   .d-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s4); margin: 0; font-size: var(--fs-sm); color: var(--muted); }
@@ -273,7 +273,7 @@
   .merge { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); background: var(--panel); }
   .conflict { display: inline-flex; align-items: center; gap: 6px; color: var(--danger); font-size: var(--fs-sm); }
   .sec-t { display: flex; align-items: center; gap: var(--s2); margin: 0; padding: var(--s5) var(--s6) var(--s2); font-size: var(--fs-md); font-weight: 600; }
-  .count { font-size: var(--fs-count); color: var(--muted); background: var(--raised); border-radius: 8px; padding: 0 6px; line-height: 18px; font-weight: 400; font-variant-numeric: tabular-nums; }
+  .count { font-size: var(--fs-count); color: var(--muted); background: var(--raised); border-radius: var(--r-sm); padding: 0 6px; line-height: 18px; font-weight: 400; font-variant-numeric: tabular-nums; }
   .diffbox { margin: 0 var(--s6); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
   .diffbox :global(.diffv) { overflow-x: auto; }
   .comments { display: flex; flex-direction: column; gap: var(--s3); padding: 0 var(--s6) var(--s6); max-width: 820px; }
@@ -296,7 +296,7 @@
     .d-h { padding: var(--s2) var(--s4) var(--s4) 0; flex-wrap: wrap; }
     .d-h :global(.back) { display: inline-grid; }
     .d-title { flex-basis: calc(100% - 60px); }
-    .ext { margin-left: 44px; height: var(--touch); }
+    .d-h :global(.ext) { margin-left: 44px; height: var(--touch); }
     .sec, .sec-t { padding-left: var(--s4); padding-right: var(--s4); }
     .diffbox { margin: 0; border-left: 0; border-right: 0; border-radius: 0; }
     .comments { padding: 0 var(--s4) var(--s6); }

@@ -21,16 +21,18 @@ export interface PageDef {
   icon: IconType;
   /** Groupe de la barre d'activité (séparés par un filet) ; 0 = hors barre. */
   group: number;
+  /** La vue prend exactement la zone de travail et gère son propre défilement (volets). */
+  fill?: boolean;
 }
 
 export const PAGES: PageDef[] = [
   { id: 'dashboard', label: 'Tableau de bord', short: 'Accueil', icon: LayoutDashboard, group: 1 },
-  { id: 'sessions', label: 'Sessions', icon: MessageSquare, group: 1 },
+  { id: 'sessions', label: 'Sessions', icon: MessageSquare, group: 1, fill: true },
   { id: 'tasks', label: 'Tâches', icon: SquareCheck, group: 1 },
   { id: 'agents', label: 'Agents', icon: Bot, group: 1 },
   { id: 'crons', label: 'Crons', icon: Clock, group: 1 },
-  { id: 'files', label: 'Fichiers', icon: Folder, group: 2 },
-  { id: 'git', label: 'Git', icon: GitBranch, group: 2 },
+  { id: 'files', label: 'Fichiers', icon: Folder, group: 2, fill: true },
+  { id: 'git', label: 'Git', icon: GitBranch, group: 2, fill: true },
   { id: 'models', label: 'Modèles', icon: Box, group: 3 },
   { id: 'system', label: 'Système', icon: Cpu, group: 3 },
   { id: 'memory', label: 'Mémoire', icon: BookOpen, group: 4 },

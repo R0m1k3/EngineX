@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { octets } from '../../lib/ui/format';
   import { tree, fileText, fileUrl, downloadUrl, message, type TreeEntry } from '../../lib/api';
   import Markdown from './Markdown.svelte';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
@@ -70,7 +71,7 @@
     }
   }
 
-  const size = (n: number) => (n < 1024 ? `${n} o` : n < 1 << 20 ? `${(n / 1024).toFixed(0)} Kio` : `${(n / (1 << 20)).toFixed(1)} Mio`);
+  const size = octets;
 
   load('');
 </script>

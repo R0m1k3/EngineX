@@ -3,12 +3,13 @@
   // Tailles sm 28 / md 32 / lg 44 (cible tactile). `href` en fait un lien.
   // Sans texte (`children` absent), `label` est obligatoire : aria-label + infobulle.
   import type { Snippet } from 'svelte';
-  import type { HTMLButtonAttributes } from 'svelte/elements';
+  import type { HTMLAnchorAttributes, HTMLButtonAttributes } from 'svelte/elements';
   import Icon from './Icon.svelte';
   import { tooltip } from './tooltip';
   import type { ButtonSize, ButtonVariant, IconType } from './types';
 
-  type Props = Omit<HTMLButtonAttributes, 'children'> & {
+  // Avec `href`, les attributs restants (target, rel, download…) vont à l'<a>.
+  type Props = Omit<HTMLButtonAttributes, 'children'> & Pick<HTMLAnchorAttributes, 'target' | 'rel' | 'download' | 'hreflang'> & {
     variant?: ButtonVariant;
     size?: ButtonSize;
     icon?: IconType;
@@ -53,6 +54,7 @@
     class:full
     aria-label={only ? label : undefined}
     use:tooltip={only ? label : null}
+    {...rest as HTMLAnchorAttributes}
   >{@render inner()}</a>
 {:else}
   <button

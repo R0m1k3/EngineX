@@ -265,7 +265,7 @@
     flex: 1;
     min-width: 0;
     min-height: var(--touch);
-    padding: 10px var(--s4);
+    padding: var(--s3) var(--s4);
     margin: 0 var(--s1);
     border: 1px solid var(--line-strong);
     border-radius: 22px;

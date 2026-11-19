@@ -37,4 +37,5 @@ export interface MenuItem {
   href?: string;
   onclick?: () => void;
   danger?: boolean;
+  disabled?: boolean;
 }

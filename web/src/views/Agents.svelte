@@ -9,8 +9,8 @@
     confirmDialog, toast, int,
   } from '../lib/ui';
   import type { DotKind, Tone } from '../lib/ui';
-  import Page from './ops/Page.svelte';
-  import { ahead, since, stamp, span, scheduleText } from './ops/time';
+  import Page from '../lib/ui/Page.svelte';
+  import { ahead, since, stamp, span, scheduleText } from '../lib/ui/format';
   import Plus from '@lucide/svelte/icons/plus';
   import Play from '@lucide/svelte/icons/play';
   import Square from '@lucide/svelte/icons/square';
@@ -293,7 +293,7 @@
               <h2>{a.name}</h2>
               <div class="badges">
                 <Badge tone={dotOf(a) === 'err' ? 'danger' : dotOf(a) === 'warn' ? 'warn' : dotOf(a) === 'off' ? 'neutral' : 'ok'} dot>{stateOf(a)}</Badge>
-                {#if a.approval === 'prudent'}<Badge title="Les commandes et fichiers sensibles attendent ton accord (1 h au plus)">prudent</Badge>{/if}
+                {#if a.approval === 'prudent'}<Badge title="Les commandes et fichiers sensibles attendent votre accord (1 h au plus)">prudent</Badge>{/if}
                 <Badge>{a.topic ?? '?'}</Badge>
               </div>
             </div>
@@ -329,7 +329,7 @@
               {#if a.enabled && a.next_run}<div class="faint">prochain : {stamp(a.next_run)}, {ahead(a.next_run).split(', ')[1] ?? ''}</div>{/if}
             </dd>
             <dt>Modèle</dt><dd>{presetName(a.preset_id)}</dd>
-            <dt>Approbation</dt><dd>{a.approval === 'prudent' ? 'prudent : demande ton accord, 1 h au plus' : 'auto : agit seul dans sa sandbox'}</dd>
+            <dt>Approbation</dt><dd>{a.approval === 'prudent' ? 'prudent : demande votre accord, 1 h au plus' : 'auto : agit seul dans sa sandbox'}</dd>
             <dt>Délai max</dt><dd>{span(a.timeout_s)}</dd>
             <dt>Résultat</dt><dd>{a.notify ? 'poussé même réussi' : 'poussé seulement en cas d’échec'}</dd>
             <dt>Rôle</dt><dd><pre class="body">{a.role}</pre></dd>
@@ -373,7 +373,7 @@
             <p class="faint small">Pas encore de départ.</p>
           {/if}
         {:else}
-          <div class="pick"><EmptyState icon={Bot} title="Choisis un agent" text="Son rôle, son budget du jour et ses derniers départs s’affichent ici." /></div>
+          <div class="pick"><EmptyState icon={Bot} title="Choisissez un agent" text="Son rôle, son budget du jour et ses derniers départs s’affichent ici." /></div>
         {/if}
       </div>
     </div>
@@ -443,7 +443,7 @@
       <div class="field">
         <span class="lbl">Approbation</span>
         <Segmented label="Approbation" bind:value={form.approval} options={[{ value: 'auto', label: 'Auto' }, { value: 'prudent', label: 'Prudent' }]} />
-        <span class="help">{form.approval === 'auto' ? 'Agit seul dans sa sandbox.' : 'Demande ton accord (fil et push) pour les commandes et fichiers sensibles, 1 h au plus.'}</span>
+        <span class="help">{form.approval === 'auto' ? 'Agit seul dans sa sandbox.' : 'Demande votre accord (fil et push) pour les commandes et fichiers sensibles, 1 h au plus.'}</span>
       </div>
       <div class="three">
         <Input label="Délai max" unit="s" type="number" min={60} max={7200} bind:value={form.timeout_s} />
@@ -466,7 +466,7 @@
   .err-line { margin: 0; padding: var(--s2) var(--s5); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }
   .pad { padding: var(--s5); }
 
-  .split { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); flex: 1; min-height: calc(100dvh - var(--status-h) - 49px); }
+  .split { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); flex: 1; }
   .master { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
   .rows { list-style: none; margin: 0; padding: 0; }
   .rows li { border-bottom: 1px solid var(--line); }

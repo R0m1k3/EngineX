@@ -60,5 +60,8 @@
   }
   a:hover, button:hover { color: var(--text); }
   .on { color: var(--text); border-bottom-color: var(--accent); }
-  .n { font-size: 12px; color: var(--muted); background: var(--raised); border-radius: 8px; padding: 0 6px; line-height: 18px; font-variant-numeric: tabular-nums; }
+  @media (max-width: 767px) {
+    a, button { height: var(--touch); }
+  }
+  .n { font-size: var(--fs-count); color: var(--muted); background: var(--raised); border-radius: var(--r-sm); padding: 0 6px; line-height: 18px; font-variant-numeric: tabular-nums; }
 </style>

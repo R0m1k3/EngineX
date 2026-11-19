@@ -82,7 +82,9 @@
   .legend i { width: 12px; height: 10px; border-radius: var(--r-sm); display: inline-block; }
   .legend .rest { margin-left: auto; }
   @media (max-width: 767px) {
-    .grow-row { grid-template-columns: 74px 1fr 84px; }
+    /* « 14,2 / 15,9 Go » tient en entier. */
+    .grow-row { grid-template-columns: 64px 1fr minmax(116px, auto); }
+    .compact .grow-row { grid-template-columns: 56px 1fr minmax(84px, auto); }
     .lbl small { display: none; }
   }
 </style>

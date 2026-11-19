@@ -5,7 +5,7 @@
     type Board, type Task, type TaskStatus,
   } from '../lib/api';
   import { Button, Input, Select, Textarea, Dialog, Tabs, EmptyState, Skeleton, confirmDialog, toast, tooltip } from '../lib/ui';
-  import Page from './ops/Page.svelte';
+  import Page from '../lib/ui/Page.svelte';
   import Plus from '@lucide/svelte/icons/plus';
   import FolderPlus from '@lucide/svelte/icons/folder-plus';
   import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -251,7 +251,7 @@
               </div>
             {:else}
               {#if c.id === 'todo' && !data.tasks.length}
-                <EmptyState icon={SquareCheck} title="Aucune tâche" text="Ajoute une tâche ci-dessus. Les sessions peuvent aussi en créer avec les outils tasks_*." />
+                <EmptyState icon={SquareCheck} title="Aucune tâche" text="Ajoutez une tâche ci-dessus. Les sessions peuvent aussi en créer avec les outils tasks_*." />
               {:else}
               <p class="none">{c.id === 'todo' ? 'Rien à faire.' : c.id === 'doing' ? 'Rien en cours.' : 'Rien de fini.'}</p>
               {/if}
@@ -305,7 +305,7 @@
   .pad { padding: var(--s5); }
 
   .phone-tabs { display: none; }
-  .board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); flex: 1; min-height: calc(100dvh - var(--status-h) - 128px); border-bottom: 1px solid var(--line); }
+  .board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: var(--line); flex: 1; border-bottom: 1px solid var(--line); }
   .column { background: var(--panel); display: flex; flex-direction: column; min-height: 320px; min-width: 0; box-shadow: inset 0 0 0 2px transparent; }
   .column.target { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent-soft); }
   .col-h { display: flex; align-items: center; gap: var(--s2); margin: 0; height: 44px; padding: 0 var(--s4); font-size: var(--fs-md); font-weight: 600; }
@@ -322,7 +322,7 @@
   .title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
   .done .title { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
   .meta { display: flex; gap: var(--s2); align-items: center; font-size: var(--fs-sm); color: var(--muted); flex-wrap: wrap; }
-  .tag { padding: 0 var(--s2); height: 22px; display: inline-flex; align-items: center; border-radius: var(--r); background: var(--raised); color: var(--muted); font-size: var(--fs-xs); }
+  .tag { padding: 0 var(--s2); height: 24px; display: inline-flex; align-items: center; border-radius: var(--r); background: var(--raised); color: var(--muted); font-size: var(--fs-xs); }
   .due { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
   .due.late { color: var(--danger); }
   .ic { display: inline-flex; color: var(--faint); }

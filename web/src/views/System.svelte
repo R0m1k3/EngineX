@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { octets } from './models/fmt';
+  import { dec1, gb, octets } from '../lib/ui/format';
   import { onDestroy } from 'svelte';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import MonitorCog from '@lucide/svelte/icons/monitor-cog';
@@ -10,9 +10,8 @@
   import Card from '../lib/ui/Card.svelte';
   import Gauge from '../lib/ui/Gauge.svelte';
   import ProgressBar from '../lib/ui/ProgressBar.svelte';
-  import { gb, dec1 } from '../lib/ui/format';
   import type { GaugeRow } from '../lib/ui/types';
-  import Page from './ops/Page.svelte';
+  import Page from '../lib/ui/Page.svelte';
   import Note from './settings/Note.svelte';
   import { system, engineLogs, message, diskUsage, type SystemInfo, type DiskUsage } from '../lib/api';
 
@@ -103,7 +102,7 @@
             </tbody>
           </table>
         {:else}
-          <p class="muted">Aucune carte NVIDIA vue par nvidia-smi.</p>
+          <p class="faint">Aucune carte NVIDIA vue par nvidia-smi.</p>
         {/if}
       </Card>
 
@@ -146,7 +145,7 @@
             </tbody>
           </table>
         {:else}
-          <p class="muted">Aucun périphérique CUDA vu.</p>
+          <p class="faint">Aucun périphérique CUDA vu.</p>
         {/if}
       </Card>
 

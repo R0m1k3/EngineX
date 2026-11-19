@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { stamp } from '../lib/ui/format';
   import {
     gitBranch,
     gitCheckout,
@@ -14,7 +15,7 @@
     type GitRepo,
     type GitRepoDetail,
   } from '../lib/api';
-  import { Button, EmptyState, Icon, IconButton, Select, Tabs, confirmDialog, toast } from '../lib/ui';
+  import { Button, EmptyState, Page, Icon, IconButton, Select, Tabs, confirmDialog, promptDialog, toast } from '../lib/ui';
   import ArrowDown from '@lucide/svelte/icons/arrow-down';
   import ArrowLeft from '@lucide/svelte/icons/arrow-left';
   import ArrowUp from '@lucide/svelte/icons/arrow-up';
@@ -33,7 +34,6 @@
   import Graph from './git/Graph.svelte';
   import Diff from './git/Diff.svelte';
   import Pulls from './git/Pulls.svelte';
-  import Ask from './files/Ask.svelte';
 
   // #git/<topic>/pulls
   let { sub }: { sub: string } = $props();
@@ -47,7 +47,6 @@
   let limit = $state(300);
   /** Branche dont les actions sont dépliées. */
   let unfolded = $state('');
-  let asker = $state<ReturnType<typeof Ask> | null>(null);
 
   let parts = $derived(sub.split('/'));
   let id = $derived(Number(parts[0]) || repos?.[0]?.topic_id || 0);
@@ -103,9 +102,8 @@
   }
 
   async function newBranch() {
-    const name = await asker?.ask({
+    const name = await promptDialog(selected ? `Nom de la branche, sur ${selected.slice(0, 7)}` : 'Nom de la branche, sur HEAD', {
       title: 'Nouvelle branche',
-      label: selected ? `Nom de la branche, sur ${selected.slice(0, 7)}` : 'Nom de la branche, sur HEAD',
       confirm: 'Créer la branche',
       mono: true,
     });
@@ -124,7 +122,7 @@
     location.hash = t === 'pulls' ? `git/${topic}/pulls` : `git/${topic}`;
   }
 
-  const when = (t: number) => new Date(t * 1000).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' });
+  const when = stamp;
   const STATUS: Record<string, string> = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R', copied: 'C', typechange: 'T' };
   const letter = (s: string) => STATUS[s] ?? s.slice(0, 1).toUpperCase();
   let msgSubject = $derived(commit ? commit.message.split('\n')[0] : '');
@@ -140,21 +138,19 @@
   });
 </script>
 
-<div class="gx" class:has-detail={!!selected && tab === 'history'}>
-  <header class="gbar">
-    <h1>Git</h1>
-    {#if repos?.length}
-      <div class="repo">
+{#snippet repoPick()}
+  <div class="repo">
         <Select
           aria-label="Dépôt"
           value={id}
-          options={repos.map((r) => ({ value: r.topic_id, label: `${r.project} / ${r.topic}` }))}
+          options={(repos ?? []).map((r) => ({ value: r.topic_id, label: `${r.project} / ${r.topic}` }))}
           onchange={(e) => go(Number((e.currentTarget as HTMLSelectElement).value), tab as 'history' | 'pulls')}
-        />
-      </div>
-    {/if}
-    <span class="grow"></span>
-    {#if repo && tab === 'history'}
+    />
+  </div>
+{/snippet}
+
+{#snippet remote()}
+  {#if repo}
       <div class="remote-acts">
         <Button icon={RefreshCw} onclick={() => act('fetch', () => gitFetch(id), 'Fetch fait.')} disabled={!!busy || !repo.origin} busy={busy === 'fetch'}>
           {busy === 'fetch' ? 'Fetch…' : 'Fetch'}
@@ -166,11 +162,11 @@
           {busy === 'push' ? 'Push…' : 'Push'}
         </Button>
       </div>
-    {/if}
-  </header>
+  {/if}
+{/snippet}
 
-  {#if repos?.length && repo}
-    <div class="subbar">
+{#snippet subbar()}
+  {#if repo}
       <Tabs items={tabs} active={tab} label="Vues du dépôt" />
       <p class="where">
         <code class="ell">{current?.path}</code>
@@ -178,8 +174,16 @@
         {:else}<span class="faint">pas de remote origin</span>{/if}
         {#if repo.origin && !repo.forge}<span class="faint">forge inconnue (Gitea : GITEA_URL dans Clés)</span>{/if}
       </p>
-    </div>
   {/if}
+{/snippet}
+
+<Page
+  title="Git"
+  meta={repos?.length ? repoPick : undefined}
+  actions={repo && tab === 'history' ? remote : undefined}
+  tabs={repos?.length && repo ? subbar : undefined}
+>
+<div class="gx" class:has-detail={!!selected && tab === 'history'}>
 
   {#if error}
     <p class="alert" role="alert"><Icon icon={TriangleAlert} size={16} /><span>{error}</span></p>
@@ -292,21 +296,14 @@
     <p class="loading pad">Chargement…</p>
   {/if}
 </div>
-
-<Ask bind:this={asker} />
+</Page>
 
 <style>
-  :global(.view:has(> .gx)) { padding: 0; height: 100%; }
-
-  .gx { flex: 1; height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
-  .gbar { display: flex; align-items: center; gap: var(--s3); height: 48px; flex: none; padding: 0 var(--s3) 0 var(--s4); background: var(--panel); border-bottom: 1px solid var(--line); }
-  h1 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
+  .gx { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
   .repo { min-width: 200px; }
   .grow { flex: 1; min-width: 0; }
   .remote-acts { display: flex; gap: var(--s2); }
 
-  .subbar { display: flex; align-items: flex-end; gap: var(--s4); flex: none; padding: 0 var(--s4) 0 var(--s2); border-bottom: 1px solid var(--line); }
-  .subbar :global(.tabs-ui) { border-bottom: 0; }
   .where { flex: 1; min-width: 0; display: flex; justify-content: flex-end; align-items: center; gap: var(--s4); height: 40px; margin: 0; font-size: var(--fs-sm); color: var(--muted); }
   .where code { color: var(--muted); }
   .origin { color: var(--muted); }
@@ -351,7 +348,7 @@
   .here { color: var(--accent); font-size: var(--fs-sm); flex: none; }
   .sync { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
   .n { display: inline-flex; align-items: center; gap: 1px; }
-  .tag { font-size: 12px; line-height: 18px; padding: 0 6px; border-radius: var(--r-sm); background: var(--raised); color: var(--faint); }
+  .tag { font-size: var(--fs-xs); line-height: 20px; padding: 0 6px; border-radius: var(--r-sm); background: var(--raised); color: var(--faint); }
   .br-hit:hover .tag { background: var(--bg); }
   .tag.gone { background: var(--warn-soft); color: var(--warn); }
   .chev { color: var(--faint); display: grid; transition: transform 0.12s; }
@@ -390,15 +387,11 @@
   }
   @media (max-width: 767px) {
     .gx { padding: 0 var(--safe-right) 0 var(--safe-left); }
-    .gbar { height: auto; min-height: 56px; flex-wrap: wrap; padding: var(--s2) var(--s3); row-gap: var(--s2); }
     .repo { flex: 1; min-width: 0; }
     .repo :global(select) { width: 100%; height: var(--touch); font-size: var(--fs-md); }
-    .gbar .grow { display: none; }
     .remote-acts { width: 100%; }
     .remote-acts :global(.btn) { flex: 1; height: var(--touch); }
-    .subbar { flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
-    .subbar :global(.tabs-ui a) { height: var(--touch); }
-    .where { justify-content: flex-start; flex-wrap: wrap; height: auto; padding: var(--s2) var(--s4); gap: var(--s1) var(--s3); border-top: 1px solid var(--line); }
+    .where { flex-basis: 100%; margin: 0 calc(-1 * var(--s1)); justify-content: flex-start; flex-wrap: wrap; height: auto; padding: var(--s2) var(--s4); gap: var(--s1) var(--s3); border-top: 1px solid var(--line); }
 
     .cols, .has-detail .cols { display: flex; flex-direction: column; overflow: auto; }
     .hist { order: -1; border-bottom: 1px solid var(--line); }

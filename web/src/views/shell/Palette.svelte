@@ -1,17 +1,20 @@
 <script lang="ts">
-  // Palette de commandes (Ctrl+K) : pages, sessions récentes, nouvelle session dans un topic, thème, taille du texte.
-  // Mêmes appels que l'arbre des sessions (GET /api/sessions, /api/projects, POST /api/sessions).
+  // Palette de commandes (Ctrl+K) : pages, sessions récentes, nouvelle session dans un topic, changer de preset,
+  // thème, taille du texte. Mêmes appels que l'arbre des sessions (GET /api/sessions, /api/projects, POST /api/sessions)
+  // et que le bouton Activer de Modèles → Presets (POST /api/presets/<id>/activate).
   import MessageSquare from '@lucide/svelte/icons/message-square';
   import MessageSquarePlus from '@lucide/svelte/icons/message-square-plus';
   import Palette from '@lucide/svelte/icons/palette';
   import ALargeSmall from '@lucide/svelte/icons/a-large-small';
   import Search from '@lucide/svelte/icons/search';
+  import Layers from '@lucide/svelte/icons/layers';
   import Icon from '../../lib/ui/Icon.svelte';
   import Kbd from '../../lib/ui/Kbd.svelte';
   import { toast } from '../../lib/ui/toast.svelte';
+  import { confirmDialog } from '../../lib/ui/dialog.svelte';
   import { setTheme, setSize, THEME_LABEL, SIZE_LABEL, type ThemeChoice, type TextSize } from '../../lib/ui/theme.svelte';
   import type { IconType } from '../../lib/ui/types';
-  import { sessions, projects, createSession, message, type Session, type Project } from '../../lib/api';
+  import { sessions, projects, presets, activatePreset, createSession, message, ApiError, type Session, type Project, type Preset } from '../../lib/api';
   import { PAGES } from './pages';
 
   let { open = $bindable(false) }: { open?: boolean } = $props();
@@ -31,15 +34,42 @@
   let sel = $state(0);
   let recent = $state<Session[]>([]);
   let projs = $state<Project[]>([]);
+  let presetList = $state<Preset[]>([]);
 
   const go = (hash: string) => () => {
     location.hash = hash;
   };
 
   async function load() {
-    const [s, p] = await Promise.allSettled([sessions({}), projects()]);
+    const [s, p, pr] = await Promise.allSettled([sessions({}), projects(), presets()]);
     if (s.status === 'fulfilled') recent = [...s.value].sort((a, z) => z.updated_at - a.updated_at).slice(0, 8);
     if (p.status === 'fulfilled') projs = p.value;
+    if (pr.status === 'fulfilled') presetList = pr.value;
+  }
+
+  // Même suite que le bouton Activer de Modèles → Presets (confirmation si le preset ne tient pas en VRAM).
+  const started = 'Chargement lancé : avancement dans la barre du moteur.';
+  async function activate(p: Preset) {
+    try {
+      await activatePreset(p.id);
+      toast(started, 'ok');
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'nofit_confirm_required') {
+        const ok = await confirmDialog(
+          'Ce preset ne tient pas en VRAM : llama.cpp mettra des couches sur le processeur, beaucoup plus lent. Activer quand même ?',
+          { title: 'Activer sans place en VRAM', confirm: 'Activer quand même' },
+        );
+        if (!ok) return;
+        try {
+          await activatePreset(p.id, true);
+          toast(started, 'ok');
+        } catch (e2) {
+          toast(message(e2), 'error');
+        }
+        return;
+      }
+      toast(message(e), 'error');
+    }
   }
 
   const topicName = (id: number) => {
@@ -73,6 +103,14 @@
         },
       })),
     ),
+    ...presetList.map((p) => ({
+      id: `m-${p.id}`,
+      group: 'Changer de preset',
+      label: `${p.active ? 'Relancer' : 'Activer'} le preset ${p.name}`,
+      hint: [p.active && 'chargé', p.default && 'par défaut'].filter(Boolean).join(', '),
+      icon: Layers,
+      run: () => activate(p),
+    })),
     ...(['system', 'light', 'dark'] as ThemeChoice[]).map((t) => ({
       id: `t-${t}`,
       group: 'Apparence',

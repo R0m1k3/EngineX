@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { octets, stamp } from '../lib/ui/format';
   import History from '@lucide/svelte/icons/history';
   import Save from '@lucide/svelte/icons/save';
   import Globe from '@lucide/svelte/icons/globe';
@@ -10,7 +11,7 @@
   import Icon from '../lib/ui/Icon.svelte';
   import { confirmDialog } from '../lib/ui/dialog.svelte';
   import { toast } from '../lib/ui/toast.svelte';
-  import Page from './ops/Page.svelte';
+  import Page from '../lib/ui/Page.svelte';
   import Note from './settings/Note.svelte';
   import {
     memoryTree, memoryFile, saveMemoryFile, memoryRevisions, memoryRevision, message,
@@ -28,10 +29,7 @@
   let viewing = $state<{ id: number; content: string } | null>(null);
   let showHistory = $state(false);
 
-  const kio = (n: number) =>
-    n < 1024 ? `${n} o` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0).replace('.', ',')} Kio`;
   const bytes = (s: string) => new TextEncoder().encode(s).length;
-  const date = (t: number | null) => (t ? new Date(t * 1000).toLocaleString('fr-FR') : '');
   const who = (a: string | null) => (!a ? '' : a === 'michael' ? 'Michael' : a.startsWith('session:') ? `session ${a.slice(8, 16)}` : a);
   const sessionOf = (a: string | null) => (a?.startsWith('session:') ? a.slice(8) : null);
 
@@ -141,7 +139,7 @@
   <button type="button" class="lvl" class:sub class:on={path === p} class:warn aria-current={path === p ? 'true' : undefined} onclick={() => open(p, file)}>
     <Icon {icon} size={16} />
     <span class="ell">{name}</span>
-    <span class="sz num">{kio(sz)}</span>
+    <span class="sz num">{octets(sz)}</span>
   </button>
 {/snippet}
 
@@ -165,11 +163,11 @@
       {#if tree}
         <div class="lvl-select">
           <Select label="Niveau" size="lg" value={path} onchange={pickLevel}>
-            <option value="">Global ({kio(tree.global.memory.size)})</option>
+            <option value="">Global ({octets(tree.global.memory.size)})</option>
             {#each tree.projects as p (p.slug)}
-              <option value={p.slug}>{p.name} ({kio(p.memory.size)})</option>
+              <option value={p.slug}>{p.name} ({octets(p.memory.size)})</option>
               {#each p.topics as t (t.slug)}
-                <option value="{p.slug}/{t.slug}">{p.name} / {t.name} ({kio(t.memory.size)})</option>
+                <option value="{p.slug}/{t.slug}">{p.name} / {t.name} ({octets(t.memory.size)})</option>
               {/each}
             {/each}
           </Select>
@@ -201,11 +199,11 @@
       <div class="foot">
         <span class="count num" class:warn={size > limit * 0.75} class:over={size > limit}>
           <span class="meter" aria-hidden="true"><i style:width="{Math.min(100, (size / limit) * 100)}%"></i></span>
-          {kio(size)} / {limit / 1024} Kio
+          {octets(size)} / {octets(limit)}
         </span>
         {#if current?.[file].updated}
           <span class="by">
-            Dernière écriture : {date(current[file].updated)}, par
+            Dernière écriture : {stamp(current[file].updated)}, par
             {#if sessionOf(current[file].author)}<a href="#sessions/{sessionOf(current[file].author)}">{who(current[file].author)}</a>
             {:else}{who(current[file].author)}{/if}
           </span>
@@ -222,9 +220,9 @@
           <ul>
             {#each revisions as r (r.id)}
               <li class:on={viewing?.id === r.id}>
-                <span class="num">{date(r.created_at)}</span>
+                <span class="num">{stamp(r.created_at)}</span>
                 <span class="who">{#if sessionOf(r.author)}<a href="#sessions/{sessionOf(r.author)}">{who(r.author)}</a>{:else}{who(r.author)}{/if}</span>
-                <span class="num faint">{kio(r.size)}</span>
+                <span class="num faint">{octets(r.size)}</span>
                 <Button size="sm" variant="ghost" icon={Eye} onclick={() => view(r.id)}>Voir</Button>
               </li>
             {/each}
@@ -244,7 +242,7 @@
 
 <style>
   .pmeta { white-space: normal; }
-  .mem { flex: 1; display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: calc(100dvh - var(--status-h) - 49px); }
+  .mem { flex: 1; display: grid; grid-template-columns: 260px minmax(0, 1fr); }
   .levels { background: var(--panel); border-right: 1px solid var(--line); padding: var(--s2) 0; display: flex; flex-direction: column; }
   .lvl {
     position: relative;

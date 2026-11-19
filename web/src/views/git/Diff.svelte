@@ -65,7 +65,7 @@
     z-index: 1;
     display: flex;
     align-items: center;
-    height: 34px;
+    height: 36px;
     padding: 0 var(--s4);
     background: var(--panel);
     border-top: 1px solid var(--line);

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { dec1, octets } from '../lib/ui/format';
   import {
     ApiError,
     diskUsage,
@@ -16,7 +17,7 @@
     type DiskUsage,
     type WsEntry,
   } from '../lib/api';
-  import { Button, EmptyState, Icon, IconButton, ProgressBar, Segmented, confirmDialog, toast } from '../lib/ui';
+  import { Button, EmptyState, Icon, IconButton, ProgressBar, Segmented, confirmDialog, promptDialog, toast } from '../lib/ui';
   import ArrowLeft from '@lucide/svelte/icons/arrow-left';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import Download from '@lucide/svelte/icons/download';
@@ -38,7 +39,6 @@
   import X from '@lucide/svelte/icons/x';
   import Markdown from './sessions/Markdown.svelte';
   import Editor from './files/Editor.svelte';
-  import Ask from './files/Ask.svelte';
   import { fileIcon } from './files/icons';
 
   interface Dir {
@@ -64,15 +64,12 @@
   let conflict = $state(false);
   let mdSource = $state(false);
   let editor = $state<ReturnType<typeof Editor> | null>(null);
-  let asker = $state<ReturnType<typeof Ask> | null>(null);
   let uploadInput: HTMLInputElement;
 
   const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
   const parent = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
   const base = (p: string) => p.split('/').pop() ?? p;
-  const nf = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 });
-  const size = (n: number) =>
-    n < 1024 ? `${n} o` : n < 1 << 20 ? `${Math.round(n / 1024)} Kio` : n < 1 << 30 ? `${nf.format(n / (1 << 20))} Mio` : `${nf.format(n / (1 << 30))} Gio`;
+  const size = octets;
 
   let picked = $derived(Object.keys(checked).filter((p) => checked[p]));
   let crumbs = $derived(selected ? selected.split('/') : []);
@@ -183,13 +180,13 @@
   const where = (d: string) => `/${d}`;
 
   async function newFolder() {
-    const name = await asker?.ask({ title: 'Nouveau dossier', label: `Nom du dossier, dans ${where(folder)}`, confirm: 'Créer le dossier', mono: true });
+    const name = await promptDialog(`Nom du dossier, dans ${where(folder)}`, { title: 'Nouveau dossier', confirm: 'Créer le dossier', mono: true });
     if (!name?.trim()) return;
     act(() => wsMkdir(join(folder, name.trim())));
   }
 
   async function newFile() {
-    const name = await asker?.ask({ title: 'Nouveau fichier', label: `Nom du fichier, dans ${where(folder)}`, confirm: 'Créer le fichier', mono: true });
+    const name = await promptDialog(`Nom du fichier, dans ${where(folder)}`, { title: 'Nouveau fichier', confirm: 'Créer le fichier', mono: true });
     if (!name?.trim()) return;
     const p = join(folder, name.trim());
     act(async () => {
@@ -228,7 +225,7 @@
   async function rename() {
     const t = targets();
     if (t.length !== 1) return toast('Cochez un seul élément à renommer.', 'warn');
-    const name = await asker?.ask({ title: 'Renommer', label: 'Nouveau nom', value: base(t[0]), confirm: 'Renommer', mono: true });
+    const name = await promptDialog('Nouveau nom', { title: 'Renommer', value: base(t[0]), confirm: 'Renommer', mono: true, selectStem: true });
     if (!name?.trim() || name === base(t[0])) return;
     const to = join(parent(t[0]), name.trim());
     act(async () => {
@@ -241,9 +238,10 @@
   async function move() {
     const t = targets();
     if (!t.length) return;
-    const dest = await asker?.ask({
+    const dest = await promptDialog('Vers le dossier', {
       title: t.length === 1 ? `Déplacer ${base(t[0])}` : `Déplacer ${t.length} éléments`,
-      label: 'Vers le dossier',
+      allowEmpty: true,
+      selectStem: true,
       hint: 'Chemin depuis la racine du workspace, vide pour la racine.',
       value: folder,
       confirm: 'Déplacer',
@@ -376,13 +374,13 @@
     {#if disk}
       <footer class="disk" class:alarm={disk.alert}>
         <div class="disk-l">
-          <span>Disque {nf.format(disk.used_pct)} %</span>
+          <span>Disque {dec1(disk.used_pct)} %</span>
           <span class="faint">{size(disk.free_bytes)} libres</span>
         </div>
         <ProgressBar value={disk.used_pct} size="sm" tone={disk.alert ? 'warn' : 'accent'} label="Disque de /data utilisé" />
         <div class="faint">Workspace {size(disk.workspace_bytes)}, sessions {size(disk.sessions_bytes)}</div>
         {#if disk.alert}
-          <p class="alarm-t">Alerte à {nf.format(disk.alert_pct)} % (réglable dans Paramètres, Sessions) : supprimez des sessions ou des fichiers.</p>
+          <p class="alarm-t">Alerte à {dec1(disk.alert_pct)} % (réglable dans Paramètres, Sessions) : supprimez des sessions ou des fichiers.</p>
         {/if}
       </footer>
     {/if}
@@ -469,11 +467,9 @@
   </section>
 </div>
 
-<Ask bind:this={asker} />
 
 <style>
   /* Page bord à bord : la vue de la coquille perd sa marge tant que Fichiers est affiché. */
-  :global(.view:has(> .fx)) { padding: 0; height: 100%; }
 
   .fx {
     flex: 1;
@@ -525,7 +521,7 @@
   .node.here > .hit .nm { color: var(--text); font-weight: 600; }
   .node.sel :global(.ficon) { color: var(--accent); }
   .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .tag { flex: none; font-size: 12px; line-height: 18px; padding: 0 6px; border-radius: var(--r-sm); color: var(--faint); background: var(--raised); }
+  .tag { flex: none; font-size: var(--fs-xs); line-height: 20px; padding: 0 6px; border-radius: var(--r-sm); color: var(--faint); background: var(--raised); }
   .node:hover .tag, .node.picked .tag { background: var(--bg); }
   .dirty { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
   .ck { flex: none; display: grid; place-items: center; width: 28px; height: 28px; cursor: pointer; opacity: 0; }

@@ -71,7 +71,7 @@
   .md :global(> :last-child), .md :global(.cb:last-child) { margin-bottom: 0; }
   .md :global(h1), .md :global(h2), .md :global(h3), .md :global(h4) { font-size: var(--fs-md); margin: var(--s4) 0 var(--s2); }
   .md :global(h1) { font-size: var(--fs-lg); }
-  .md :global(:not(pre) > code) { background: var(--raised); padding: 1px 5px; border-radius: 3px; font-size: 0.875em; }
+  .md :global(:not(pre) > code) { background: var(--raised); padding: 1px 5px; border-radius: var(--r-sm); font-size: 0.875em; }
   .md :global(pre) { margin: 0 0 var(--s3); padding: var(--s3) var(--s4); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); overflow: auto; line-height: 1.6; overflow-wrap: normal; }
   .md :global(pre code) { background: none; padding: 0; font-size: var(--fs-code); }
   .md :global(.cb) { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; margin: 0 0 var(--s3); }

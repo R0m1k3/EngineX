@@ -8,8 +8,8 @@
   import { Card, Button, EmptyState, Gauge, StatusDot, ProgressBar, Skeleton, int, dec1, toast } from '../lib/ui';
   import type { DotKind } from '../lib/ui';
   import { gpuRows } from './shell/status.svelte';
-  import Page from './ops/Page.svelte';
-  import { ago, ahead, scheduleText } from './ops/time';
+  import Page from '../lib/ui/Page.svelte';
+  import { ago, ahead, scheduleText } from '../lib/ui/format';
   import Cpu from '@lucide/svelte/icons/cpu';
   import Layers from '@lucide/svelte/icons/layers';
   import MessageSquare from '@lucide/svelte/icons/message-square';
@@ -148,7 +148,7 @@
       {:else}
         <div class="engine">
           {#if st.state === 'stopped' && loadedPreset === null}
-            <EmptyState icon={Cpu} title="Aucun modèle chargé" text="Choisis un preset dans Modèles : il se charge sur les cartes et les sessions peuvent démarrer.">
+            <EmptyState icon={Cpu} title="Aucun modèle chargé" text="Choisissez un preset dans Modèles : il se charge sur les cartes et les sessions peuvent démarrer.">
               {#snippet action()}<Button variant="primary" href="#models">Choisir un modèle</Button>{/snippet}
             </EmptyState>
           {:else}
@@ -227,10 +227,10 @@
             {@const waiting = waitingSessions.has(s.id)}
             <li>
               <a class="row-link" href="#sessions/{s.id}">
-                <StatusDot kind={waiting ? 'warn' : s.running ? 'ok' : 'off'} label={waiting ? 'attend ton accord' : s.running ? 'en cours' : 'au repos'} />
+                <StatusDot kind={waiting ? 'warn' : s.running ? 'ok' : 'off'} label={waiting ? 'attend votre accord' : s.running ? 'en cours' : 'au repos'} />
                 <span class="grow">
                   <span class="t ell">{s.title}</span>
-                  <span class="sub ell">{topicPath(s.topic_id)}{waiting ? ', attend ton accord' : s.running ? ', en cours' : ''}</span>
+                  <span class="sub ell">{topicPath(s.topic_id)}{waiting ? ', attend votre accord' : s.running ? ', en cours' : ''}</span>
                 </span>
                 <span class="when">{ago(s.updated_at)}</span>
               </a>

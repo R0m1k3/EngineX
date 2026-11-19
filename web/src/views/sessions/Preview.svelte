@@ -5,8 +5,6 @@
   import ExternalLink from '@lucide/svelte/icons/external-link';
   import AppWindow from '@lucide/svelte/icons/app-window';
   import IconButton from '../../lib/ui/IconButton.svelte';
-  import Icon from '../../lib/ui/Icon.svelte';
-  import { tooltip } from '../../lib/ui/tooltip';
   import EmptyState from '../../lib/ui/EmptyState.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
 
@@ -64,7 +62,7 @@
     <span class="grow url ell" title={url}>{url}</span>
     {#if url}
       <IconButton icon={RotateCw} label="Recharger l’app" size="sm" onclick={() => show(port!)} />
-      <a class="ext" href={url} target="_blank" rel="noopener" aria-label="Ouvrir dans un nouvel onglet" use:tooltip={'Ouvrir dans un nouvel onglet'}><Icon icon={ExternalLink} size={16} /></a>
+      <IconButton icon={ExternalLink} label="Ouvrir dans un nouvel onglet" size="sm" href={url} target="_blank" rel="noopener" />
     {/if}
     <IconButton icon={RefreshCw} label="Relire les ports" size="sm" tip="left" onclick={load} />
   </div>
@@ -91,11 +89,9 @@
   .preview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .tb { display: flex; align-items: center; gap: var(--s2); min-height: 36px; padding: 0 var(--s1) 0 var(--s3); border-bottom: 1px solid var(--line); font-size: var(--fs-sm); flex: none; }
   .ports { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--r); overflow: hidden; }
-  .port { height: 26px; min-height: 0; padding: 0 var(--s2); border: 0; border-radius: 0; background: none; color: var(--muted); font: inherit; font-size: var(--fs-sm); font-weight: 400; filter: none; cursor: pointer; }
+  .port { height: 28px; min-height: 0; padding: 0 var(--s2); border: 0; border-radius: 0; background: none; color: var(--muted); font: inherit; font-size: var(--fs-sm); font-weight: 400; filter: none; cursor: pointer; }
   .port + .port { border-left: 1px solid var(--line-strong); }
   .port[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-  .ext { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r); color: var(--muted); }
-  .ext:hover { background: var(--raised); color: var(--text); }
   .url { color: var(--faint); font-family: var(--mono); font-size: var(--fs-xs); }
   .pad { margin: 0; padding: var(--s3) var(--s4); }
   iframe { flex: 1; min-height: 240px; width: 100%; border: 0; background: #fff; }

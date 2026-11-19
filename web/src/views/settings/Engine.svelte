@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { octets } from '../models/fmt';
+  import { octets, stamp } from '../../lib/ui/format';
   import { onDestroy } from 'svelte';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Download from '@lucide/svelte/icons/download';
@@ -47,7 +47,7 @@
     checking = false;
   }
 
-  const date = (t: number) => new Date(t * 1000).toLocaleString('fr-FR');
+  const date = stamp;
   let running = $derived(!!v?.job && !v.job.finished);
   // Même build que l'image ou qu'une version installée : rien à installer.
   let newer = $derived(!!v?.latest && !v.installed.some((i) => i.tag === v?.latest?.tag || i.build === v?.latest?.build));

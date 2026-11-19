@@ -9,8 +9,8 @@
     confirmDialog, toast,
   } from '../lib/ui';
   import type { DotKind, Tone } from '../lib/ui';
-  import Page from './ops/Page.svelte';
-  import { ahead, since, stamp, span, scheduleText } from './ops/time';
+  import Page from '../lib/ui/Page.svelte';
+  import { ahead, since, stamp, span, scheduleText } from '../lib/ui/format';
   import Plus from '@lucide/svelte/icons/plus';
   import Play from '@lucide/svelte/icons/play';
   import Pencil from '@lucide/svelte/icons/pencil';
@@ -249,7 +249,7 @@
             <p class="faint small">Pas encore d’exécution.</p>
           {/if}
         {:else}
-          <div class="pick"><EmptyState icon={Clock} title="Choisis un cron" text="Son réglage et l’historique de ses exécutions s’affichent ici." /></div>
+          <div class="pick"><EmptyState icon={Clock} title="Choisissez un cron" text="Son réglage et l’historique de ses exécutions s’affichent ici." /></div>
         {/if}
       </div>
     </div>
@@ -292,7 +292,7 @@
         <Input label="Délai max" unit="s" type="number" min={10} max={7200} bind:value={form.timeout_s} />
       </div>
       {#if form.kind === 'prompt'}
-        <Select label="Modèle" hint="Un autre modèle que celui chargé est chargé pour ce cron, après tes tours." bind:value={() => (form!.preset_id == null ? '' : String(form!.preset_id)), (v) => (form!.preset_id = v === '' ? null : Number(v))}
+        <Select label="Modèle" hint="Un autre modèle que celui chargé est chargé pour ce cron, après vos tours." bind:value={() => (form!.preset_id == null ? '' : String(form!.preset_id)), (v) => (form!.preset_id = v === '' ? null : Number(v))}
           options={[{ value: '', label: 'Par défaut' }, ...presetList.map((p) => ({ value: String(p.id), label: p.name }))]} />
       {/if}
       <Switch bind:checked={form.enabled} label="Activé" />
@@ -309,7 +309,7 @@
   .err-line { margin: 0; padding: var(--s2) var(--s5); background: var(--danger-soft); color: var(--danger); font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }
   .pad { padding: var(--s5); }
 
-  .split { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); flex: 1; min-height: calc(100dvh - var(--status-h) - 49px); }
+  .split { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); flex: 1; }
   .master { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
   .rows { list-style: none; margin: 0; padding: 0; }
   .rows li { border-bottom: 1px solid var(--line); }

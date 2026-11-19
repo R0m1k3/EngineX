@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { octets } from './fmt';
+  import { gb, int, octets } from '../../lib/ui/format';
   import SearchIcon from '@lucide/svelte/icons/search';
   import ArrowLeft from '@lucide/svelte/icons/arrow-left';
   import Download from '@lucide/svelte/icons/download';
@@ -12,7 +12,6 @@
   import Icon from '../../lib/ui/Icon.svelte';
   import EmptyState from '../../lib/ui/EmptyState.svelte';
   import { toast } from '../../lib/ui/toast.svelte';
-  import { gb, int } from '../../lib/ui/format';
   import type { Tone } from '../../lib/ui/types';
   import Note from '../settings/Note.svelte';
   import {

@@ -9,8 +9,8 @@
   import {
     Button, IconButton, Input, Select, Switch, Tabs, Badge, EmptyState, Skeleton, confirmDialog, toast, int,
   } from '../lib/ui';
-  import Page from './ops/Page.svelte';
-  import { since, stamp } from './ops/time';
+  import Page from '../lib/ui/Page.svelte';
+  import { since, stamp } from '../lib/ui/format';
   import Info from '@lucide/svelte/icons/info';
   import CircleCheck from '@lucide/svelte/icons/circle-check';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
@@ -315,8 +315,8 @@
         <div class="s-body">
           {#if !secure}
             <p class="callout">
-              Le navigateur n’autorise le push que sur une adresse HTTPS (ou localhost). Passe par ton reverse proxy HTTPS ou
-              Tailscale (voir le README), puis reviens ici.
+              Le navigateur n’autorise le push que sur une adresse HTTPS (ou localhost). Passez par votre reverse proxy HTTPS ou
+              Tailscale (voir le README), puis revenez ici.
             </p>
           {:else if here}
             <div class="line"><Badge tone="ok" dot>abonné</Badge><Button variant="ghost" onclick={disable}>Désabonner</Button></div>
@@ -366,7 +366,7 @@
         <Skeleton lines={3} />
       {/if}
       <p class="foot">
-        Le contenu est chiffré pour ton navigateur ; il passe par le service de push de son éditeur (Google, Mozilla, Apple),
+        Le contenu est chiffré pour votre navigateur ; il passe par le service de push de son éditeur (Google, Mozilla, Apple),
         seul envoi d’EngineX vers l’extérieur.
       </p>
     </div>
@@ -416,7 +416,7 @@
                   </div>
                   <div class="h-ctl">
                     <Select
-                      label="Lance l’agent"
+                      label="Lancer l’agent"
                       value={h.agent_id == null ? '' : String(h.agent_id)}
                       options={[{ value: '', label: 'Aucun' }, ...agentList.map((a) => ({ value: String(a.id), label: a.name }))]}
                       onchange={(e) => {
@@ -431,7 +431,7 @@
               {/each}
             </ul>
           {:else if hooks}
-            <EmptyState icon={Webhook_} title="Aucun webhook" text="Crée une adresse ci-dessus et colle-la dans le service qui doit te prévenir." />
+            <EmptyState icon={Webhook_} title="Aucun webhook" text="Créez une adresse ci-dessus et collez-la dans le service qui doit vous prévenir." />
           {:else}
             <Skeleton lines={3} />
           {/if}

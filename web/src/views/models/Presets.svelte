@@ -12,9 +12,7 @@
   import Badge from '../../lib/ui/Badge.svelte';
   import StatusDot from '../../lib/ui/StatusDot.svelte';
   import EmptyState from '../../lib/ui/EmptyState.svelte';
-  import Dialog from '../../lib/ui/Dialog.svelte';
-  import Input from '../../lib/ui/Input.svelte';
-  import { confirmDialog } from '../../lib/ui/dialog.svelte';
+  import { confirmDialog, promptDialog } from '../../lib/ui/dialog.svelte';
   import { toast } from '../../lib/ui/toast.svelte';
   import Note from '../settings/Note.svelte';
   import {
@@ -81,20 +79,9 @@
   }
 
   // Dupliquer : nom demandé dans une modale (remplace prompt()).
-  let copyOf = $state<Preset | null>(null);
-  let copyName = $state('');
-  let copyOpen = $state(false);
-  function duplicate(p: Preset) {
-    copyOf = p;
-    copyName = `${p.name} (copie)`;
-    copyOpen = true;
-  }
-  async function submitCopy(e: SubmitEvent) {
-    e.preventDefault();
-    const p = copyOf;
-    const name = copyName.trim();
-    copyOpen = false;
-    if (p && name) await run(() => copyPreset(p.id, name), `Copie « ${name} » créée.`);
+  async function duplicate(p: Preset) {
+    const name = await promptDialog('Nom de la copie', { title: 'Dupliquer le preset', value: `${p.name} (copie)`, confirm: 'Dupliquer', maxlength: 120 });
+    if (name) await run(() => copyPreset(p.id, name), `Copie « ${name} » créée.`);
   }
 
   async function remove(p: Preset) {
@@ -183,15 +170,6 @@
   </div>
 {/if}
 
-<Dialog bind:open={copyOpen} title="Dupliquer le preset" width="420px">
-  <form id="copy-form" onsubmit={submitCopy}>
-    <Input label="Nom de la copie" bind:value={copyName} maxlength={120} required />
-  </form>
-  {#snippet actions()}
-    <Button onclick={() => (copyOpen = false)}>Annuler</Button>
-    <Button variant="primary" type="submit" form="copy-form" disabled={!copyName.trim()}>Dupliquer</Button>
-  {/snippet}
-</Dialog>
 
 <style>
   .err { padding: var(--s3) var(--s6) 0; }

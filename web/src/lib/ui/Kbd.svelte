@@ -9,7 +9,7 @@
   .kbd {
     display: inline-block;
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: var(--fs-count);
     line-height: 18px;
     padding: 0 5px;
     border: 1px solid var(--line-strong);

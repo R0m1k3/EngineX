@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { stamp } from '../../lib/ui/format';
   import KeyRound from '@lucide/svelte/icons/key-round';
   import Trash2 from '@lucide/svelte/icons/trash-2';
   import Button from '../../lib/ui/Button.svelte';
@@ -69,7 +70,7 @@
     }
   }
 
-  const date = (t: number) => new Date(t * 1000).toLocaleString('fr-FR');
+  const date = stamp;
   const scopes = $derived([
     { value: 'global', label: 'Tous les projets' },
     ...projects.map((p) => ({ value: `project:${p.id}`, label: `Projet ${p.name}` })),

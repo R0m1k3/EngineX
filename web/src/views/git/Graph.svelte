@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { stamp } from '../../lib/ui/format';
   import type { GitCommit } from '../../lib/api';
   import Icon from '../../lib/ui/Icon.svelte';
   import Tag from '@lucide/svelte/icons/tag';
@@ -79,7 +80,7 @@
   const path = (s: Row['segs'][number]) =>
     s[0] === s[2] ? `M${s[0]} ${s[1]}V${s[3]}` : `M${s[0]} ${s[1]}C${s[0]} ${(s[1] + s[3]) / 2} ${s[2]} ${(s[1] + s[3]) / 2} ${s[2]} ${s[3]}`;
 
-  const when = (t: number) => new Date(t * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
+  const when = stamp;
 </script>
 
 <div class="graph-rows">
@@ -152,7 +153,7 @@
     padding: 0 6px;
     border-radius: var(--r-sm);
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: var(--fs-count);
     background: var(--raised);
     color: var(--muted);
   }

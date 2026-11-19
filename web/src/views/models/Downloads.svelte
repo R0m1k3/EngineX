@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { octets } from './fmt';
+  import { octets } from '../../lib/ui/format';
   import { onDestroy } from 'svelte';
   import DownloadIcon from '@lucide/svelte/icons/download';
   import Pause from '@lucide/svelte/icons/pause';

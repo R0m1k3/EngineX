@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { stamp } from '../../lib/ui/format';
   import Plus from '@lucide/svelte/icons/plus';
   import Copy from '@lucide/svelte/icons/copy';
   import Check from '@lucide/svelte/icons/check';
@@ -80,7 +81,7 @@
     }
   }
 
-  const date = (t: number | null) => (t ? new Date(t * 1000).toLocaleString('fr-FR') : 'jamais');
+  const date = (t: number | null) => (t ? stamp(t) : 'jamais');
   let envLine = $derived(`export ${config?.env_key ?? 'ENGINEX_API_KEY'}=${created?.key ?? '<clé>'}`);
 
   load();

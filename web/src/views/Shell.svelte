@@ -43,6 +43,8 @@
   onDestroy(() => window.removeEventListener('hashchange', onHash));
   let page = $derived(route.split('/')[0]);
   let sub = $derived(route.split('/')[1] ?? '');
+  // Toute ancre inconnue ouvre Sessions (dernier cas du routage plus bas).
+  let fill = $derived(pageDef(page === 'dashboard' || LAZY[page] ? page : 'sessions')?.fill ?? false);
 
   $effect(() => {
     const p = pageDef(page);
@@ -115,14 +117,16 @@
 <div class="shell">
   <div class="act-slot"><ActivityBar {page} onPalette={openPalette} onPassword={openPassword} onLogout={doLogout} /></div>
   <main class="work" id="main" tabindex="-1">
-    <div class="view">
+    <!-- Toutes les vues sont bord à bord (chacune pose ses filets et ses marges) ;
+         `fill` (shell/pages.ts) : hauteur fixe, défilement dans les volets de la vue. -->
+    <div class="view" class:fill>
       {#if page === 'dashboard'}
         <Dashboard />
       {:else if LAZY[page]}
         {#await view(page) then View}
           <View sub={page === 'git' ? route.split('/').slice(1).join('/') : sub} />
         {:catch e}
-          <p class="error">Page impossible à charger : {message(e)}</p>
+          <p class="error load-err">Page impossible à charger : {message(e)}</p>
         {/await}
       {:else}
         <Sessions {sub} />
@@ -164,7 +168,9 @@
   .work { grid-area: work; min-width: 0; min-height: 0; overflow: auto; outline: none; }
   .status-slot { grid-area: status; min-width: 0; }
   .tab-slot { display: none; }
-  .view { padding: var(--s6); display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+  .view { min-height: 100%; display: flex; flex-direction: column; min-width: 0; }
+  .view.fill { height: 100%; min-height: 0; }
+  .load-err { margin: 0; padding: var(--s6); }
   .pw { display: flex; flex-direction: column; gap: var(--s4); }
   .pw p { margin: 0; }
   .skip { position: absolute; left: -9999px; top: 8px; z-index: 100; padding: var(--s2) var(--s3); background: var(--accent-fill); color: var(--accent-ink); border-radius: var(--r); }
@@ -178,6 +184,7 @@
     }
     .act-slot { display: none; }
     .tab-slot { display: block; grid-area: tabs; }
-    .view { padding: var(--s4) calc(var(--s4) + var(--safe-right)) var(--s4) calc(var(--s4) + var(--safe-left)); }
+    /* Fil de session ouvert (Sessions pose l'attribut) : pas de barre d'onglets. */
+    :global(html[data-thread-open]) .tab-slot { display: none; }
   }
 </style>
