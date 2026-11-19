@@ -125,6 +125,10 @@ export interface FitReport {
   cards: { need_mib: number; avail_mib: number }[];
   verdict: Verdict;
   kv_mib: number;
+  /** Ce qui ne tient pas sur les cartes (calculé par le processeur). */
+  cpu_mib: number;
+  /** Matrice d'attention réservée en plus par carte sans flash attention. */
+  no_fa_mib: number;
 }
 
 export interface FitResult {
@@ -242,6 +246,8 @@ export interface EngineInfo {
     predicted: number | null;
     draft_n: number | null;
     draft_accepted: number | null;
+    /** Cœurs occupés par llama-server pendant la requête (≈ 1 si tout est sur GPU). */
+    cpu_cores?: number | null;
   } | null;
   spec_fallback: { preset_id: number; why: string } | null;
 }
@@ -296,6 +302,8 @@ export const copyPreset = (from: number, name: string) => request<{ id: number }
 export const savePreset = (id: number, name: string, settings: PresetSettings) =>
   request<{ reload_needed: boolean }>('PUT', `/api/presets/${id}`, { name, settings });
 export const deletePreset = (id: number) => request('DELETE', `/api/presets/${id}`);
+export const presetFit = (id: number, settings: PresetSettings) =>
+  request<FitReport>('POST', `/api/presets/${id}/fit`, { settings });
 export const activatePreset = (id: number, confirm_nofit = false) =>
   request<{ started: boolean; fit: FitReport }>('POST', `/api/presets/${id}/activate`, { confirm_nofit });
 export const refreshSources = (id: number) => request<Preset>('POST', `/api/presets/${id}/refresh-sources`);

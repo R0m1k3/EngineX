@@ -1,7 +1,8 @@
 <script lang="ts">
   import {
-    savePreset, activatePreset, message, engine, hasMtp, SAMPLING,
+    savePreset, activatePreset, presetFit, message, engine, hasMtp, SAMPLING, VERDICT,
     type Preset, type LocalModel, type PresetSettings, type SamplingKey, type CandidateSet, type EngineInfo,
+    type FitReport,
   } from '../../lib/api';
 
   let { preset, model, models = [], saved }: {
@@ -54,6 +55,18 @@
   function choose(k: SamplingKey, c: CandidateSet) {
     s.sampling[k] = c.values[k] ?? null;
   }
+
+  // Place estimée avec les réglages en cours d'édition.
+  let fit = $state<FitReport | null>(null);
+  let fitTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const settings = $state.snapshot(s);
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(() => {
+      presetFit(preset.id, settings).then((r) => (fit = r)).catch(() => (fit = null));
+    }, 400);
+  });
+  const gio = (mib: number) => (mib / 1024).toFixed(1).replace('.', ',');
 
   async function save() {
     error = '';
@@ -108,6 +121,23 @@
     {#if model?.mmproj}<label class="check"><input type="checkbox" bind:checked={s.mmproj} /> Vision (mmproj)</label>{/if}
     <label>Options llama-server en plus <input placeholder="ex. --no-mmap" bind:value={extra} /></label>
   </div>
+  {#if fit && fit.verdict !== 'unknown'}
+    <p class="small fit">
+      Place estimée :
+      {#each fit.cards as c, i}<span class="muted">CUDA{i}</span> {gio(c.need_mib)} / {gio(c.avail_mib)} Gio{i < fit.cards.length - 1 ? ' · ' : ''}{/each}
+      → <span class="verdict v-{fit.verdict}">{VERDICT[fit.verdict]}</span>
+      {#if fit.cpu_mib > 0}
+        <span class="error">: environ {gio(fit.cpu_mib)} Gio calculés par le processeur, génération bien plus lente.</span>
+      {/if}
+    </p>
+  {/if}
+  {#if !s.flash_attn}
+    <p class="small error">
+      Sans flash attention, llama.cpp réserve la matrice d’attention entière sur chaque carte
+      {#if fit?.no_fa_mib}(≈ {gio(fit.no_fa_mib)} Gio de plus par carte à ce contexte){/if}.
+      {#if s.kv_type !== 'f16'}Et un cache quantifié ({s.kv_type}) demande la flash attention.{/if}
+    </p>
+  {/if}
 
   <h4>Accélération <span class="muted small">(rechargement nécessaire)</span></h4>
   {#if caps && !caps.spec}<p class="small error">Ce llama-server n’a pas le décodage spéculatif (MTP, brouillon) : options ignorées.</p>{/if}

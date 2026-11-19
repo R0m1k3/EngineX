@@ -92,6 +92,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/presets", get(presets::list).post(presets::copy))
         .route("/api/presets/{id}", put(presets::update).delete(presets::delete))
         .route("/api/presets/{id}/activate", post(presets::activate))
+        .route("/api/presets/{id}/fit", post(presets::fit))
         .route("/api/presets/{id}/refresh-sources", post(presets::refresh_sources))
         .route("/api/engine", get(engine_api::engine))
         .route("/api/engine/stop", post(engine_api::stop))

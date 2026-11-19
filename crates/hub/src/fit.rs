@@ -10,7 +10,7 @@ use crate::gguf::GgufMeta;
 const MIB: u64 = 1 << 20;
 /// Tampons de calcul : forfait par carte.
 const COMPUTE_PER_CARD: u64 = 512 * MIB;
-/// Logits d'un ubatch de 512 jetons, en f32, sur la dernière carte.
+/// Lot physique par défaut de llama.cpp (`-ub`).
 const UBATCH: u64 = 512;
 /// Vocabulaire inconnu : valeur haute (Gemma 3 en a 262 144).
 const VOCAB_FALLBACK: u64 = 262_144;
@@ -60,6 +60,13 @@ pub struct FitInput<'a> {
     pub fit_target_mib: u64,
     /// Petit modèle brouillon chargé à côté (0 sans).
     pub draft_bytes: u64,
+    /// Sans flash attention, llama.cpp réserve sur chaque carte la matrice
+    /// d'attention entière (têtes × ubatch × contexte, en f32).
+    pub flash_attn: bool,
+    /// Lot physique (`-ub`), 0 = défaut de llama.cpp (512).
+    pub ubatch: u64,
+    /// Brouillon MTP : un contexte de plus (KV d'une couche, tampons).
+    pub mtp: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +93,13 @@ pub struct FitReport {
     pub verdict: Verdict,
     /// Cache KV total (toutes cartes), pour l'affichage.
     pub kv_mib: u64,
+    /// Ce qui ne tient pas sur les cartes : `--fit` le met en RAM et le
+    /// processeur le calcule (lent).
+    #[serde(default)]
+    pub cpu_mib: u64,
+    /// Matrice d'attention réservée en plus sans flash attention, par carte.
+    #[serde(default)]
+    pub no_fa_mib: u64,
 }
 
 /// Octets du cache KV pour `ctx × parallel` jetons, `None` si les
@@ -106,6 +120,8 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
         cards: Vec::new(),
         verdict: Verdict::Unknown,
         kv_mib,
+        cpu_mib: 0,
+        no_fa_mib: 0,
     };
     let Some(kv) = kv_bytes(input.meta, input.ctx, input.parallel, input.kv) else {
         return unknown(0);
@@ -120,8 +136,17 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
         return unknown(kv / MIB);
     }
     let layer = input.weights_bytes / layers;
+    let ub = if input.ubatch == 0 { UBATCH } else { input.ubatch };
     let vocab = input.meta.vocab_size.unwrap_or(VOCAB_FALLBACK);
-    let logits = UBATCH * vocab * 4;
+    let logits = ub * vocab * 4;
+    // Tampons de calcul : proportionnels au lot physique.
+    let compute = COMPUTE_PER_CARD * ub.max(UBATCH) / UBATCH;
+    let no_fa = if input.flash_attn {
+        0
+    } else {
+        input.meta.head_count.unwrap_or(32) * ub * input.ctx * 4
+    };
+    let mtp = if input.mtp { kv / layers + compute + no_fa } else { 0 };
     let last = cards.len() - 1;
     let share = |bytes: u64, a: u64| (bytes as u128 * a as u128 / total_avail as u128) as u64;
     let needs: Vec<CardNeed> = avail
@@ -131,13 +156,14 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
             let mut need = share(input.weights_bytes + input.draft_bytes, a)
                 + layer
                 + share(kv, a)
-                + COMPUTE_PER_CARD
+                + compute
+                + no_fa
                 + input.fit_target_mib * MIB;
             if i == 0 {
                 need += input.mmproj_bytes;
             }
             if i == last {
-                need += logits;
+                need += logits + mtp;
             }
             CardNeed {
                 need_mib: need.div_ceil(MIB),
@@ -155,9 +181,12 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
     } else {
         Verdict::NoFit
     };
+    let cpu_mib = needs.iter().map(|c| c.need_mib.saturating_sub(c.avail_mib)).sum();
     FitReport {
         cards: needs,
         verdict,
         kv_mib: kv / MIB,
+        cpu_mib,
+        no_fa_mib: no_fa.div_ceil(MIB),
     }
 }

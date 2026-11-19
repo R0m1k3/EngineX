@@ -52,6 +52,12 @@
     info?.state.state === 'ready' && info.n_ctx != null && preset != null && info.n_ctx < preset.settings.ctx,
   );
   let gen = $derived(info?.last_gen ?? null);
+  // Tout sur GPU, llama-server occupe ≈ 1 cœur (le fil qui attend les cartes).
+  // Au-delà, des couches sont calculées par le processeur.
+  let cpuHeavy = $derived(
+    info?.state.state === 'ready' && (info?.gpus.length ?? 0) > 0 && gen != null &&
+      gen.preset === presetName && (gen.cpu_cores ?? 0) >= 2.5,
+  );
   // Tâche en cours, ou dernière tâche ratée sur le preset (activation, arrêt).
   let shownJob = $derived(
     job && (!job.finished || (job.step === 'failed' && ['activate', 'stop', 'delete'].includes(job.kind))) ? job : null,
@@ -98,6 +104,13 @@
       <p class="small error">
         Contexte réduit par --fit : {info.n_ctx} jetons chargés au lieu de {preset.settings.ctx} (VRAM courte).
         Codex reçoit {info.n_ctx}. Baisser le contexte, passer le KV en q4_0 ou mettre des experts en RAM.
+      </p>
+    {/if}
+    {#if cpuHeavy && gen}
+      <p class="small error">
+        Le processeur calcule une partie du modèle ({gen.cpu_cores} cœurs occupés pendant la dernière réponse) :
+        il ne tient pas entier dans la VRAM, d’où la lenteur. Dans le preset : flash attention activée, cache q8_0,
+        contexte plus court, ou vision désactivée.
       </p>
     {/if}
     {#if info.spec_fallback && info.spec_fallback.preset_id === info.preset_id && info.state.state === 'ready'}

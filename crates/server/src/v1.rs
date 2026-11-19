@@ -286,6 +286,38 @@ struct Log {
     sampling: String,
     started: Instant,
     dropped: BTreeMap<String, usize>,
+    /// Temps processeur de llama-server au moment où la requête lui part.
+    cpu0: Option<(u32, f64, Instant)>,
+}
+
+/// Secondes de processeur consommées par llama-server (`/proc/<pid>/stat`).
+fn llama_cpu(state: &AppState) -> Option<(u32, f64, Instant)> {
+    let EngineState::Ready { pid, .. } = state.supervisor().state() else {
+        return None;
+    };
+    let ticks = stat_ticks(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)?;
+    // SAFETY: sysconf sans effet de bord.
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as f64;
+    Some((pid, ticks as f64 / hz, Instant::now()))
+}
+
+/// utime + stime (champs 14 et 15) d'une ligne `/proc/<pid>/stat` ; le nom
+/// entre parenthèses peut contenir des espaces.
+fn stat_ticks(stat: &str) -> Option<u64> {
+    let rest = stat.get(stat.rfind(')')? + 1..)?;
+    let f: Vec<&str> = rest.split_whitespace().collect();
+    Some(f.get(11)?.parse::<u64>().ok()? + f.get(12)?.parse::<u64>().ok()?)
+}
+
+/// Cœurs occupés en moyenne par llama-server pendant la requête (si elle a
+/// duré assez pour que la mesure ait un sens). Tout sur GPU : ≈ 1 cœur (le
+/// fil qui attend les cartes) ; des couches sur le processeur : un cœur par
+/// fil de calcul.
+fn cpu_cores(state: &AppState, cpu0: Option<(u32, f64, Instant)>) -> Option<f64> {
+    let (pid0, t0, at) = cpu0?;
+    let (pid1, t1, _) = llama_cpu(state)?;
+    let elapsed = at.elapsed().as_secs_f64();
+    (pid0 == pid1 && elapsed >= 3.0).then(|| ((t1 - t0) / elapsed * 10.0).round() / 10.0)
 }
 
 /// `vitesse=… t/s brouillon=a/n (p %)` tiré des `timings` de llama-server.
@@ -323,9 +355,14 @@ impl Log {
             let d: Vec<String> = self.dropped.iter().map(|(k, n)| format!("{k}×{n}")).collect();
             format!(" ignorés=[{}]", d.join(", "))
         };
-        let (speed, stats) = speed_of(timings);
+        let (mut speed, stats) = speed_of(timings);
+        let cores = cpu_cores(state, self.cpu0);
+        if let Some(c) = cores {
+            speed.push_str(&format!(" cpu={c} cœurs"));
+        }
         if let Some(mut st) = stats {
             st["preset"] = json!(self.preset);
+            st["cpu_cores"] = json!(cores);
             *state.0.last_gen.lock().expect("stats") = Some(st);
         }
         tracing::info!(
@@ -378,6 +415,7 @@ pub async fn responses(State(state): State<AppState>, body: Bytes) -> Response {
         sampling: String::new(),
         started,
         dropped: translated.dropped,
+        cpu0: llama_cpu(&state),
     };
     tokio::spawn(async move {
         let mut outcome = None;
@@ -584,6 +622,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> Res
         sampling: sampling::describe(&req),
         started,
         dropped: BTreeMap::new(),
+        cpu0: llama_cpu(&state),
     };
     let streamed = req.get("stream").and_then(Value::as_bool) == Some(true);
     let res = match state.0.http.post(chat_url(&state)).json(&req).send().await {
@@ -684,5 +723,19 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
         .into_response(),
         Ok(None) => Json(json!({"object": "list", "data": []})).into_response(),
         Err(e) => e.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proc_stat_ticks() {
+        let line = "4242 (llama server) S 1 4242 4242 0 -1 4194560 1 0 0 0 1500 250 0 0 20 0 9 0 100";
+        assert_eq!(stat_ticks(line), Some(1750));
+        assert_eq!(stat_ticks("4242 (x) S 1"), None);
+        let own = std::fs::read_to_string("/proc/self/stat").unwrap();
+        assert!(stat_ticks(&own).is_some());
     }
 }

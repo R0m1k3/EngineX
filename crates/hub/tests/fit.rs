@@ -44,6 +44,9 @@ fn run(ctx: u64, cards: &[CardVram]) -> enginex_hub::fit::FitReport {
             kv: KvType::Q8_0,
             fit_target_mib: 1024,
             draft_bytes: 0,
+            flash_attn: true,
+            ubatch: 0,
+            mtp: false,
         },
         cards,
     )
@@ -108,6 +111,9 @@ fn unknown_without_metadata_or_cards() {
         kv: KvType::F16,
         fit_target_mib: 0,
         draft_bytes: 0,
+        flash_attn: true,
+        ubatch: 0,
+        mtp: false,
     };
     assert_eq!(estimate(&input, &CARDS).verdict, Verdict::Unknown);
     assert_eq!(run(1024, &[]).verdict, Verdict::Unknown);
@@ -131,6 +137,9 @@ fn moe_too_big_offloads_and_draft_counts() {
         kv: KvType::Q8_0,
         fit_target_mib: 1024,
         draft_bytes: 0,
+        flash_attn: true,
+        ubatch: 0,
+        mtp: false,
     };
     assert_eq!(estimate(&input(&dense), &CARDS).verdict, Verdict::NoFit);
     assert_eq!(estimate(&input(&moe), &CARDS).verdict, Verdict::Offload);
@@ -147,6 +156,9 @@ fn moe_too_big_offloads_and_draft_counts() {
             kv: KvType::Q8_0,
             fit_target_mib: 1024,
             draft_bytes: 1 << 30,
+            flash_attn: true,
+            ubatch: 0,
+            mtp: false,
         },
         &CARDS,
     );
@@ -157,4 +169,40 @@ fn moe_too_big_offloads_and_draft_counts() {
         sum(&with),
         sum(&base)
     );
+}
+
+#[test]
+fn flash_attention_off_and_mtp_cost_vram() {
+    // Cas réel du 2026-11-19 : sans flash attention, la matrice d'attention
+    // (têtes × ubatch × contexte en f32) est réservée sur chaque carte et le
+    // modèle déborde sur le processeur.
+    let m = meta();
+    let input = |fa: bool, mtp: bool, ubatch: u64| FitInput {
+        meta: &m,
+        weights_bytes: (16.5 * (1u64 << 30) as f64) as u64,
+        mmproj_bytes: 0,
+        ctx: 32768,
+        parallel: 1,
+        kv: KvType::Q8_0,
+        fit_target_mib: 1024,
+        draft_bytes: 0,
+        flash_attn: fa,
+        ubatch,
+        mtp,
+    };
+    let on = estimate(&input(true, false, 0), &CARDS);
+    assert_eq!((on.no_fa_mib, on.cpu_mib), (0, 0));
+    assert!(matches!(on.verdict, Verdict::Fits | Verdict::Tight), "{on:?}");
+    let off = estimate(&input(false, false, 0), &CARDS);
+    // 64 têtes × 512 × 32 768 × 4 octets = 4 Gio par carte.
+    assert_eq!(off.no_fa_mib, 4096);
+    assert_eq!(off.verdict, Verdict::NoFit);
+    assert!(off.cpu_mib > 4000, "{off:?}");
+    // MTP : KV d'une couche + tampons de calcul sur la dernière carte.
+    let mtp = estimate(&input(true, true, 0), &CARDS);
+    assert_eq!(mtp.cards[0].need_mib, on.cards[0].need_mib);
+    assert_eq!(mtp.cards[1].need_mib - on.cards[1].need_mib, 68 + 512);
+    // Lot physique de 2048 : tampons ×4 et logits ×4.
+    let big = estimate(&input(true, false, 2048), &CARDS);
+    assert!(big.cards[0].need_mib >= on.cards[0].need_mib + 1536);
 }

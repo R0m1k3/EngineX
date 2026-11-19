@@ -118,9 +118,17 @@ pub async fn create_auto(state: &AppState, model_id: i64) -> anyhow::Result<i64>
     if meta.has_mtp() {
         s.spec.draft = DraftKind::Mtp;
     }
+    // Modèle dense qui ne tient pas : contexte réduit (jusqu'à 16k) plutôt
+    // que des couches calculées par le processeur.
+    while s.ctx > 16384
+        && let Ok(r) = models::local_fit(state, &m, &s).await
+        && r.verdict == Verdict::NoFit
+    {
+        s.ctx = (s.ctx / 2).max(16384);
+    }
     // MoE plus gros que la VRAM (experts en RAM) : lots plus grands, comme Loki.
     if let Ok(r) = models::local_fit(state, &m, &s).await
-        && r.verdict == enginex_hub::fit::Verdict::Offload
+        && r.verdict == Verdict::Offload
     {
         s.batch = Some(4096);
         s.ubatch = Some(2048);
@@ -245,6 +253,26 @@ pub async fn update(
         .execute(&state.0.db)
         .await?;
     Ok(Json(json!({ "reload_needed": reload_needed })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FitBody {
+    settings: PresetSettings,
+}
+
+/// Place estimée du modèle d'un preset avec des réglages en cours d'édition.
+pub async fn fit(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<i64>,
+    ApiJson(b): ApiJson<FitBody>,
+) -> Result<Json<enginex_hub::fit::FitReport>, ApiError> {
+    if b.settings.invalid().is_some() {
+        return Err(ApiError::BadRequest);
+    }
+    let p = preset(&state, id).await?;
+    let m: ModelRow = models::model(&state, p.model_id).await?;
+    Ok(Json(models::local_fit(&state, &m, &b.settings).await?))
 }
 
 async fn delete_row(state: &AppState, id: i64) -> Result<(), sqlx::Error> {

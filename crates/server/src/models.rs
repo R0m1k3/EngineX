@@ -199,6 +199,9 @@ pub async fn fit_route(State(state): State<AppState>, Query(q): Query<FitQuery>)
             kv,
             fit_target_mib: 1024,
             draft_bytes: 0,
+            flash_attn: true,
+            ubatch: 0,
+            mtp: false,
         },
         &cards,
     );
@@ -796,6 +799,9 @@ pub async fn local_fit(
             kv: KvType::parse(&s.kv_type).unwrap_or(KvType::Q8_0),
             fit_target_mib: s.fit_target_mib,
             draft_bytes,
+            flash_attn: s.flash_attn,
+            ubatch: s.ubatch.unwrap_or(0),
+            mtp: s.spec.draft == enginex_engine::args::DraftKind::Mtp && meta.has_mtp(),
         },
         &cards,
     ))
