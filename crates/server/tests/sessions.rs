@@ -282,7 +282,11 @@ async fn engine_not_ready_is_refused() {
     let id = e.until("/api/presets", |v| v[0]["id"].is_i64()).await[0]["id"]
         .as_i64()
         .unwrap();
-    e.send("POST", &format!("/api/presets/{id}/activate"), json!({})).await;
+    let a = e.send("POST", &format!("/api/presets/{id}/activate"), json!({})).await;
+    assert_eq!(a.status, 200, "{}", a.text);
+    // L'activation tourne en tâche de fond : attendre que le preset soit
+    // marqué actif (le chargement, lui, dure FAKE_LOAD_MS).
+    e.until("/api/presets", |v| v[0]["active"] == true).await;
     let sid = new_session(&e, "auto").await;
     let r = turn(&e, &sid, "x").await;
     assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{}", r.text);
