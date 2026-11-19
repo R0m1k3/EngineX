@@ -2,10 +2,12 @@
   import { changePassword, logout, message } from '../lib/api';
   import { onDestroy } from 'svelte';
   import Memory from './Memory.svelte';
+  import Crons from './Crons.svelte';
   import Models from './Models.svelte';
   import Sessions from './Sessions.svelte';
   import Settings from './Settings.svelte';
   import System from './System.svelte';
+  import Tasks from './Tasks.svelte';
 
   let { loggedOut }: { loggedOut: () => void } = $props();
 
@@ -19,6 +21,8 @@
   let sub = $derived(route.split('/')[1] ?? '');
   const pages = [
     { id: 'sessions', label: 'Sessions' },
+    { id: 'tasks', label: 'Tâches' },
+    { id: 'crons', label: 'Crons' },
     { id: 'memory', label: 'Mémoire' },
     { id: 'models', label: 'Modèles' },
     { id: 'system', label: 'Système' },
@@ -75,6 +79,10 @@
       <System />
     {:else if page === 'settings'}
       <Settings {sub} />
+    {:else if page === 'tasks'}
+      <Tasks />
+    {:else if page === 'crons'}
+      <Crons />
     {:else if page === 'memory'}
       <Memory />
     {:else if page === 'models'}

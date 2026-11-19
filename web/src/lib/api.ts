@@ -774,3 +774,86 @@ export const skill = (name: string) =>
 export const saveSkill = (name: string, content: string) => request('PUT', `/api/skills/${q(name)}`, { content });
 export const enableSkill = (name: string, enabled: boolean) =>
   request('PUT', `/api/skills/${q(name)}/enabled`, { enabled });
+
+// ---- Tâches (workspace/tasks.json, format Harness) ----
+
+export type TaskStatus = 'todo' | 'doing' | 'done';
+
+export interface Task {
+  id: string;
+  title: string;
+  notes: string;
+  status: TaskStatus;
+  project_id: string | null;
+  due: string | null;
+  order: number;
+  created_at: number;
+  updated_at: number;
+  done_at?: number;
+  created_by?: string;
+}
+
+export interface TaskProject {
+  id: string;
+  name: string;
+}
+
+export interface Board {
+  version: number;
+  projects: TaskProject[];
+  tasks: Task[];
+}
+
+export type TaskPatch = Partial<Pick<Task, 'title' | 'notes' | 'status' | 'project_id' | 'due' | 'order'>>;
+
+export const board = () => request<Board>('GET', '/api/tasks');
+export const createTask = (t: { title: string; notes?: string; status?: TaskStatus; project_id?: string | null; due?: string | null }) =>
+  request<Task>('POST', '/api/tasks', t);
+export const patchTask = (id: string, p: TaskPatch) => request<Task>('PATCH', `/api/tasks/${encodeURIComponent(id)}`, p);
+export const deleteTask = (id: string) => request('DELETE', `/api/tasks/${encodeURIComponent(id)}`);
+export const createTaskProject = (name: string) => request<TaskProject>('POST', '/api/tasks/projects', { name });
+export const deleteTaskProject = (id: string) => request('DELETE', `/api/tasks/projects/${encodeURIComponent(id)}`);
+
+// ---- Crons ----
+
+export type CronKind = 'prompt' | 'shell';
+export type CronRunStatus = 'running' | 'ok' | 'failed' | 'skipped';
+
+export interface CronBody {
+  name: string;
+  topic_id: number;
+  kind: CronKind;
+  body: string;
+  schedule: string;
+  tz?: string;
+  timeout_s?: number;
+  enabled?: boolean;
+}
+
+export interface Cron extends Required<CronBody> {
+  id: number;
+  topic: string | null;
+  session_id: string | null;
+  next_run: number | null;
+  running: boolean;
+  last: { status: CronRunStatus; started_at: number; ended_at: number | null } | null;
+}
+
+export interface CronRun {
+  id: number;
+  trigger: 'schedule' | 'manual';
+  status: CronRunStatus;
+  started_at: number;
+  ended_at: number | null;
+  output: string;
+  session_id: string | null;
+}
+
+export const crons = () => request<Cron[]>('GET', '/api/crons');
+export const createCron = (b: CronBody) => request<{ id: number }>('POST', '/api/crons', b);
+export const updateCron = (id: number, b: CronBody) => request('PUT', `/api/crons/${id}`, b);
+export const deleteCron = (id: number) => request('DELETE', `/api/crons/${id}`);
+export const runCron = (id: number) => request('POST', `/api/crons/${id}/run`, {});
+export const cronRuns = (id: number) => request<CronRun[]>('GET', `/api/crons/${id}/runs`);
+export const cronPreview = (schedule: string, tz?: string) =>
+  request<{ next: number[] }>('POST', '/api/crons/preview', { schedule, tz });

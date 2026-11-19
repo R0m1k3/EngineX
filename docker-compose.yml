@@ -21,6 +21,8 @@ services:
       ENGINEX_SANDBOX_NETWORK: enginex-sandbox
       ENGINEX_SANDBOX_API_URL: http://enginex:8090/v1
       ENGINEX_SANDBOX_MEMORY: 8g
+      # Recherche web de Codex (outil web_search).
+      ENGINEX_SEARXNG_URL: http://searxng:8080
     volumes:
       - enginex-data:/data
       # Modèles GGUF (plusieurs dizaines de Go). Sur l'Unraid, un dossier du
@@ -37,8 +39,10 @@ services:
       enginex-sandbox:
         aliases: [enginex]
       enginex-docker: {}
+      enginex-search: {}
     depends_on:
       - docker-proxy
+      - searxng
     labels:
       - com.centurylinklabs.watchtower.enable=true
 
@@ -60,12 +64,44 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
 
+  # Moteur de recherche de l'outil web_search, joint par EngineX seulement
+  # (pas de port publié). Réglages ci-dessous (configs) : format JSON activé,
+  # limiteur coupé (il exigerait Valkey).
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: enginex-searxng
+    restart: unless-stopped
+    configs:
+      - source: searxng-settings
+        target: /etc/searxng/settings.yml
+    networks:
+      - enginex-search
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
+configs:
+  searxng-settings:
+    content: |
+      use_default_settings: true
+      server:
+        # Service interne : la clé ne protège que ses cookies.
+        secret_key: "${SEARXNG_SECRET:-enginex-searxng-interne-a-changer}"
+        limiter: false
+        image_proxy: false
+      search:
+        safe_search: 0
+        formats:
+          - html
+          - json
+
 networks:
   # Réseau des sandboxes (Internet ouvert) ; nom fixe, utilisé par EngineX.
   enginex-sandbox:
     name: enginex-sandbox
   enginex-docker:
     internal: true
+  # EngineX ↔ SearXNG (SearXNG a besoin d'Internet pour interroger les moteurs).
+  enginex-search: {}
 
 volumes:
   enginex-data:

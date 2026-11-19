@@ -4,11 +4,13 @@ pub mod api_keys;
 pub mod attachments;
 pub mod auth;
 pub mod autoupdate;
+pub mod board;
 pub mod bridge;
 pub mod client_ip;
 pub mod codex_config;
 pub mod config;
 pub mod copies;
+pub mod crons;
 pub mod db;
 pub mod engine_api;
 pub mod error;
@@ -31,6 +33,7 @@ pub mod v1;
 pub mod vault;
 pub mod verify;
 pub mod web;
+pub mod webtools;
 pub mod workspace;
 
 use axum::{
@@ -39,7 +42,7 @@ use axum::{
     http::{HeaderValue, Method, header},
     middleware,
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -116,6 +119,15 @@ pub fn app(state: AppState) -> Router {
         .route("/api/memory/file", get(memory::get_file).put(memory::put_file))
         .route("/api/memory/revisions", get(memory::revisions))
         .route("/api/memory/revisions/{id}", get(memory::revision))
+        .route("/api/tasks", get(board::list).post(board::create))
+        .route("/api/tasks/projects", post(board::create_project))
+        .route("/api/tasks/projects/{id}", delete(board::delete_project))
+        .route("/api/tasks/{id}", patch(board::patch).delete(board::delete))
+        .route("/api/crons", get(crons::list).post(crons::create))
+        .route("/api/crons/preview", post(crons::preview))
+        .route("/api/crons/{id}", put(crons::update).delete(crons::delete))
+        .route("/api/crons/{id}/run", post(crons::run_now))
+        .route("/api/crons/{id}/runs", get(crons::runs))
         .route("/api/skills", get(skills::list))
         .route("/api/skills/{name}", get(skills::get).put(skills::put))
         .route("/api/skills/{name}/enabled", put(skills::put_enabled))

@@ -511,6 +511,25 @@ pub async fn post_turn(
     UrlPath(id): UrlPath<String>,
     ApiJson(b): ApiJson<TurnBody>,
 ) -> Result<Response, ApiError> {
+    start_turn(&state, &id, b.text.trim(), b.attachments, "user").await?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "accepted": true }))).into_response())
+}
+
+/// Lance un tour (message de Michael, ou consigne d'un cron) : contrôles,
+/// place parmi les sandboxes, puis le tour tourne en tâche de fond.
+pub async fn start_turn(
+    state: &AppState,
+    id: &str,
+    text: &str,
+    attachments: Vec<String>,
+    origin: &'static str,
+) -> Result<(), ApiError> {
+    let state = state.clone();
+    let b = TurnBody {
+        text: text.to_string(),
+        attachments,
+    };
+    let id = id.to_string();
     let r = row(&state, &id).await?;
     let text = b.text.trim().to_string();
     if (text.is_empty() && b.attachments.is_empty()) || text.len() > 256 * 1024 || b.attachments.len() > 10 {
@@ -562,15 +581,15 @@ pub async fn post_turn(
         "text": masker.mask(&text),
         "images": images,
     });
-    hub.begin(user, "user")?;
+    hub.begin(user, origin)?;
     let _ = r;
     tokio::spawn(hub.run_turn(state.clone(), text, b.attachments));
-    Ok((StatusCode::ACCEPTED, Json(json!({ "accepted": true }))).into_response())
+    Ok(())
 }
 
 /// Limite `sandbox.max` : la plus ancienne sandbox inactive est arrêtée,
 /// sinon `too_many_sandboxes`.
-async fn make_room(state: &AppState, for_id: &str) -> Result<(), ApiError> {
+pub(crate) async fn make_room(state: &AppState, for_id: &str) -> Result<(), ApiError> {
     let max = sandboxes::max_live(state).await as usize;
     let live: Vec<_> = bridge::hubs(state)
         .into_iter()

@@ -325,6 +325,7 @@ pub fn test_timings() -> Timings {
             pull_every: None,
             memory_turn_timeout: Duration::from_secs(600),
         },
+        cron_tick: Duration::from_millis(100),
     }
 }
 
@@ -446,6 +447,10 @@ pub async fn env_cfg(fake_env: &str, tweak: impl FnOnce(&mut Config)) -> Env {
         hf_base: hf,
         timings: test_timings(),
         sandbox: SandboxConfig::default(),
+        web: enginex_server::config::WebConfig {
+            allow_private: true,
+            ..Default::default()
+        },
     };
     tweak(&mut config);
     config.check_data_dir().unwrap();
@@ -869,5 +874,41 @@ pub async fn new_copy_session(e: &Env) -> (String, String) {
     (
         r.body["id"].as_str().unwrap().to_string(),
         r.body["copy_branch"].as_str().unwrap().to_string(),
+    )
+}
+
+/// Clé interne de la sandbox d'une session (comme `sandboxes::start`), pour
+/// appeler `/mcp` comme elle.
+pub async fn sandbox_key(e: &Env, sid: &str) -> String {
+    let key = format!("ex_test{}", uuid::Uuid::new_v4().simple());
+    sqlx::query("INSERT INTO api_keys (name, hash, created_at, internal) VALUES (?, ?, ?, 1)")
+        .bind(format!("sandbox:{sid}"))
+        .bind(Sha256::digest(key.as_bytes()).to_vec())
+        .bind(enginex_server::state::now())
+        .execute(e.state.db())
+        .await
+        .unwrap();
+    key
+}
+
+/// Appel d'un outil du MCP intégré : `(texte, isError)`.
+pub async fn mcp_tool(e: &Env, key: &str, name: &str, args: Value) -> (String, bool) {
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": name, "arguments": args}});
+    let req = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header(header::HOST, "enginex:8090")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {key}"))
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let res = e.router.clone().oneshot(req).await.unwrap();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(v.get("error").is_none(), "{v}");
+    (
+        v["result"]["content"][0]["text"].as_str().unwrap().to_string(),
+        v["result"]["isError"].as_bool().unwrap(),
     )
 }

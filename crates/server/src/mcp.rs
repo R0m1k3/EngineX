@@ -1,5 +1,5 @@
 //! Serveur MCP intégré (`POST /mcp`, HTTP « streamable », réponses JSON) :
-//! outils mémoire et recall pour Codex dans les sandboxes. Seule la clé
+//! outils mémoire, recall et web pour Codex dans les sandboxes. Seule la clé
 //! interne d'une sandbox est acceptée ; elle fixe la session, donc le projet
 //! et le topic. Une requête JSON-RPC par appel, notifications → 202.
 
@@ -13,12 +13,12 @@ use axum::{
 use serde_json::{Map, Value, json};
 
 use crate::{
-    bridge,
+    board, bridge,
     error::V1Error,
     memory::{self, File, Level, Refusal},
     recall, sandboxes, sessions,
     state::{AppState, now},
-    v1, workspace,
+    v1, webtools, workspace,
 };
 
 const BODY_LIMIT: usize = 1024 * 1024;
@@ -218,6 +218,58 @@ pub fn tools() -> Vec<Value> {
                 "limit": {"type": "integer", "minimum": 1, "maximum": 40},
             }),
             &["session_id"],
+        ),
+        tool(
+            "web_search",
+            "Recherche sur le web (SearXNG) : titres, adresses et extraits. Lis ensuite une page avec web_read.",
+            json!({
+                "query": {"type": "string"},
+                "count": {"type": "integer", "minimum": 1, "maximum": 10},
+            }),
+            &["query"],
+        ),
+        tool(
+            "web_read",
+            "Lit une page web publique et la rend en texte (HTML converti). Adresses privées ou locales refusées.",
+            json!({
+                "url": {"type": "string", "description": "adresse http(s) complète"},
+                "max_chars": {"type": "integer", "minimum": 1000, "maximum": webtools::READ_MAX_CHARS},
+            }),
+            &["url"],
+        ),
+        tool(
+            "tasks_list",
+            "Liste les tâches du tableau de Michael (kanban), avec leur id.",
+            json!({
+                "status": {"type": "string", "enum": ["todo", "doing", "done", "open", "all"],
+                           "description": "open (défaut) = à faire + en cours"},
+                "project": {"type": "string", "description": "nom du projet de tâches"},
+            }),
+            &[],
+        ),
+        tool(
+            "tasks_add",
+            "Ajoute une tâche au tableau de Michael.",
+            json!({
+                "title": {"type": "string"},
+                "notes": {"type": "string"},
+                "due": {"type": "string", "description": "échéance AAAA-MM-JJ"},
+                "project": {"type": "string", "description": "nom du projet de tâches (créé s'il n'existe pas)"},
+                "status": {"type": "string", "enum": ["todo", "doing", "done"]},
+            }),
+            &["title"],
+        ),
+        tool(
+            "tasks_update",
+            "Modifie une tâche (id donné par tasks_list) : statut, titre, notes, échéance (vide = sans).",
+            json!({
+                "id": {"type": "string"},
+                "status": {"type": "string", "enum": ["todo", "doing", "done"]},
+                "title": {"type": "string"},
+                "notes": {"type": "string"},
+                "due": {"type": "string"},
+            }),
+            &["id"],
         ),
     ]
 }
@@ -491,6 +543,119 @@ async fn call(state: &AppState, who: &Caller, name: &str, args: &Value) -> Resul
                 out.push("(aucun message)".into());
             }
             Ok(out.join("\n"))
+        }
+        "web_search" => {
+            let q = args["query"].as_str().unwrap_or("").trim();
+            if q.is_empty() {
+                return Err("query est vide".into());
+            }
+            let count = args["count"].as_i64().unwrap_or(8) as usize;
+            let hits = webtools::search(state, q, count).await?;
+            if hits.is_empty() {
+                return Ok(format!("Aucun résultat pour « {q} »."));
+            }
+            Ok(hits
+                .iter()
+                .enumerate()
+                .map(|(i, h)| format!("{}. {}\n   {}\n   {}", i + 1, h.title, h.url, truncate(&h.snippet, 300)))
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+        "web_read" => {
+            let url = args["url"].as_str().unwrap_or("");
+            let max = args["max_chars"]
+                .as_i64()
+                .map_or(webtools::READ_DEFAULT_CHARS, |n| n as usize);
+            let page = webtools::read(state, url).await?;
+            Ok(format!(
+                "Adresse : {}\nType : {}\n\n{}",
+                page.url,
+                if page.content_type.is_empty() {
+                    "?"
+                } else {
+                    &page.content_type
+                },
+                webtools::cut(&page.text, max)
+            ))
+        }
+        "tasks_list" => {
+            let b = board::read(state).await.map_err(board::Refusal::message)?;
+            let status = args["status"].as_str().unwrap_or("open");
+            let project = args["project"].as_str().map(str::trim);
+            let pid = match project {
+                Some(p) => Some(
+                    b.projects
+                        .iter()
+                        .find(|x| x.name.eq_ignore_ascii_case(p))
+                        .map(|x| x.id.clone())
+                        .ok_or_else(|| format!("projet de tâches « {p} » introuvable"))?,
+                ),
+                None => None,
+            };
+            let mut tasks: Vec<&board::Task> = b
+                .tasks
+                .iter()
+                .filter(|t| match status {
+                    "all" => true,
+                    "open" => t.status != board::Status::Done,
+                    s => board::Status::parse(s) == Some(t.status),
+                })
+                .filter(|t| pid.is_none() || t.project_id == pid)
+                .collect();
+            tasks.sort_by(|a, b| {
+                (a.status as u8, a.order)
+                    .partial_cmp(&(b.status as u8, b.order))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            if tasks.is_empty() {
+                return Ok("(aucune tâche)".into());
+            }
+            let shown: Vec<String> = tasks.iter().take(200).map(|t| board::line(&b, t)).collect();
+            let more = tasks.len().saturating_sub(200);
+            Ok(if more > 0 {
+                format!("{}\n(et {more} autres)", shown.join("\n"))
+            } else {
+                shown.join("\n")
+            })
+        }
+        "tasks_add" => {
+            let by = format!("session:{}", who.session_id);
+            let t = board::update(state, |b| {
+                let project_id = match args["project"].as_str().map(str::trim).filter(|p| !p.is_empty()) {
+                    Some(p) => Some(b.project_by_name(p)?),
+                    None => None,
+                };
+                let new = board::NewTask {
+                    title: args["title"].as_str().unwrap_or("").to_string(),
+                    notes: args["notes"].as_str().map(str::to_string),
+                    status: args["status"].as_str().and_then(board::Status::parse),
+                    project_id,
+                    due: args["due"]
+                        .as_str()
+                        .filter(|d| !d.trim().is_empty())
+                        .map(str::to_string),
+                };
+                let t = b.add_task(new, &by)?;
+                Ok(board::line(b, &t))
+            })
+            .await
+            .map_err(board::Refusal::message)?;
+            Ok(format!("Tâche ajoutée : {t}"))
+        }
+        "tasks_update" => {
+            let id = args["id"].as_str().unwrap_or("").to_string();
+            let mut patch = args.as_object().cloned().unwrap_or_default();
+            patch.remove("id");
+            if patch.is_empty() {
+                return Err("rien à modifier : donne status, title, notes ou due".into());
+            }
+            let t = board::update(state, |b| {
+                let t = b.patch_task(&id, &patch)?;
+                Ok(board::line(b, &t))
+            })
+            .await
+            .map_err(board::Refusal::message)?;
+            Ok(format!("Tâche modifiée : {t}"))
         }
         _ => Err(format!("outil inconnu : {name}")),
     }
