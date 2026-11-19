@@ -1105,3 +1105,58 @@ export const sessionCommit = (id: string, message: string) => request<{ sha: str
 export const sessionPush = (id: string) => request<{ branch: string }>('POST', `${S(id)}/git/push`);
 export const sessionPullRequest = (id: string, title: string, body: string) =>
   request<PullRequest>('POST', `${S(id)}/git/pull-request`, { title, body });
+
+// ---- Fil de notifications, push, webhooks ----
+
+export type FeedLevel = 'info' | 'success' | 'warning' | 'error';
+
+export interface FeedItem {
+  id: number;
+  at: number;
+  source: string;
+  level: FeedLevel;
+  title: string;
+  body: string;
+  link: string | null;
+  read: boolean;
+}
+
+export const feed = (o: { before?: number; limit?: number; unread?: boolean } = {}) => {
+  const p = new URLSearchParams();
+  if (o.before !== undefined) p.set('before', String(o.before));
+  if (o.limit !== undefined) p.set('limit', String(o.limit));
+  if (o.unread) p.set('unread', 'true');
+  return request<{ items: FeedItem[]; unread: number }>('GET', `/api/feed?${p}`);
+};
+export const feedRead = (b: { ids?: number[]; all?: boolean }) => request<{ unread: number }>('POST', '/api/feed/read', b);
+export const feedDelete = (id: number) => request<{ unread: number }>('DELETE', `/api/feed/${id}`);
+export const feedClear = () => request<{ unread: number }>('DELETE', '/api/feed');
+
+export type PushMode = 'important' | 'all' | 'off';
+export interface PushStatus {
+  public_key: string;
+  mode: PushMode;
+  subscriptions: { id: number; endpoint: string; host: string | null; agent: string; created_at: number; last_ok: number | null }[];
+}
+export const pushStatus = () => request<PushStatus>('GET', '/api/push');
+export const pushSubscribe = (sub: PushSubscriptionJSON) => request('POST', '/api/push/subscribe', sub);
+export const pushUnsubscribe = (b: { endpoint?: string; id?: number }) => request('POST', '/api/push/unsubscribe', b);
+export const pushMode = (mode: PushMode) => request('PUT', '/api/push/mode', { mode });
+export const pushTest = () => request<{ sent: number; failed: number; errors: string[] }>('POST', '/api/push/test');
+
+export interface Webhook {
+  id: number;
+  name: string;
+  level: FeedLevel;
+  push: boolean;
+  enabled: boolean;
+  created_at: number;
+  last_at: number | null;
+  count: number;
+}
+export const webhooks = () => request<Webhook[]>('GET', '/api/webhooks');
+export const createWebhook = (b: { name: string; level: FeedLevel; push: boolean }) =>
+  request<{ id: number; path: string }>('POST', '/api/webhooks', b);
+export const patchWebhook = (id: number, b: Partial<Pick<Webhook, 'name' | 'level' | 'push' | 'enabled'>>) =>
+  request('PATCH', `/api/webhooks/${id}`, b);
+export const deleteWebhook = (id: number) => request('DELETE', `/api/webhooks/${id}`);

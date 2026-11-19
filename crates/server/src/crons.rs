@@ -437,6 +437,27 @@ async fn run_taken(state: AppState, c: CronRow, trigger: &'static str) {
         .await;
     state.0.crons.release(c.id);
     tracing::info!("cron « {} » ({trigger}) : {status}", c.name);
+    let (level, what) = if status == "ok" {
+        ("success", "réussi")
+    } else {
+        ("error", "en échec")
+    };
+    crate::feed::emit(
+        &state,
+        crate::feed::Note::new("cron", level, format!("Cron « {} » {what}", c.name))
+            .body(
+                output
+                    .chars()
+                    .rev()
+                    .take(600)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<String>(),
+            )
+            .link("#crons")
+            .important(status != "ok"),
+    );
 }
 
 /// Session du cron, recréée si elle a disparu.

@@ -598,6 +598,11 @@ async fn run_download(state: &AppState, row: DownloadRow) {
                 let _ = set_download_state(state, id, "failed", Some("register_failed")).await;
             } else {
                 let _ = set_download_state(state, id, "done", None).await;
+                crate::feed::emit(
+                    state,
+                    crate::feed::Note::new("download", "success", format!("Téléchargement fini : {}", row.repo))
+                        .link("#models"),
+                );
             }
         }
         Err(DownloadError::Cancelled) => {
@@ -613,6 +618,12 @@ async fn run_download(state: &AppState, row: DownloadRow) {
                 let _ = remove_parts(state, id).await;
             }
             let _ = set_download_state(state, id, "failed", Some(&code)).await;
+            crate::feed::emit(
+                state,
+                crate::feed::Note::new("download", "error", format!("Téléchargement en échec : {}", row.repo))
+                    .body(e.to_string())
+                    .link("#models"),
+            );
         }
     }
 }

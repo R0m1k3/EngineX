@@ -278,6 +278,23 @@ pub async fn run(state: &AppState, hub: &Arc<Hub>, tid: &str) {
     {
         tracing::warn!("ref green : {e:#}");
     }
+    if matches!(status, "failed" | "error") && i64::from(hub.fixes_done()) >= max_fixes(state).await {
+        // Plus de correction automatique : Michael doit regarder.
+        let title = crate::sessions::row(state, &hub.id)
+            .await
+            .map(|r| r.title)
+            .unwrap_or_else(|_| "session".into());
+        crate::feed::emit(
+            state,
+            crate::feed::Note::new("verify", "warning", format!("« {title} » : vérification rouge"))
+                .body(format!(
+                    "Échec après {} correction(s) automatique(s).",
+                    hub.fixes_done()
+                ))
+                .link(format!("#sessions/{}", hub.id))
+                .important(true),
+        );
+    }
     if status == "failed" && i64::from(hub.fixes_done()) < max_fixes(state).await {
         let fixes = hub.fixes_done() + 1;
         let max = max_fixes(state).await;

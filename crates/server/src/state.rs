@@ -68,6 +68,8 @@ pub(crate) struct Inner {
     pub serve_gate: Arc<RwLock<()>>,
     /// File d'attente commune des tours.
     pub queue: crate::queue::Queue,
+    /// Fil de notifications, push web, webhooks.
+    pub feed: crate::feed::Feed,
     /// Fin de la dernière requête `/v1` (ms Unix ; 0 = jamais).
     pub last_done_ms: AtomicI64,
     pub auto: crate::autoupdate::AutoState,
@@ -130,6 +132,7 @@ impl AppState {
             hf_cache: Mutex::new(HashMap::new()),
             serve_gate: Arc::new(RwLock::new(())),
             queue: Default::default(),
+            feed: Default::default(),
             last_done_ms: AtomicI64::new(0),
             auto: Default::default(),
             v1_limiter: Mutex::new(Limiter::new(V1_MAX_FAILURES, crate::limiter::WINDOW)),
@@ -209,6 +212,7 @@ impl AppState {
         crate::engine_api::boot(self).await?;
         crate::models::boot(self).await?;
         crate::crons::spawn(self);
+        crate::feed::spawn(self);
         if self.config().timings.auto_loop {
             tokio::spawn(crate::autoupdate::run(self.clone()));
         }

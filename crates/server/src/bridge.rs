@@ -787,6 +787,7 @@ impl Hub {
             "turn_stored",
             json!({"turn": {"id": tid, "status": "failed", "error": error, "usage": t.usage, "origin": t.origin}}),
         );
+        crate::feed::turn_done(state, &self.id, t.origin, "failed", t.started_at, Some(&error));
         if memory_turn {
             self.end_memory_turn();
         } else {
@@ -1212,6 +1213,7 @@ impl Hub {
             });
             st.last_activity = Instant::now();
         }
+        crate::feed::waiting_answer(state, &self.id, &method);
         self.emit("request", json!({"rid": rid, "method": method, "params": params}));
     }
 
@@ -1376,6 +1378,7 @@ impl Hub {
             json!({"turn": {"id": tid, "status": status, "error": error, "usage": usage, "origin": origin}}),
         );
         self.write_record(state);
+        crate::feed::turn_done(state, &self.id, origin, &status, started, error.as_deref());
         crate::verify::spawn_after_turn(state.clone(), self.clone(), tid, status, origin, pre);
     }
 

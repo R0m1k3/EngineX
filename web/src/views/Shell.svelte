@@ -3,6 +3,9 @@
   import { onDestroy } from 'svelte';
   import Memory from './Memory.svelte';
   import Crons from './Crons.svelte';
+  import Dashboard from './Dashboard.svelte';
+  import Feed from './Feed.svelte';
+  import { openEvents } from '../lib/sse';
   import Files from './Files.svelte';
   import Git from './Git.svelte';
   import Models from './Models.svelte';
@@ -14,7 +17,7 @@
   let { loggedOut }: { loggedOut: () => void } = $props();
 
   // Routage par l'ancre : #sessions/<id>, #models/presets, #settings/engine...
-  const read = () => location.hash.replace(/^#/, '') || 'sessions';
+  const read = () => location.hash.replace(/^#/, '') || 'dashboard';
   let route = $state(read());
   const onHash = () => (route = read());
   window.addEventListener('hashchange', onHash);
@@ -22,6 +25,7 @@
   let page = $derived(route.split('/')[0]);
   let sub = $derived(route.split('/')[1] ?? '');
   const pages = [
+    { id: 'dashboard', label: 'Tableau de bord' },
     { id: 'sessions', label: 'Sessions' },
     { id: 'tasks', label: 'Tâches' },
     { id: 'crons', label: 'Crons' },
@@ -32,6 +36,10 @@
     { id: 'system', label: 'Système' },
     { id: 'settings', label: 'Paramètres' },
   ];
+  // Non lues du fil, en direct.
+  let unread = $state(0);
+  const closeFeed = openEvents('/api/feed/events', { feed: (d) => typeof d.unread === 'number' && (unread = d.unread) });
+  onDestroy(closeFeed);
   let showPassword = $state(false);
   let current = $state('');
   let next = $state('');
@@ -65,6 +73,9 @@
     {#each pages as p}
       <a class:active={page === p.id} href="#{p.id}" aria-current={page === p.id ? 'page' : undefined}>{p.label}</a>
     {/each}
+    <a class:active={page === 'feed'} href="#feed" class="bell" title="Notifications">
+      Notifications{#if unread}<span class="count">{unread > 99 ? '99+' : unread}</span>{/if}
+    </a>
     <div class="spacer"></div>
     <button class="link" onclick={() => (showPassword = !showPassword)}>Mot de passe</button>
     <button class="link" onclick={doLogout}>Déconnexion</button>
@@ -79,7 +90,11 @@
         <button type="submit">Changer</button>
       </form>
     {/if}
-    {#if page === 'system'}
+    {#if page === 'dashboard'}
+      <Dashboard />
+    {:else if page === 'feed'}
+      <Feed {sub} />
+    {:else if page === 'system'}
       <System />
     {:else if page === 'settings'}
       <Settings {sub} />
@@ -100,3 +115,8 @@
     {/if}
   </main>
 </div>
+
+<style>
+  .bell { margin-top: var(--s2); display: flex; align-items: center; gap: var(--s2); }
+  .count { background: var(--accent); color: var(--bg); border-radius: 9px; padding: 0 6px; font-size: 12px; font-weight: 600; line-height: 18px; }
+</style>

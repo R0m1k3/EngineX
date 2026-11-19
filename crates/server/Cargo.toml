@@ -55,6 +55,7 @@ gix = { version = "0.90.0", default-features = false, features = ["revision", "b
 similar = "3.2.1"
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
+web-push-native = "0.5"
 
 [dev-dependencies]
 flate2 = "1"

@@ -15,6 +15,7 @@ pub mod crons;
 pub mod db;
 pub mod engine_api;
 pub mod error;
+pub mod feed;
 pub mod files;
 pub mod forge;
 pub mod git;
@@ -193,6 +194,20 @@ pub fn app(state: AppState) -> Router {
         .route("/api/sessions/{id}/browser/live", get(browser::live))
         .route("/api/browser", get(browser::status))
         .route("/api/queue", get(queue::api))
+        .route("/api/feed", get(feed::list).delete(feed::clear))
+        .route("/api/feed/read", post(feed::mark_read))
+        .route("/api/feed/events", get(feed::events))
+        .route("/api/feed/{id}", delete(feed::delete_one))
+        .route("/api/push", get(feed::push_status))
+        .route("/api/push/subscribe", post(feed::subscribe))
+        .route("/api/push/unsubscribe", post(feed::unsubscribe))
+        .route("/api/push/mode", put(feed::set_mode))
+        .route("/api/push/test", post(feed::push_test))
+        .route("/api/webhooks", get(feed::hooks_list).post(feed::hooks_create))
+        .route(
+            "/api/webhooks/{id}",
+            patch(feed::hooks_patch).delete(feed::hooks_delete),
+        )
         .route("/api/sessions/{id}/git", get(git::session_status))
         .route("/api/sessions/{id}/git/commit", post(git::session_commit))
         .route("/api/sessions/{id}/git/push", post(git::session_push))
@@ -227,7 +242,12 @@ pub fn app(state: AppState) -> Router {
         ));
     // `/v1` et `/mcp` hors des couches de l'UI (session, même origine) : seule
     // la clé d'API les protège. Le seul fallback est celui de `ui`.
+    // Webhooks entrants : le jeton de l'adresse est le seul secret.
+    let hooks = Router::new()
+        .route("/hooks/{token}", post(feed::hook_in))
+        .layer(DefaultBodyLimit::max(feed::HOOK_BODY_MAX));
     Router::new()
+        .merge(hooks)
         .merge(v1::router(&state))
         .merge(mcp::router(&state))
         .merge(ui)

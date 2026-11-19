@@ -222,6 +222,27 @@ interne que les sandboxes ne voient pas. Les sandboxes ont accès à Internet et
 Docker attend des chemins de l'hôte. EngineX lit donc le montage de son propre conteneur pour savoir où se trouve
 `/data` sur l'hôte. Si la détection échoue, donnez ce chemin avec `ENGINEX_HOST_DATA`.
 
+## Tableau de bord et notifications
+
+Le **Tableau de bord** (page d'accueil) montre le moteur (preset chargé, débit du dernier tour, VRAM et température
+de chaque carte), la file d'attente, les notifications récentes, les tâches du jour, les prochains crons et les
+sessions récentes.
+
+La page **Notifications** garde les 500 derniers événements : cron fini ou en échec, réponse d'un tour de plus de
+2 minutes, vérification encore rouge après les corrections automatiques, approbation ou question en attente,
+téléchargement fini, moteur en échec, mise à jour de llama.cpp, disque presque plein, webhooks. Le compteur de la barre
+latérale suit les non lues en direct.
+
+**Push** : chaque navigateur peut recevoir les notifications importantes (ou toutes) même fermé. Le navigateur
+n'autorise le push que sur une adresse HTTPS : passez par votre reverse proxy HTTPS ou par Tailscale. Le contenu est
+chiffré pour le navigateur (VAPID, clé dans `/data/vapid.key`) et transite par le service de push de son éditeur
+(Google, Mozilla, Apple) : c'est le seul envoi d'EngineX vers l'extérieur.
+
+**Webhooks entrants** : chaque webhook a une adresse `https://<enginex>/hooks/<jeton>`, montrée une seule fois.
+Tout `POST` dessus écrit une ligne dans le fil, sans session ni clé : l'adresse est le secret, supprimez le webhook
+s'il a fuité. Les appels de GitHub et Gitea sont résumés (push, PR, issue, workflow, release). Sinon EngineX prend
+`title` et `message` du JSON, ou le texte brut. Limites : 64 Kio par appel, 30 appels par minute.
+
 ## Fichiers et Git
 
 La page **Fichiers** montre tout le workspace : projets, topics (le code des sessions), skills et `tasks.json`.

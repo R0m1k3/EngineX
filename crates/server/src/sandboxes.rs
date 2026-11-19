@@ -192,7 +192,7 @@ pub async fn rebuild_masker(state: &AppState) {
     *state.0.masker.write().expect("verrou") = Arc::new(Masker::new(values));
 }
 
-fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     let tmp = path.with_extension("tmp");
     let _ = std::fs::remove_file(&tmp);

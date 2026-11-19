@@ -93,6 +93,12 @@ pub async fn unskip(state: &AppState, tag: &str) {
 }
 
 async fn last(state: &AppState, tag: &str, ok: bool, message: &str) {
+    let note = if ok {
+        crate::feed::Note::new("engine", "success", format!("llama.cpp mis à jour : {tag}"))
+    } else {
+        crate::feed::Note::new("engine", "warning", format!("Mise à jour de llama.cpp {tag} refusée"))
+    };
+    crate::feed::emit(state, note.body(message).link("#settings/engine"));
     let v = json!({"at": now(), "tag": tag, "ok": ok, "message": message}).to_string();
     if let Err(e) = set_setting(state, "engine.auto_last", Some(&v)).await {
         tracing::warn!("engine.auto_last : {e}");

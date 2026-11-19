@@ -246,6 +246,12 @@ fn watch_engine(state: &AppState) {
                     });
                 }
                 EngineState::Stopped => measure_vram_others(&s).await,
+                EngineState::Failed { cause, .. } => crate::feed::emit(
+                    &s,
+                    crate::feed::Note::new("engine", "error", "Le moteur a échoué")
+                        .body(cause)
+                        .link("#models"),
+                ),
                 _ => {}
             }
         }
