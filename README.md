@@ -93,6 +93,21 @@ disponible en recours.
 Sur l'Unraid, montez les modèles sur un disque plutôt que dans le volume Docker :
 `/mnt/user/appdata/enginex/models:/models` dans la stack, puis `chown -R 1000:1000` sur ce dossier.
 
+### File d'attente et modèle par session
+
+Un seul modèle tient sur les cartes : les tours des sessions et des crons passent l'un après l'autre (autant à la
+fois que de slots `-np` du preset chargé). Un tour garde sa place jusqu'à la fin de sa vérification et de ses
+corrections, ce qui garde le cache de prompt. Pendant qu'il attend une approbation de votre part, il la laisse aux
+autres. Vos tours passent avant ceux des crons et des fins de session. Un tour en attente affiche ce qui passe avant
+lui, avec un bouton pour interrompre un tour de fond. Les requêtes d'une clé d'API externe attendent aussi leur tour,
+sur le modèle chargé.
+
+Chaque session et chaque cron peut choisir son modèle (en-tête de la session, formulaire du cron). « Par défaut » est
+le dernier preset que vous avez activé dans Modèles. Quand un tour veut un autre modèle, EngineX attend la fin des
+tours en cours, charge ce modèle et redémarre la sandbox de la session. À priorité égale, les tours du modèle déjà
+chargé passent d'abord (15 minutes au plus), pour éviter les va-et-vient. Moteur arrêté dans Modèles : rien ne se
+recharge tout seul. La file se lit dans `GET /api/queue`.
+
 ## Utiliser Codex avec EngineX
 
 EngineX a une API compatible OpenAI sur `/v1` : `/v1/responses` (le protocole de Codex), `/v1/chat/completions` et

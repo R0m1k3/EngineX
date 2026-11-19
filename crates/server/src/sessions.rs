@@ -39,10 +39,12 @@ pub struct SessionRow {
     pub undo_snap: Option<String>,
     /// Empreinte du bloc mémoire que l'agent a reçu en dernier (D2).
     pub memory_seen: Option<String>,
+    /// Preset de la session ; `None` = preset par défaut.
+    pub preset_id: Option<i64>,
 }
 
 const COLS: &str = "id, topic_id, title, thread_id, approval, archived, created_at, updated_at, copy_branch, \
-                    pending_note, pending_revert, undo_snap, memory_seen";
+                    pending_note, pending_revert, undo_snap, memory_seen, preset_id";
 /// id, statut, erreur, usage, début, fin, origine, pre, post, modifications.
 type TurnRow = (
     String,
@@ -65,6 +67,14 @@ pub async fn row(state: &AppState, id: &str) -> Result<SessionRow, ApiError> {
         .fetch_optional(state.db())
         .await?
         .ok_or(ApiError::NotFound)
+}
+
+/// Preset voulu par la session : le sien, sinon le preset par défaut.
+pub async fn preset_for(state: &AppState, r: &SessionRow) -> Option<i64> {
+    match r.preset_id {
+        Some(p) => Some(p),
+        None => presets::default_id(state).await.ok().flatten(),
+    }
 }
 
 pub async fn approval_of(state: &AppState, id: &str) -> Result<String, ApiError> {
@@ -280,6 +290,8 @@ pub struct CreateBody {
     /// Copie séparée (topic dépôt git).
     #[serde(default)]
     copy: bool,
+    /// Preset de la session (absent = preset par défaut).
+    preset_id: Option<i64>,
 }
 
 fn valid_approval(a: &str) -> bool {
@@ -292,6 +304,7 @@ pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CreateBod
     if !valid_approval(&approval) {
         return Err(ApiError::BadRequest);
     }
+    check_preset(&state, b.preset_id).await?;
     let id = uuid::Uuid::new_v4().to_string();
     let branch = if b.copy {
         Some(crate::copies::create(&state, &topic, &id).await?)
@@ -300,8 +313,8 @@ pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CreateBod
     };
     let t = now();
     sqlx::query(
-        "INSERT INTO chat_sessions (id, topic_id, title, approval, created_at, updated_at, copy_branch) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chat_sessions (id, topic_id, title, approval, created_at, updated_at, copy_branch, preset_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(b.topic_id)
@@ -310,6 +323,7 @@ pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CreateBod
     .bind(t)
     .bind(t)
     .bind(&branch)
+    .bind(b.preset_id)
     .execute(state.db())
     .await?;
     Ok(Json(json!({ "id": id, "copy_branch": branch })))
@@ -428,6 +442,25 @@ pub struct PatchBody {
     title: Option<String>,
     approval: Option<String>,
     archived: Option<bool>,
+    /// `null` = preset par défaut.
+    #[serde(default, deserialize_with = "some")]
+    preset_id: Option<Option<i64>>,
+}
+
+/// Champ présent (même `null`) → `Some`.
+pub(crate) fn some<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
+
+/// Preset existant (ou `None`), sinon `bad_request`.
+pub(crate) async fn check_preset(state: &AppState, p: Option<i64>) -> Result<(), ApiError> {
+    if let Some(id) = p {
+        presets::preset(state, id).await.map_err(|e| match e {
+            ApiError::NotFound => ApiError::BadRequest,
+            e => e,
+        })?;
+    }
+    Ok(())
 }
 
 pub async fn patch(
@@ -453,6 +486,14 @@ pub async fn patch(
         }
         sqlx::query("UPDATE chat_sessions SET approval = ? WHERE id = ?")
             .bind(a)
+            .bind(&id)
+            .execute(state.db())
+            .await?;
+    }
+    if let Some(p) = b.preset_id {
+        check_preset(&state, p).await?;
+        sqlx::query("UPDATE chat_sessions SET preset_id = ? WHERE id = ?")
+            .bind(p)
             .bind(&id)
             .execute(state.db())
             .await?;
@@ -552,15 +593,19 @@ pub async fn start_turn(
         }
     }
     state.0.sandboxes.backend()?;
+    // Moteur arrêté par Michael : rien ne se charge tout seul.
     presets::active_id(&state).await?.ok_or(ApiError::NoActivePreset)?;
-    let active = v1::active(&state)
+    let want = preset_for(&state, &r).await.ok_or(ApiError::NoActivePreset)?;
+    let wanted = v1::preset_info(&state, want)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e.message)))?
         .ok_or(ApiError::NoActivePreset)?;
-    if v1::not_ready(&state.supervisor().state()).is_some() {
+    // Autre preset que le chargé : la file le chargera. Sinon il doit être prêt.
+    let engine = state.supervisor().state();
+    if engine.preset_id() == Some(want) && v1::not_ready(&engine).is_some() {
         return Err(ApiError::EngineNotReady);
     }
-    if !b.attachments.is_empty() && !active.vision {
+    if !b.attachments.is_empty() && !wanted.vision {
         return Err(ApiError::NoVision);
     }
     for a in &b.attachments {
@@ -584,7 +629,6 @@ pub async fn start_turn(
         "images": images,
     });
     hub.begin(user, origin)?;
-    let _ = r;
     tokio::spawn(hub.run_turn(state.clone(), text, b.attachments));
     Ok(())
 }

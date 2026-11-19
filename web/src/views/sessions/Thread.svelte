@@ -5,7 +5,7 @@
     sessionDetail, postTurn, interruptTurn, patchSession, presets, message,
     revertTurn, restoreUndo, restoreGreen, runVerify, bringBack,
     type Session, type StoredItem, type TurnInfo, type ItemData, type PendingRequest, type Usage, type Approval as Mode,
-    type Verification,
+    type Verification, type Preset, type QueueWait,
   } from '../../lib/api';
   import { openEvents } from '../../lib/sse';
   import Item from './Item.svelte';
@@ -39,7 +39,8 @@
   let connected = $state(true);
   let error = $state('');
   let notice = $state('');
-  let preset = $state('');
+  let presetList = $state<Preset[]>([]);
+  let wait = $state<QueueWait | null>(null);
   let scroller: HTMLDivElement | undefined = $state();
   let green = $state<string | null>(null);
   let draft = $state('');
@@ -113,12 +114,14 @@
         if (s.session) session = s.session;
         sandbox = s.sandbox ?? { state: 'stopped' };
         requests = s.requests ?? [];
+        wait = s.queue ?? null;
         live = s.turn
           ? { id: s.turn.id, items: s.turn.items ?? [], partial: s.turn.partial ?? {}, usage: null }
           : null;
         loadHistory().then(() => follow());
       },
       sandbox: (d) => (sandbox = d),
+      queue: (d) => (wait = d.wait ?? null),
       user_message: (d) => {
         notice = '';
         live = { id: null, items: [d.item], partial: {}, usage: null };
@@ -168,7 +171,7 @@
   onDestroy(close);
 
   presets()
-    .then((ps) => (preset = ps.find((p) => p.active)?.name ?? ''))
+    .then((ps) => (presetList = ps))
     .catch(() => {});
 
   // Défile en bas si l'on y était déjà (ou si l'on vient d'envoyer).
@@ -244,6 +247,31 @@
   async function interrupt() {
     try {
       await interruptTurn(id);
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
+  async function setPreset(v: string) {
+    const preset_id = v === '' ? null : Number(v);
+    try {
+      await patchSession(id, { preset_id });
+      if (session) session.preset_id = preset_id;
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
+  const presetName = (pid: number | null) => presetList.find((p) => p.id === pid)?.name ?? `preset ${pid}`;
+  const defaultName = $derived(presetList.find((p) => p.default)?.name ?? '');
+  const ago = (t: number) => {
+    const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 60));
+    return m < 1 ? 'à l’instant' : `depuis ${m} min`;
+  };
+
+  async function interruptOther(sid: string) {
+    try {
+      await interruptTurn(sid);
     } catch (e) {
       error = message(e);
     }
@@ -358,7 +386,15 @@
       <button class="link" onclick={() => panel('preview')}>Aperçu</button>
       <button class="link" onclick={() => panel('browser')}>Navigateur</button>
       <span class="pill state-{sandbox.state}" title={sandbox.detail ?? ''}>{SANDBOX[sandbox.state] ?? sandbox.state}{pull}</span>
-      {#if preset}<span class="muted" title="Preset actif (Modèles)">{preset}</span>{/if}
+      <label class="mode" title="Modèle de la session : changé, il est chargé au prochain message (la sandbox redémarre)">
+        Modèle
+        <select value={session?.preset_id == null ? '' : String(session.preset_id)} onchange={(e) => setPreset((e.currentTarget as HTMLSelectElement).value)}>
+          <option value="">Par défaut{defaultName ? ` (${defaultName})` : ''}</option>
+          {#each presetList as p (p.id)}
+            <option value={String(p.id)}>{p.name}{p.active ? ' · chargé' : ''}</option>
+          {/each}
+        </select>
+      </label>
       <label class="mode">
         Approbation
         <select value={session?.approval ?? 'auto'} onchange={(e) => setMode((e.currentTarget as HTMLSelectElement).value as Mode)}>
@@ -374,6 +410,19 @@
     <p class="banner" class:bad={sandbox.state === 'error'}>{sandbox.detail}</p>
   {/if}
 
+  {#if wait}
+    <p class="banner small row">
+      <span>
+        {#if wait.swapping}Chargement du modèle « {presetName(wait.swapping)} »…
+        {:else if wait.running.length}En file d’attente{wait.position > 1 ? ` (${wait.position}e)` : ''} : le modèle sert
+          {#each wait.running as r, i (i)}{i ? ', ' : ''}« {r.label} » {ago(r.since)}{/each}{wait.needs_swap ? ', puis changement de modèle' : ''}.
+        {:else}En file d’attente{wait.position > 1 ? ` (${wait.position}e)` : ''}…{/if}
+      </span>
+      {#each wait.running.filter((r) => r.session_id && r.priority > 0) as r (r.session_id)}
+        <button class="link" onclick={() => interruptOther(r.session_id!)}>Interrompre « {r.label} »</button>
+      {/each}
+    </p>
+  {/if}
   {#if brought}<p class="banner small">{brought}</p>{/if}
   {#if session?.undo}
     <p class="banner small row">

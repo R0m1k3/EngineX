@@ -217,7 +217,10 @@ export interface Preset {
   model_id: number;
   settings: PresetSettings;
   sources: Sources;
+  /** Chargé dans le moteur. */
   active: boolean;
+  /** Preset par défaut des sessions (dernier activé par Michael). */
+  default?: boolean;
 }
 
 export type EngineState =
@@ -557,7 +560,33 @@ export interface Session {
   pending_revert: boolean;
   /** « Rétablir » possible (état d'avant le dernier retour arrière). */
   undo: boolean;
+  /** Preset de la session ; `null` = preset par défaut. */
+  preset_id: number | null;
 }
+
+/** Attente d'un tour dans la file commune (un seul modèle chargé). */
+export interface QueueWait {
+  position: number;
+  running: { label: string; since: number; priority: number; session_id: string | null }[];
+  swapping: number | null;
+  needs_swap: boolean;
+}
+
+export interface QueueState {
+  loaded: number | null;
+  slots: number;
+  swapping: number | null;
+  holders: { session_id: string | null; label: string; priority: number; since: number }[];
+  waiting: {
+    session_id: string | null;
+    label: string;
+    priority: number;
+    preset_id: number | null;
+    since: number;
+    needs_swap: boolean;
+  }[];
+}
+export const queueState = () => request<QueueState>('GET', '/api/queue');
 
 /** Élément d'un fil (forme Codex : `type`, `id` et les champs du type). */
 export type ItemData = Record<string, any>;
@@ -704,7 +733,10 @@ export const createSession = (topic_id: number, approval: Approval = 'auto', cop
   request<{ id: string; copy_branch: string | null }>('POST', '/api/sessions', { topic_id, approval, copy });
 export const sessionDetail = (id: string, before?: number) =>
   request<SessionDetail>('GET', `/api/sessions/${id}${before === undefined ? '' : `?before=${before}`}`);
-export const patchSession = (id: string, patch: { title?: string; approval?: Approval; archived?: boolean }) =>
+export const patchSession = (
+  id: string,
+  patch: { title?: string; approval?: Approval; archived?: boolean; preset_id?: number | null },
+) =>
   request('PATCH', `/api/sessions/${id}`, patch);
 export const deleteSession = (id: string) => request('DELETE', `/api/sessions/${id}`);
 export const postTurn = (id: string, text: string, attachments: string[]) =>
@@ -872,6 +904,8 @@ export interface CronBody {
   tz?: string;
   timeout_s?: number;
   enabled?: boolean;
+  /** `null` = preset par défaut. */
+  preset_id?: number | null;
 }
 
 export interface Cron extends Required<CronBody> {

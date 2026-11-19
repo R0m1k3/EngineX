@@ -96,6 +96,10 @@ struct HubState {
     conn_memory_sha: Option<String>,
     /// Heure d'inactivité d'avant le tour de mémoire, rendue à sa fin.
     memory_idle_base: Option<Instant>,
+    /// Attente dans la file commune (`queue.rs`) : position, ce qui passe avant.
+    queued: Option<Value>,
+    /// Interruption demandée pendant l'attente dans la file.
+    cancel_queue: bool,
 }
 
 pub struct Hub {
@@ -129,6 +133,8 @@ pub fn hub(state: &AppState, session_id: &str) -> Arc<Hub> {
                     last_read: HashMap::new(),
                     conn_memory_sha: None,
                     memory_idle_base: None,
+                    queued: None,
+                    cancel_queue: false,
                 }),
                 start: tokio::sync::Mutex::new(()),
                 revert: tokio::sync::Mutex::new(()),
@@ -215,6 +221,45 @@ impl Hub {
     pub fn busy(&self) -> bool {
         let st = self.st.lock().expect("verrou");
         st.turn.is_some() || st.verify.is_some()
+    }
+
+    /// Tour en attente dans la file commune.
+    pub fn queued(&self) -> bool {
+        self.st.lock().expect("verrou").queued.is_some()
+    }
+
+    /// Codex attend une réponse de Michael (approbation, question).
+    pub fn waiting_on_user(&self) -> bool {
+        !self.st.lock().expect("verrou").requests.is_empty()
+    }
+
+    fn set_queued(&self, v: Option<Value>) {
+        self.st.lock().expect("verrou").queued = v.clone();
+        self.emit("queue", json!({ "wait": v }));
+    }
+
+    /// Bail de la file pris avant le tour (attente affichée dans le fil) ;
+    /// `Err` : chargement du modèle impossible ou tour retiré de la file.
+    async fn take_lease(self: &Arc<Self>, state: &AppState) -> Result<(), String> {
+        let row = sessions::row(state, &self.id).await.ok();
+        let want = match &row {
+            Some(r) => sessions::preset_for(state, r).await,
+            None => None,
+        };
+        let label = row.map(|r| r.title).unwrap_or_else(|| "session".into());
+        self.st.lock().expect("verrou").cancel_queue = false;
+        let me = self.clone();
+        let on_wait = move |v: Option<Value>| me.set_queued(v);
+        let me = self.clone();
+        let cancel = async move {
+            loop {
+                if me.st.lock().expect("verrou").cancel_queue {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        };
+        crate::queue::hold_session(state, self, want, label, &on_wait, cancel).await
     }
 
     pub fn verifying(&self) -> bool {
@@ -416,6 +461,7 @@ impl Hub {
             "sandbox": {"state": st.sandbox.0, "detail": st.sandbox.1},
             "turn": turn,
             "requests": requests,
+            "queue": st.queued,
         })
     }
 
@@ -542,6 +588,11 @@ impl Hub {
     /// Lance le tour ouvert par `begin` : connexion (sandbox démarrée si
     /// besoin), message stocké, `turn/start`.
     pub async fn run_turn(self: Arc<Self>, state: AppState, text: String, images: Vec<String>) {
+        // File commune : le modèle de la session chargé, et notre tour.
+        if let Err(e) = self.take_lease(&state).await {
+            self.fail_turn(&state, &e).await;
+            return;
+        }
         // Instantané d'avant le tour, en parallèle du démarrage de la sandbox
         // (Codex ne lance rien avant `turn/start`).
         let folder = match sessions::row(&state, &self.id).await {
@@ -834,6 +885,13 @@ impl Hub {
     }
 
     pub async fn interrupt(&self) -> Result<(), ApiError> {
+        {
+            let mut st = self.st.lock().expect("verrou");
+            if st.turn.is_some() && st.queued.is_some() {
+                st.cancel_queue = true;
+                return Ok(());
+            }
+        }
         for _ in 0..50 {
             let target = {
                 let st = self.st.lock().expect("verrou");
@@ -1384,5 +1442,6 @@ pub fn session_json(r: &SessionRow, running: bool) -> Value {
         "created_at": r.created_at, "updated_at": r.updated_at, "running": running,
         "copy_branch": r.copy_branch, "pending_note": r.pending_note,
         "pending_revert": r.pending_revert.is_some(), "undo": r.undo_snap.is_some(),
+        "preset_id": r.preset_id,
     })
 }

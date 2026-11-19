@@ -48,6 +48,54 @@ pub async fn active_id(state: &AppState) -> Result<Option<i64>, ApiError> {
     Ok(setting(state, "preset.active").await?.and_then(|v| v.parse().ok()))
 }
 
+/// Preset par défaut des sessions (dernier preset activé par Michael) ; le
+/// preset chargé à défaut.
+pub async fn default_id(state: &AppState) -> Result<Option<i64>, ApiError> {
+    match setting(state, "preset.default").await?.and_then(|v| v.parse().ok()) {
+        Some(id) => Ok(Some(id)),
+        None => active_id(state).await,
+    }
+}
+
+/// Charge `id` : porte prise avant de changer de preset (les requêtes en
+/// cours finissent sur l'ancien, les suivantes attendent le nouveau).
+async fn load(s: &AppState, id: i64, name: &str) -> Result<String, String> {
+    let _gate = engine_api::take_gate(s).await;
+    set_setting(s, "preset.active", Some(&id.to_string()))
+        .await
+        .map_err(|e| e.to_string())?;
+    engine_api::launch(s, id).await.map_err(|e| e.to_string())?;
+    if engine_api::wait_loaded(s).await {
+        Ok(format!("preset « {name} » chargé"))
+    } else {
+        Err(match s.supervisor().state() {
+            enginex_engine::supervisor::EngineState::Failed { cause, .. } => cause,
+            _ => "chargement échoué".into(),
+        })
+    }
+}
+
+/// Chargement demandé par la file d'attente (session sur un autre preset) :
+/// attend la fin d'une autre opération du moteur (10 min au plus).
+pub async fn load_for_queue(state: &AppState, id: i64) -> Result<(), String> {
+    let p = preset(state, id).await.map_err(|e| format!("preset {id} : {e}"))?;
+    // Moteur arrêté par Michael : rien ne se charge tout seul.
+    if active_id(state).await.ok().flatten().is_none() {
+        return Err("moteur arrêté : activer un preset dans Modèles".into());
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    while engine_api::begin_job(state, "activate", &id.to_string()).is_err() {
+        if std::time::Instant::now() >= deadline {
+            return Err("le moteur est occupé (téléchargement, mise à jour…)".into());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    tracing::info!("file : chargement du preset « {} »", p.name);
+    let r = load(state, id, &p.name).await;
+    engine_api::end_job(state, r.clone());
+    r.map(|_| ()).map_err(|e| format!("chargement de « {} » : {e}", p.name))
+}
+
 /// Lit les sources d'échantillonnage d'un dépôt (card, base_model,
 /// generation_config) ; les erreurs réseau sont gardées, pas renvoyées.
 pub async fn read_sources(state: &AppState, repo: &str, meta: &GgufMeta) -> SourceInputs {
@@ -166,9 +214,14 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError
             .fetch_all(&state.0.db)
             .await?;
     let active = active_id(&state).await?;
-    Ok(Json(Value::Array(
-        rows.iter().map(|p| to_json(p, active)).collect::<Result<_, _>>()?,
-    )))
+    let default = default_id(&state).await?;
+    let mut out = Vec::new();
+    for p in &rows {
+        let mut v = to_json(p, active)?;
+        v["default"] = json!(Some(p.id) == default);
+        out.push(v);
+    }
+    Ok(Json(Value::Array(out)))
 }
 
 fn check_name(name: &str) -> Result<String, ApiError> {
@@ -287,6 +340,10 @@ async fn delete_row(state: &AppState, id: i64) -> Result<(), sqlx::Error> {
 /// attend la fin des requêtes /v1, arrête le moteur, puis supprime.
 pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) -> Result<Json<Value>, ApiError> {
     preset(&state, id).await?;
+    sqlx::query("DELETE FROM settings WHERE key = 'preset.default' AND value = ?")
+        .bind(id.to_string())
+        .execute(&state.0.db)
+        .await?;
     if active_id(&state).await? != Some(id) {
         delete_row(&state, id).await?;
         return Ok(Json(json!({ "ok": true })));
@@ -327,26 +384,11 @@ pub async fn activate(
         return Err(ApiError::NofitConfirmRequired);
     }
     engine_api::begin_job(&state, "activate", &id.to_string())?;
+    // Choix de Michael : preset par défaut des sessions.
+    set_setting(&state, "preset.default", Some(&id.to_string())).await?;
     let s = state.clone();
     tokio::spawn(async move {
-        // Porte prise avant de changer de preset : les requêtes en cours
-        // finissent sur l'ancien, les suivantes attendent le nouveau.
-        let _gate = engine_api::take_gate(&s).await;
-        let r = async {
-            set_setting(&s, "preset.active", Some(&id.to_string()))
-                .await
-                .map_err(|e| e.to_string())?;
-            engine_api::launch(&s, id).await.map_err(|e| e.to_string())?;
-            if engine_api::wait_loaded(&s).await {
-                Ok(format!("preset « {} » chargé", p.name))
-            } else {
-                Err(match s.supervisor().state() {
-                    enginex_engine::supervisor::EngineState::Failed { cause, .. } => cause,
-                    _ => "chargement échoué".into(),
-                })
-            }
-        }
-        .await;
+        let r = load(&s, id, &p.name).await;
         engine_api::end_job(&s, r);
     });
     Ok(Json(json!({ "started": true, "fit": report })))

@@ -66,6 +66,8 @@ pub(crate) struct Inner {
     /// fin de son flux ; tout chargement ou arrêt de llama-server la prend en
     /// écriture jusqu'à `Ready`/`Failed`/`Stopped`. Toujours après `begin_job`.
     pub serve_gate: Arc<RwLock<()>>,
+    /// File d'attente commune des tours.
+    pub queue: crate::queue::Queue,
     /// Fin de la dernière requête `/v1` (ms Unix ; 0 = jamais).
     pub last_done_ms: AtomicI64,
     pub auto: crate::autoupdate::AutoState,
@@ -127,6 +129,7 @@ impl AppState {
             probe: Mutex::new(None),
             hf_cache: Mutex::new(HashMap::new()),
             serve_gate: Arc::new(RwLock::new(())),
+            queue: Default::default(),
             last_done_ms: AtomicI64::new(0),
             auto: Default::default(),
             v1_limiter: Mutex::new(Limiter::new(V1_MAX_FAILURES, crate::limiter::WINDOW)),
@@ -163,6 +166,10 @@ impl AppState {
 
     pub fn supervisor(&self) -> &Supervisor {
         &self.0.supervisor
+    }
+
+    pub fn queue(&self) -> &crate::queue::Queue {
+        &self.0.queue
     }
 
     pub fn serve_gate(&self) -> &Arc<RwLock<()>> {

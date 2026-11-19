@@ -25,6 +25,7 @@ pub mod memory;
 pub mod models;
 pub mod presets;
 pub mod preview;
+pub mod queue;
 pub mod recall;
 pub mod sandboxes;
 pub mod sessions;
@@ -191,6 +192,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/sessions/{id}/preview", get(preview::status).post(preview::open))
         .route("/api/sessions/{id}/browser/live", get(browser::live))
         .route("/api/browser", get(browser::status))
+        .route("/api/queue", get(queue::api))
         .route("/api/sessions/{id}/git", get(git::session_status))
         .route("/api/sessions/{id}/git/commit", post(git::session_commit))
         .route("/api/sessions/{id}/git/push", post(git::session_push))

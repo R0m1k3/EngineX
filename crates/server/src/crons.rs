@@ -104,6 +104,8 @@ pub struct CronRow {
     pub next_run: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Preset du cron ; `None` = preset par défaut.
+    pub preset_id: Option<i64>,
 }
 
 async fn row(state: &AppState, id: i64) -> Result<CronRow, ApiError> {
@@ -128,6 +130,8 @@ pub struct CronBody {
     timeout_s: i64,
     #[serde(default = "yes")]
     enabled: bool,
+    #[serde(default)]
+    preset_id: Option<i64>,
 }
 
 fn default_tz() -> String {
@@ -184,7 +188,7 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError
             "topic": topic.map(|t| format!("{} / {}", t.project_slug, t.slug)),
             "kind": r.kind, "body": r.body, "schedule": r.schedule, "tz": r.tz,
             "timeout_s": r.timeout_s, "enabled": r.enabled, "session_id": r.session_id,
-            "next_run": r.next_run, "running": state.0.crons.contains(r.id),
+            "next_run": r.next_run, "running": state.0.crons.contains(r.id), "preset_id": r.preset_id,
             "last": last.map(|(s, a, e)| json!({"status": s, "started_at": a, "ended_at": e})),
         }));
     }
@@ -194,10 +198,11 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<Value>, ApiError
 pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CronBody>) -> Result<Json<Value>, ApiError> {
     let next = check(&b).map_err(bad)?;
     workspace::topic(&state, b.topic_id).await?;
+    sessions::check_preset(&state, b.preset_id).await?;
     let t = now();
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO crons (name, topic_id, kind, body, schedule, tz, timeout_s, enabled, next_run, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO crons (name, topic_id, kind, body, schedule, tz, timeout_s, enabled, next_run, created_at, updated_at, \
+         preset_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(b.name.trim())
     .bind(b.topic_id)
@@ -210,6 +215,7 @@ pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CronBody>
     .bind(next)
     .bind(t)
     .bind(t)
+    .bind(b.preset_id)
     .fetch_one(state.db())
     .await?;
     Ok(Json(json!({"id": id, "next_run": next})))
@@ -223,11 +229,12 @@ pub async fn update(
     let old = row(&state, id).await?;
     let next = check(&b).map_err(bad)?;
     workspace::topic(&state, b.topic_id).await?;
+    sessions::check_preset(&state, b.preset_id).await?;
     // Autre topic : nouvelle session au prochain passage.
     let session = (old.topic_id == b.topic_id).then_some(old.session_id).flatten();
     sqlx::query(
         "UPDATE crons SET name = ?, topic_id = ?, kind = ?, body = ?, schedule = ?, tz = ?, timeout_s = ?, \
-         enabled = ?, next_run = ?, session_id = ?, updated_at = ? WHERE id = ?",
+         enabled = ?, next_run = ?, session_id = ?, updated_at = ?, preset_id = ? WHERE id = ?",
     )
     .bind(b.name.trim())
     .bind(b.topic_id)
@@ -240,6 +247,7 @@ pub async fn update(
     .bind(next)
     .bind(session)
     .bind(now())
+    .bind(b.preset_id)
     .bind(id)
     .execute(state.db())
     .await?;
@@ -436,19 +444,26 @@ async fn session_for(state: &AppState, c: &CronRow) -> Result<String, ApiError> 
     if let Some(sid) = &c.session_id
         && sessions::row(state, sid).await.is_ok()
     {
+        sqlx::query("UPDATE chat_sessions SET preset_id = ? WHERE id = ?")
+            .bind(c.preset_id)
+            .bind(sid)
+            .execute(state.db())
+            .await?;
         return Ok(sid.clone());
     }
     workspace::topic(state, c.topic_id).await?;
     let id = uuid::Uuid::new_v4().to_string();
     let t = now();
     sqlx::query(
-        "INSERT INTO chat_sessions (id, topic_id, title, approval, created_at, updated_at) VALUES (?, ?, ?, 'auto', ?, ?)",
+        "INSERT INTO chat_sessions (id, topic_id, title, approval, created_at, updated_at, preset_id) \
+         VALUES (?, ?, ?, 'auto', ?, ?, ?)",
     )
     .bind(&id)
     .bind(c.topic_id)
     .bind(format!("Cron : {}", c.name))
     .bind(t)
     .bind(t)
+    .bind(c.preset_id)
     .execute(state.db())
     .await?;
     sqlx::query("UPDATE crons SET session_id = ? WHERE id = ?")
@@ -480,9 +495,13 @@ async fn run_prompt(state: &AppState, sid: &str, text: &str, timeout: Duration) 
         return ("failed", reason(&e));
     }
     let hub = bridge::hub(state, sid);
-    let end = tokio::time::Instant::now() + timeout;
-    // Tour, puis vérification et corrections éventuelles.
+    let mut end = tokio::time::Instant::now() + timeout;
+    // Tour, puis vérification et corrections éventuelles. L'attente dans la
+    // file commune ne compte pas dans le délai.
     while hub.busy() {
+        if hub.queued() {
+            end += Duration::from_millis(250);
+        }
         if tokio::time::Instant::now() >= end {
             let _ = hub.interrupt().await;
             hub.cancel_verify().await;

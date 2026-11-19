@@ -136,9 +136,10 @@ pub(crate) fn peer_of(ext: &axum::http::Extensions) -> SocketAddr {
         .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)))
 }
 
-pub async fn require_api_key(State(state): State<AppState>, req: Request, next: Next) -> Response {
+pub async fn require_api_key(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     match authenticate(&state, peer_of(req.extensions()), req.headers()).await {
-        Ok((_, internal, _)) => {
+        Ok((_, internal, name)) => {
+            req.extensions_mut().insert(Caller { internal, name });
             if internal && !INTERNAL_ROUTES.contains(&req.uri().path()) {
                 return V1Error::new(
                     StatusCode::FORBIDDEN,
@@ -153,6 +154,50 @@ pub async fn require_api_key(State(state): State<AppState>, req: Request, next: 
     }
 }
 
+/// Clé de la requête (posée par [`require_api_key`]).
+#[derive(Clone)]
+pub struct Caller {
+    pub internal: bool,
+    pub name: String,
+}
+
+/// Place dans la file commune (`queue.rs`). Une sandbox dont le tour tient un
+/// bail passe ; une sandbox occupée sans bail (approbation tout juste donnée)
+/// attend que son bail revienne ; une requête hors tour ou d'une clé externe
+/// prend un bail le temps de la requête, sur le modèle chargé.
+async fn queue_slot(state: &AppState, caller: Option<&Caller>) -> Result<Option<crate::queue::Lease>, String> {
+    use crate::queue::{Ask, USER, Who};
+    let Some(c) = caller else { return Ok(None) };
+    let label = if c.internal {
+        let sid = c.name.strip_prefix("sandbox:").unwrap_or(&c.name);
+        let who = Who::Session(sid.to_string());
+        let hub = crate::bridge::hub(state, sid);
+        loop {
+            if state.queue().holds(&who) {
+                return Ok(None);
+            }
+            if !hub.busy() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        format!("session {sid} (hors tour)")
+    } else {
+        format!("clé d'API « {} »", c.name)
+    };
+    let ask = Ask {
+        who: state.queue().request_id(),
+        priority: USER,
+        preset: None,
+        label,
+    };
+    state
+        .queue()
+        .acquire(state, ask, &|_| {}, std::future::pending())
+        .await
+        .map(Some)
+}
+
 // ---- Preset actif ----
 
 pub(crate) struct Active {
@@ -164,24 +209,31 @@ pub(crate) struct Active {
 }
 
 pub(crate) async fn active(state: &AppState) -> Result<Option<Active>, V1Error> {
-    let internal = |e: crate::error::ApiError| {
-        tracing::error!("preset actif : {e}");
-        V1Error::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "server_error",
-            "lecture du preset actif",
-        )
-    };
-    let Some(id) = presets::active_id(state).await.map_err(internal)? else {
-        return Ok(None);
-    };
+    let id = presets::active_id(state).await.map_err(internal_err)?;
+    match id {
+        Some(id) => preset_info(state, id).await,
+        None => Ok(None),
+    }
+}
+
+fn internal_err(e: crate::error::ApiError) -> V1Error {
+    tracing::error!("preset actif : {e}");
+    V1Error::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "server_error",
+        "lecture du preset actif",
+    )
+}
+
+/// Réglages et vision du preset `id` (`None` s'il n'existe plus).
+pub(crate) async fn preset_info(state: &AppState, id: i64) -> Result<Option<Active>, V1Error> {
     let p = match presets::preset(state, id).await {
         Ok(p) => p,
         Err(crate::error::ApiError::NotFound) => return Ok(None),
-        Err(e) => return Err(internal(e)),
+        Err(e) => return Err(internal_err(e)),
     };
-    let settings: PresetSettings = serde_json::from_str(&p.settings).map_err(|e| internal(e.into()))?;
-    let m = models::model(state, p.model_id).await.map_err(internal)?;
+    let settings: PresetSettings = serde_json::from_str(&p.settings).map_err(|e| internal_err(e.into()))?;
+    let m = models::model(state, p.model_id).await.map_err(internal_err)?;
     let vision = settings.mmproj && m.mmproj.is_some();
     Ok(Some(Active {
         id,
@@ -205,6 +257,7 @@ fn unavailable() -> V1Error {
 struct Served {
     state: AppState,
     _gate: Option<OwnedRwLockReadGuard<()>>,
+    _lease: Option<crate::queue::Lease>,
 }
 
 impl Drop for Served {
@@ -252,6 +305,38 @@ fn sse_response(rx: mpsc::Receiver<Result<Bytes, Infallible>>) -> Response {
         .header(header::CACHE_CONTROL, "no-cache")
         .body(Body::from_stream(ReceiverStream::new(rx)))
         .expect("réponse SSE")
+}
+
+/// Attend la place dans la file en émettant des maintiens ; `Ok(None)` =
+/// client parti.
+#[allow(clippy::type_complexity)]
+async fn wait_slot(
+    state: &AppState,
+    caller: Option<&Caller>,
+    tx: &Tx,
+    tr: &mut Translator,
+) -> Result<Option<Option<crate::queue::Lease>>, String> {
+    let t = &state.config().timings;
+    let deadline = Instant::now() + t.wait_limit;
+    let fut = queue_slot(state, caller);
+    tokio::pin!(fut);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err("file d'attente : le modèle est occupé par d'autres tours depuis trop longtemps".into());
+        }
+        tokio::select! {
+            r = &mut fut => return r.map(Some),
+            _ = tx.closed() => return Ok(None),
+            _ = tokio::time::sleep(t.keepalive.min(left)) => {
+                if Instant::now() < deadline
+                    && tx.send(Ok(Bytes::from(tr.keepalive().to_sse()))).await.is_err()
+                {
+                    return Ok(None);
+                }
+            }
+        }
+    }
 }
 
 /// Attend la porte en lecture en émettant un maintien toutes les
@@ -380,7 +465,12 @@ impl Log {
     }
 }
 
-pub async fn responses(State(state): State<AppState>, body: Bytes) -> Response {
+pub async fn responses(
+    State(state): State<AppState>,
+    caller: Option<axum::Extension<Caller>>,
+    body: Bytes,
+) -> Response {
+    let caller = caller.map(|c| c.0);
     let started = Instant::now();
     let body = mask_body(&state, body);
     let preset = match active(&state).await {
@@ -419,7 +509,7 @@ pub async fn responses(State(state): State<AppState>, body: Bytes) -> Response {
     };
     tokio::spawn(async move {
         let mut outcome = None;
-        let ok = relay_responses(&state, &tx, &mut tr, &body, &mut log, &mut outcome).await;
+        let ok = relay_responses(&state, caller.as_ref(), &tx, &mut tr, &body, &mut log, &mut outcome).await;
         let usage = tr.usage().cloned();
         let result = match (ok, outcome) {
             (false, _) => "client parti".to_string(),
@@ -434,6 +524,7 @@ pub async fn responses(State(state): State<AppState>, body: Bytes) -> Response {
 /// `false` si le client est parti.
 async fn relay_responses(
     state: &AppState,
+    caller: Option<&Caller>,
     tx: &Tx,
     tr: &mut Translator,
     raw: &Bytes,
@@ -444,6 +535,17 @@ async fn relay_responses(
         state.mark_done();
         return false;
     }
+    let lease = match wait_slot(state, caller, tx, tr).await {
+        Ok(Some(l)) => l,
+        Ok(None) => {
+            state.mark_done();
+            return false;
+        }
+        Err(msg) => {
+            state.mark_done();
+            return send(tx, tr.fail("server_error", &msg), outcome).await;
+        }
+    };
     let gate = match wait_gate(state, tx, tr).await {
         Ok(Some(g)) => g,
         Ok(None) => {
@@ -459,6 +561,7 @@ async fn relay_responses(
     let _served = Served {
         state: state.clone(),
         _gate: Some(gate),
+        _lease: lease,
     };
     if let Some(cause) = not_ready(&state.supervisor().state()) {
         return send(tx, tr.fail("server_error", &cause), outcome).await;
@@ -582,7 +685,11 @@ async fn gate_for_chat(state: &AppState) -> Result<OwnedRwLockReadGuard<()>, V1E
     Ok(g)
 }
 
-pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> Response {
+pub async fn chat_completions(
+    State(state): State<AppState>,
+    caller: Option<axum::Extension<Caller>>,
+    body: Bytes,
+) -> Response {
     let started = Instant::now();
     let mut req: Value = match serde_json::from_slice(&body) {
         Ok(mut v @ Value::Object(_)) => {
@@ -598,6 +705,23 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> Res
         Ok(None) => return unavailable().into_response(),
         Err(e) => return e.into_response(),
     };
+    let limit = state.config().timings.wait_limit;
+    let lease = match tokio::time::timeout(limit, queue_slot(&state, caller.as_ref().map(|c| &c.0))).await {
+        Ok(Ok(l)) => l,
+        Ok(Err(msg)) => {
+            state.mark_done();
+            return V1Error::new(StatusCode::SERVICE_UNAVAILABLE, "engine_unavailable", msg).into_response();
+        }
+        Err(_) => {
+            state.mark_done();
+            return V1Error::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "engine_unavailable",
+                "file d'attente : le modèle est occupé par d'autres tours depuis trop longtemps",
+            )
+            .into_response();
+        }
+    };
     let gate = match gate_for_chat(&state).await {
         Ok(g) => g,
         Err(e) => {
@@ -608,6 +732,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> Res
     let served = Served {
         state: state.clone(),
         _gate: Some(gate),
+        _lease: lease,
     };
     // Preset relu après l'attente (il a pu changer).
     let p = match active(&state).await {

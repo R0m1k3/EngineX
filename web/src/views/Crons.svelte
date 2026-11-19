@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import {
-    crons, createCron, updateCron, deleteCron, runCron, cronRuns, cronPreview, projects, message,
-    type Cron, type CronBody, type CronRun, type Project,
+    crons, createCron, updateCron, deleteCron, runCron, cronRuns, cronPreview, projects, presets, message,
+    type Cron, type CronBody, type CronRun, type Project, type Preset,
   } from '../lib/api';
 
   let list = $state<Cron[] | null>(null);
   let tree = $state<Project[]>([]);
+  let presetList = $state<Preset[]>([]);
+  presets().then((p) => (presetList = p)).catch(() => {});
   let error = $state('');
   let form = $state<(CronBody & { id: number | null }) | null>(null);
   let formError = $state('');
@@ -66,8 +68,8 @@
     formError = '';
     const first = tree[0]?.topics[0]?.id ?? 0;
     form = c
-      ? { id: c.id, name: c.name, topic_id: c.topic_id, kind: c.kind, body: c.body, schedule: c.schedule, tz: c.tz, timeout_s: c.timeout_s, enabled: c.enabled }
-      : { id: null, name: '', topic_id: first, kind: 'prompt', body: '', schedule: '0 9 * * *', tz: 'Europe/Paris', timeout_s: 1800, enabled: true };
+      ? { id: c.id, name: c.name, topic_id: c.topic_id, kind: c.kind, body: c.body, schedule: c.schedule, tz: c.tz, timeout_s: c.timeout_s, enabled: c.enabled, preset_id: c.preset_id }
+      : { id: null, name: '', topic_id: first, kind: 'prompt', body: '', schedule: '0 9 * * *', tz: 'Europe/Paris', timeout_s: 1800, enabled: true, preset_id: null };
   }
 
   // Aperçu des 3 prochaines exécutions pendant la saisie.
@@ -118,7 +120,7 @@
   }
 
   const toggle = (c: Cron) =>
-    act(() => updateCron(c.id, { name: c.name, topic_id: c.topic_id, kind: c.kind, body: c.body, schedule: c.schedule, tz: c.tz, timeout_s: c.timeout_s, enabled: !c.enabled }));
+    act(() => updateCron(c.id, { name: c.name, topic_id: c.topic_id, kind: c.kind, body: c.body, schedule: c.schedule, tz: c.tz, timeout_s: c.timeout_s, enabled: !c.enabled, preset_id: c.preset_id }));
 </script>
 
 <section>
@@ -226,6 +228,14 @@
         <label>Fuseau <input bind:value={form.tz} /></label>
         <label>Délai max (s) <input type="number" min="10" max="7200" bind:value={form.timeout_s} /></label>
       </div>
+      {#if form.kind === 'prompt'}
+        <label title="Un autre modèle que le chargé est chargé pour ce cron, après les tours de Michael">Modèle
+          <select bind:value={form.preset_id}>
+            <option value={null}>Par défaut</option>
+            {#each presetList as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+          </select>
+        </label>
+      {/if}
       <p class="small">
         {#each examples as ex}<button type="button" class="link" onclick={() => (form!.schedule = ex.s)}>{ex.l}</button> {/each}
       </p>

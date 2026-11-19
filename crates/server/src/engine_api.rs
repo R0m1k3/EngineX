@@ -140,6 +140,7 @@ pub fn effective_ctx(state: &AppState, preset_id: i64, preset_ctx: u64) -> u64 {
 pub async fn launch(state: &AppState, id: i64) -> Result<(), ApiError> {
     let p = presets::preset(state, id).await?;
     let s: PresetSettings = serde_json::from_str(&p.settings)?;
+    state.queue().note_launch(id, s.parallel);
     let m = models::model(state, p.model_id).await?;
     let dir = &state.config().models_dir;
     let model = model_path(dir, &m.repo, &m.file)?;
