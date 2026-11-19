@@ -37,10 +37,12 @@ pub struct SessionRow {
     pub pending_note: Option<String>,
     pub pending_revert: Option<String>,
     pub undo_snap: Option<String>,
+    /// Empreinte du bloc mémoire que l'agent a reçu en dernier (D2).
+    pub memory_seen: Option<String>,
 }
 
 const COLS: &str = "id, topic_id, title, thread_id, approval, archived, created_at, updated_at, copy_branch, \
-                    pending_note, pending_revert, undo_snap";
+                    pending_note, pending_revert, undo_snap, memory_seen";
 /// id, statut, erreur, usage, début, fin, origine, pre, post, modifications.
 type TurnRow = (
     String,
@@ -199,12 +201,13 @@ pub async fn set_turn_snaps(
 }
 
 /// Colonne texte facultative de `chat_sessions` (`pending_note`,
-/// `pending_revert`, `undo_snap`).
+/// `pending_revert`, `undo_snap`, `memory_seen`).
 pub async fn set_session_field(state: &AppState, sid: &str, field: &str, v: Option<&str>) -> Result<(), sqlx::Error> {
     let col = match field {
         "pending_note" => "pending_note",
         "pending_revert" => "pending_revert",
         "undo_snap" => "undo_snap",
+        "memory_seen" => "memory_seen",
         _ => return Ok(()),
     };
     sqlx::query(&format!("UPDATE chat_sessions SET {col} = ? WHERE id = ?"))
@@ -316,26 +319,36 @@ pub struct ListQuery {
 
 pub async fn list(State(state): State<AppState>, Query(q): Query<ListQuery>) -> Result<Json<Value>, ApiError> {
     let archived = matches!(q.archived.as_deref(), Some("1" | "true"));
-    let like =
-        q.q.as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| format!("%{}%", s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")));
+    let text = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let like = text.map(|s| format!("%{}%", s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")));
+    // Messages : index FTS (débuts de mots, accents ignorés), tours de Michael seulement.
+    let fts = text.and_then(|s| crate::recall::match_query(s, false));
+    let in_items = if fts.is_some() {
+        format!(
+            " OR s.id IN (SELECT d.session_id FROM recall_fts f JOIN recall_docs d ON d.id = f.rowid \
+             JOIN chat_items i ON i.session_id = d.session_id AND i.item_id = d.item_id \
+             LEFT JOIN chat_turns tu ON tu.session_id = i.session_id AND tu.id = i.turn_id \
+             WHERE recall_fts MATCH ? AND {})",
+            crate::recall::VISIBLE
+        )
+    } else {
+        String::new()
+    };
     let sql = format!(
         "SELECT {COLS} FROM chat_sessions s WHERE s.archived = ? AND (? IS NULL OR s.topic_id = ?) \
-         AND (? IS NULL OR s.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM chat_items i WHERE \
-         i.session_id = s.id AND i.kind IN ('userMessage', 'agentMessage') AND i.data LIKE ? ESCAPE '\\')) \
+         AND (? IS NULL OR s.title LIKE ? ESCAPE '\\'{in_items}) \
          ORDER BY s.updated_at DESC, s.created_at DESC LIMIT 50"
     );
-    let rows: Vec<SessionRow> = sqlx::query_as(&sql)
+    let mut query = sqlx::query_as::<_, SessionRow>(&sql)
         .bind(archived as i64)
         .bind(q.topic)
         .bind(q.topic)
         .bind(&like)
-        .bind(&like)
-        .bind(&like)
-        .fetch_all(state.db())
-        .await?;
+        .bind(&like);
+    if let Some(f) = &fts {
+        query = query.bind(f);
+    }
+    let rows = query.fetch_all(state.db()).await?;
     let sessions: Vec<Value> = rows.iter().map(|r| session_json(&state, r)).collect();
     Ok(Json(json!({ "sessions": sessions })))
 }

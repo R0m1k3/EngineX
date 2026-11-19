@@ -15,8 +15,10 @@ pub mod error;
 pub mod files;
 pub mod limiter;
 pub mod mask;
+pub mod memory;
 pub mod models;
 pub mod presets;
+pub mod recall;
 pub mod sandboxes;
 pub mod sessions;
 pub mod snapshots;
@@ -108,6 +110,10 @@ pub fn app(state: AppState) -> Router {
         .route("/api/projects/{id}", delete(workspace::delete_project))
         .route("/api/projects/{id}/topics", post(workspace::create_topic))
         .route("/api/topics/{id}", delete(workspace::delete_topic))
+        .route("/api/memory", get(memory::tree))
+        .route("/api/memory/file", get(memory::get_file).put(memory::put_file))
+        .route("/api/memory/revisions", get(memory::revisions))
+        .route("/api/memory/revisions/{id}", get(memory::revision))
         .route("/api/sessions", get(sessions::list).post(sessions::create))
         .route(
             "/api/sessions/{id}",

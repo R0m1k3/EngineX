@@ -93,6 +93,13 @@ pub enum ApiError {
     /// Hugging Face ou ghcr injoignable ou en erreur (détail dans les logs).
     #[error("upstream_error")]
     Upstream(String),
+    /// Mémoire modifiée depuis la lecture de l'auteur.
+    #[error("memory_changed")]
+    MemoryChanged,
+    #[error("too_large")]
+    TooLarge,
+    #[error("invalid_skill")]
+    InvalidSkill,
     #[error("internal")]
     Internal(#[from] anyhow::Error),
 }
@@ -124,7 +131,10 @@ impl ApiError {
             | Self::ChangedSince
             | Self::NoSnapshot
             | Self::RecipeExists
-            | Self::NoRecipe => StatusCode::CONFLICT,
+            | Self::NoRecipe
+            | Self::MemoryChanged => StatusCode::CONFLICT,
+            Self::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::InvalidSkill => StatusCode::BAD_REQUEST,
             Self::NotGit => StatusCode::BAD_REQUEST,
             Self::CopyFailed(_) => StatusCode::BAD_GATEWAY,
             Self::InvalidName | Self::AttachmentInvalid(false) => StatusCode::BAD_REQUEST,

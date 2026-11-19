@@ -77,6 +77,8 @@ pub(crate) struct Inner {
     pub hubs: Mutex<HashMap<String, Arc<crate::bridge::Hub>>>,
     /// Un verrou par dossier de travail (instantanés, retours arrière).
     pub folder_locks: crate::snapshots::FolderLocks,
+    /// Toute écriture de la mémoire passe par ce verrou (`memory::update`).
+    pub memory_lock: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -120,6 +122,7 @@ impl AppState {
             sandboxes: Default::default(),
             hubs: Mutex::new(HashMap::new()),
             folder_locks: Default::default(),
+            memory_lock: tokio::sync::Mutex::new(()),
         }))
     }
 

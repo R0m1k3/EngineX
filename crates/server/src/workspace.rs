@@ -1,6 +1,6 @@
 //! Projets et topics : `<data>/workspace/projects/<projet>/topics/<topic>/`.
-//! Premier démarrage : projet `general`, topic `inbox`. L'étape 5 y ajoutera
-//! AGENTS.md, memory.md et les skills.
+//! Premier démarrage : projet `general`, topic `inbox`. La mémoire de chaque
+//! niveau vit à part, dans `<data>/workspace/memory/` (`memory.rs`).
 
 use std::path::PathBuf;
 
@@ -235,6 +235,7 @@ pub async fn delete_topic(State(state): State<AppState>, UrlPath(id): UrlPath<i6
         .await?;
     let _ = std::fs::remove_dir(&t.dir);
     let _ = std::fs::remove_dir_all(crate::snapshots::topic_repo(&state, id));
+    crate::memory::remove_scope(&state, &format!("{}/{}", t.project_slug, t.slug)).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -279,5 +280,6 @@ pub async fn delete_project(State(state): State<AppState>, UrlPath(id): UrlPath<
     let dir = project_dir(&state, &slug);
     let _ = std::fs::remove_dir(dir.join("topics"));
     let _ = std::fs::remove_dir(&dir);
+    crate::memory::remove_scope(&state, &slug).await?;
     Ok(Json(json!({ "ok": true })))
 }
