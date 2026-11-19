@@ -15,6 +15,8 @@ pub mod db;
 pub mod engine_api;
 pub mod error;
 pub mod files;
+pub mod forge;
+pub mod git;
 pub mod limiter;
 pub mod mask;
 pub mod mcp;
@@ -35,6 +37,7 @@ pub mod verify;
 pub mod web;
 pub mod webtools;
 pub mod workspace;
+pub mod wsfiles;
 
 use axum::{
     Json, Router,
@@ -159,6 +162,35 @@ pub fn app(state: AppState) -> Router {
         .route("/api/sessions/{id}/verify/save", post(verify::save))
         .route("/api/sessions/{id}/verify/run", post(verify::run_now))
         .route("/api/sessions/{id}/events", get(sessions::events))
+        .route("/api/files/tree", get(wsfiles::tree))
+        .route("/api/files/raw", get(wsfiles::raw))
+        .route("/api/files/text", get(wsfiles::get_text).put(wsfiles::put_text))
+        .route(
+            "/api/files/upload",
+            post(wsfiles::upload).layer(DefaultBodyLimit::max(wsfiles::UPLOAD_LIMIT)),
+        )
+        .route("/api/files/mkdir", post(wsfiles::mkdir))
+        .route("/api/files/move", post(wsfiles::rename))
+        .route("/api/files/delete", post(wsfiles::delete))
+        .route("/api/files/zip", get(wsfiles::zip))
+        .route("/api/files/usage", get(wsfiles::usage))
+        .route("/api/git/repos", get(git::repos))
+        .route("/api/git/repos/{id}", get(git::repo))
+        .route("/api/git/repos/{id}/commits/{sha}", get(git::commit))
+        .route("/api/git/repos/{id}/fetch", post(git::fetch))
+        .route("/api/git/repos/{id}/pull", post(git::pull))
+        .route("/api/git/repos/{id}/push", post(git::push))
+        .route("/api/git/repos/{id}/checkout", post(git::checkout))
+        .route("/api/git/repos/{id}/merge", post(git::merge))
+        .route("/api/git/repos/{id}/branches", post(git::create_branch))
+        .route("/api/git/repos/{id}/pulls", get(git::pulls).post(git::pull_create))
+        .route("/api/git/repos/{id}/pulls/{n}", get(git::pull_detail))
+        .route("/api/git/repos/{id}/pulls/{n}/comments", post(git::pull_comment))
+        .route("/api/git/repos/{id}/pulls/{n}/merge", post(git::pull_merge))
+        .route("/api/sessions/{id}/git", get(git::session_status))
+        .route("/api/sessions/{id}/git/commit", post(git::session_commit))
+        .route("/api/sessions/{id}/git/push", post(git::session_push))
+        .route("/api/sessions/{id}/git/pull-request", post(git::session_pull_request))
         .route("/api/sandbox/status", get(sandboxes::status))
         .route(
             "/api/settings/sessions",

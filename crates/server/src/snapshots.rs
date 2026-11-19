@@ -213,13 +213,18 @@ fn key(p: &Path) -> PathBuf {
 
 /// Attend puis prend le verrou du dossier.
 pub async fn lock(state: &AppState, f: &Folder) -> FolderGuard {
+    lock_dir(state, &f.work).await
+}
+
+/// Verrou d'un dossier de travail donné par son chemin (page Git).
+pub async fn lock_dir(state: &AppState, dir: &Path) -> FolderGuard {
     let m = state
         .0
         .folder_locks
         .0
         .lock()
         .expect("verrou")
-        .entry(key(&f.work))
+        .entry(key(dir))
         .or_default()
         .clone();
     FolderGuard(m.lock_owned().await)
@@ -272,6 +277,7 @@ async fn run(
         binds: vec![(f.work.clone(), "WORK", true), (f.snap.clone(), "SNAP", true)],
         script,
         env: env.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        network: false,
     };
     let out = backend.run_helper(&spec, PASS_TIMEOUT).await?;
     if out.code != 0 {

@@ -494,6 +494,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Value>, 
         "memory_auto": crate::memory::auto_enabled(&state).await,
         "git_name": git_name,
         "git_email": git_email,
+        "disk_alert_pct": crate::wsfiles::alert_pct(&state).await,
     })))
 }
 
@@ -507,6 +508,7 @@ pub struct SettingsBody {
     memory_auto: Option<bool>,
     git_name: Option<String>,
     git_email: Option<String>,
+    disk_alert_pct: Option<i64>,
 }
 
 pub async fn put_settings(
@@ -516,6 +518,7 @@ pub async fn put_settings(
     let ok = b.idle_minutes.is_none_or(|v| (5..=1440).contains(&v))
         && b.max.is_none_or(|v| (1..=10).contains(&v))
         && b.verify_max_fixes.is_none_or(|v| (0..=10).contains(&v))
+        && b.disk_alert_pct.is_none_or(|v| (50..=99).contains(&v))
         && b.git_name.as_deref().is_none_or(|v| {
             let n = v.trim().chars().count();
             (1..=100).contains(&n) && !v.contains(['\n', '\r', '\0'])
@@ -547,6 +550,9 @@ pub async fn put_settings(
     }
     if let Some(v) = &b.git_email {
         set_setting(&state, "git.email", Some(v.trim())).await?;
+    }
+    if let Some(v) = b.disk_alert_pct {
+        crate::wsfiles::set_alert_pct(&state, v).await?;
     }
     get_settings(State(state)).await
 }

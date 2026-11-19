@@ -98,6 +98,17 @@ pub enum ApiError {
     MemoryChanged,
     #[error("too_large")]
     TooLarge,
+    /// Fichier modifié depuis sa lecture dans l'éditeur.
+    #[error("file_changed")]
+    FileChanged,
+    /// Opération git refusée ou échouée : code pour l'UI (`dirty`,
+    /// `merge_conflict`, `not_fast_forward`, `nothing_to_commit`,
+    /// `push_rejected`, `no_remote`, `git_failed`…) et détail.
+    #[error("{0}")]
+    Git(&'static str, String),
+    /// Dossier géré par EngineX (projets, topics, mémoire) : pas ici.
+    #[error("protected")]
+    Protected,
     #[error("invalid_skill")]
     InvalidSkill,
     /// Valeur refusée, avec la raison pour l'UI (en `detail`).
@@ -135,7 +146,12 @@ impl ApiError {
             | Self::NoSnapshot
             | Self::RecipeExists
             | Self::NoRecipe
-            | Self::MemoryChanged => StatusCode::CONFLICT,
+            | Self::MemoryChanged
+            | Self::FileChanged => StatusCode::CONFLICT,
+            Self::Protected => StatusCode::FORBIDDEN,
+            Self::Git("git_failed" | "forge_error", _) => StatusCode::BAD_GATEWAY,
+            Self::Git("no_remote" | "no_forge" | "no_token", _) => StatusCode::BAD_REQUEST,
+            Self::Git(..) => StatusCode::CONFLICT,
             Self::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidSkill | Self::Invalid(_) => StatusCode::BAD_REQUEST,
             Self::NotGit => StatusCode::BAD_REQUEST,
@@ -196,7 +212,7 @@ impl IntoResponse for ApiError {
             _ => None,
         };
         let mut body = serde_json::json!({ "error": self.to_string() });
-        if let Self::CopyFailed(d) | Self::Invalid(d) = &self {
+        if let Self::CopyFailed(d) | Self::Invalid(d) | Self::Git(_, d) = &self {
             body["detail"] = serde_json::json!(d);
         }
         let mut res = (self.status(), Json(body)).into_response();

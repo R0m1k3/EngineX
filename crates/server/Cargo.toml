@@ -48,10 +48,13 @@ html2text = "0.17.4"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 chrono-tz = "0.10.4"
 croner = "4.0.3"
+zip = { version = "9.7.3", default-features = false, features = ["deflate"] }
+tempfile = "3"
+gix = { version = "0.90.0", default-features = false, features = ["revision", "blob-diff", "sha1"] }
+similar = "3.2.1"
 
 [dev-dependencies]
 flate2 = "1"
 tar = "0.4"
 http-body-util = "0.1"
-tempfile = "3"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }

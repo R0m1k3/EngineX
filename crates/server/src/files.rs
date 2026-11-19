@@ -233,7 +233,7 @@ pub async fn tree(
 }
 
 /// Entrées d'un dossier ouvert (`fstatat` sans suivre les liens).
-fn list_dir(fd: OwnedFd) -> Result<Vec<Value>, ApiError> {
+pub(crate) fn list_dir(fd: OwnedFd) -> Result<Vec<Value>, ApiError> {
     let raw = fd.as_raw_fd();
     // SAFETY: fdopendir prend possession du descripteur dupliqué.
     let dup = unsafe { libc::dup(raw) };
@@ -315,10 +315,16 @@ pub async fn file(
     let rel = relative(&q.path, &work)
         .filter(|r| !r.is_empty())
         .ok_or(ApiError::NotFound)?;
+    serve(work, rel, matches!(q.download.as_deref(), Some("1" | "true"))).await
+}
+
+/// Envoie `rel` sous `dir` en flux (en ligne si le type s'y prête, sinon en
+/// pièce jointe), avec une CSP qui n'exécute rien.
+pub async fn serve(dir: std::path::PathBuf, rel: String, download: bool) -> Result<Response, ApiError> {
     let (f, len) = tokio::task::spawn_blocking({
         let rel = rel.clone();
         move || -> Result<(File, u64), ApiError> {
-            let root = open_root(&work).map_err(|_| ApiError::NotFound)?;
+            let root = open_root(&dir).map_err(|_| ApiError::NotFound)?;
             let fd = open_beneath(&root, &rel, libc::O_RDONLY | libc::O_NOFOLLOW).map_err(|_| ApiError::NotFound)?;
             let f = File::from(fd);
             let m = f.metadata().map_err(|_| ApiError::NotFound)?;
@@ -330,7 +336,6 @@ pub async fn file(
     })
     .await
     .map_err(|e| ApiError::Internal(e.into()))??;
-    let download = matches!(q.download.as_deref(), Some("1" | "true"));
     let ctype = if download { None } else { inline_type(&rel) };
     let name = rel
         .rsplit('/')

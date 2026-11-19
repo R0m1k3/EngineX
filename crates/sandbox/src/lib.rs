@@ -61,8 +61,9 @@ pub enum Progress {
     Starting,
 }
 
-/// Conteneur d'aide : un script `sh -c` fixe, sans réseau ni secret, qui ne
-/// voit que les dossiers de `binds` (voir `spec::helper_spec`).
+/// Conteneur d'aide : un script `sh -c` fixe, qui ne voit que les dossiers de
+/// `binds` (voir `spec::helper_spec`). Sans réseau sauf `network` (fetch et
+/// push de la page Git, dans un dépôt nu propre au conteneur).
 #[derive(Clone, Debug)]
 pub struct HelperSpec {
     pub session_id: String,
@@ -74,6 +75,8 @@ pub struct HelperSpec {
     pub binds: Vec<(PathBuf, &'static str, bool)>,
     pub script: &'static str,
     pub env: Vec<(String, String)>,
+    /// Réseau des sandboxes au lieu de `none`.
+    pub network: bool,
 }
 
 /// Résultat d'un conteneur d'aide.

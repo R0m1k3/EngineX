@@ -112,7 +112,8 @@ pub fn helper_mount(var: &str) -> String {
 }
 
 /// Spec d'un conteneur d'aide : image devbox, même durcissement que la
-/// sandbox, aucun réseau, seulement les montages et variables demandés.
+/// sandbox, aucun réseau (sauf `network`), seulement les montages et
+/// variables demandés.
 pub fn helper_spec(spec: &HelperSpec, opts: &DockerOpts) -> anyhow::Result<ContainerCreateBody> {
     let mut binds = Vec::new();
     let mut env: Vec<String> = spec.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
@@ -136,10 +137,14 @@ pub fn helper_spec(spec: &HelperSpec, opts: &DockerOpts) -> anyhow::Result<Conta
         cmd: Some(vec!["sh".into(), "-c".into(), spec.script.into()]),
         env: Some(env),
         labels: Some(labels),
-        network_disabled: Some(true),
+        network_disabled: Some(!spec.network),
         host_config: Some(HostConfig {
             binds: Some(binds),
-            network_mode: Some("none".into()),
+            network_mode: Some(if spec.network {
+                opts.network.clone()
+            } else {
+                "none".into()
+            }),
             cap_drop: Some(vec!["ALL".into()]),
             security_opt: Some(vec!["no-new-privileges:true".into()]),
             privileged: Some(false),

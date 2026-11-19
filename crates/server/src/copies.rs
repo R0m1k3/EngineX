@@ -95,6 +95,7 @@ async fn helper(
         binds,
         script,
         env,
+        network: false,
     };
     backend
         .run_helper(&spec, timeout)

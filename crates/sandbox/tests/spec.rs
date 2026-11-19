@@ -79,6 +79,7 @@ fn helper_spec_snapshot() {
         ],
         script: "git --version",
         env: vec![("REF".into(), "refs/enginex/x/pre".into())],
+        network: false,
     };
     let body = serde_json::to_value(helper_spec(&h, &o).unwrap()).unwrap();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/helper-spec.json");
@@ -107,4 +108,9 @@ fn helper_spec_snapshot() {
     assert!(hc.get("PortBindings").is_none() && body.get("ExposedPorts").is_none());
     assert!(body["Labels"].get("enginex.session").is_none());
     assert_eq!(helper_name("0123456789abcdef", "a1b2"), "enginex-helper-01234567-a1b2");
+    // Réseau demandé (fetch / push de la page Git) : celui des sandboxes.
+    let net = HelperSpec { network: true, ..h };
+    let body = serde_json::to_value(helper_spec(&net, &o).unwrap()).unwrap();
+    assert_eq!(body["HostConfig"]["NetworkMode"], o.network.as_str());
+    assert_eq!(body["NetworkDisabled"], false);
 }

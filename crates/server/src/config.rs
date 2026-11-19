@@ -161,6 +161,8 @@ pub struct WebConfig {
     /// `web_read` vers des adresses privées ou locales : tests seulement
     /// (le modèle atteindrait sinon docker-socket-proxy ou le réseau local).
     pub allow_private: bool,
+    /// API GitHub (`ENGINEX_GITHUB_API`, tests : faux serveur).
+    pub github_api: String,
 }
 
 impl Default for WebConfig {
@@ -168,6 +170,7 @@ impl Default for WebConfig {
         Self {
             searxng_url: "http://searxng:8080".into(),
             allow_private: false,
+            github_api: "https://api.github.com".into(),
         }
     }
 }
@@ -200,6 +203,7 @@ impl Config {
             web: WebConfig {
                 searxng_url: var("ENGINEX_SEARXNG_URL", "http://searxng:8080"),
                 allow_private: false,
+                github_api: var("ENGINEX_GITHUB_API", "https://api.github.com"),
             },
         })
     }
