@@ -3,6 +3,7 @@
 //! développement et tests, sans isolation).
 
 pub mod docker;
+pub mod fwd;
 pub mod local;
 pub mod spec;
 
@@ -45,6 +46,9 @@ pub struct Handle {
     pub cwd: String,
     /// Dossier des pièces jointes vu par Codex.
     pub attachments: String,
+    /// Relais d'aperçu `ip:4501` (Docker) ; `None` : les ports de l'app sont
+    /// joignables directement sur 127.0.0.1 (backend local).
+    pub fwd: Option<String>,
 }
 
 /// Sandbox trouvée par `list_owned`.

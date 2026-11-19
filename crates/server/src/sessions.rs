@@ -472,6 +472,8 @@ pub async fn patch(
 
 pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<String>) -> Result<Json<Value>, ApiError> {
     let r = row(&state, &id).await?;
+    state.0.previews.forget_session(&id);
+    state.0.browser.close(&id).await;
     // Copie : verrou tenu jusqu'à la fin (aucun conteneur d'aide sur un
     // dossier en cours de suppression).
     let mut _guard = None;

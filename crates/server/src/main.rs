@@ -30,6 +30,16 @@ async fn serve() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("lecture de la base : {e}"))?;
     state.start_background().await?;
+    if let Some(pb) = state.config().web.preview_bind {
+        let l = tokio::net::TcpListener::bind(pb).await?;
+        tracing::info!("aperçu des apps sur {pb}");
+        let router = enginex_server::preview::router(state.clone());
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(l, router).await {
+                tracing::warn!("port d'aperçu arrêté : {e}");
+            }
+        });
+    }
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("EngineX {} écoute sur {bind}", env!("CARGO_PKG_VERSION"));
     axum::serve(

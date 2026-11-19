@@ -6,6 +6,7 @@ pub mod auth;
 pub mod autoupdate;
 pub mod board;
 pub mod bridge;
+pub mod browser;
 pub mod client_ip;
 pub mod codex_config;
 pub mod config;
@@ -23,6 +24,7 @@ pub mod mcp;
 pub mod memory;
 pub mod models;
 pub mod presets;
+pub mod preview;
 pub mod recall;
 pub mod sandboxes;
 pub mod sessions;
@@ -52,8 +54,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use crate::error::{ApiError, V1Error};
 pub use crate::{config::Config, state::AppState};
 
-const CSP: &str =
-    "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
+const CSP: &str = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-src 'self' http: https:; frame-ancestors 'none'";
 
 async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") }))
@@ -187,6 +188,9 @@ pub fn app(state: AppState) -> Router {
         .route("/api/git/repos/{id}/pulls/{n}", get(git::pull_detail))
         .route("/api/git/repos/{id}/pulls/{n}/comments", post(git::pull_comment))
         .route("/api/git/repos/{id}/pulls/{n}/merge", post(git::pull_merge))
+        .route("/api/sessions/{id}/preview", get(preview::status).post(preview::open))
+        .route("/api/sessions/{id}/browser/live", get(browser::live))
+        .route("/api/browser", get(browser::status))
         .route("/api/sessions/{id}/git", get(git::session_status))
         .route("/api/sessions/{id}/git/commit", post(git::session_commit))
         .route("/api/sessions/{id}/git/push", post(git::session_push))

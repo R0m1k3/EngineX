@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { SideTab } from '../lib/api';
   import { sandboxStatus, type SandboxStatus } from '../lib/api';
   import Tree from './sessions/Tree.svelte';
   import Thread from './sessions/Thread.svelte';
@@ -15,9 +16,9 @@
 
   const open = (id: string) => (location.hash = `sessions/${id}`);
   // Panneau latéral (Fichiers, Terminal) : fermé par défaut.
-  let side = $state<'files' | 'terminal' | 'git' | null>(null);
-  let tab = $state<'files' | 'terminal' | 'git'>('files');
-  const panel = (t: 'files' | 'terminal' | 'git') => {
+  let side = $state<SideTab | null>(null);
+  let tab = $state<SideTab>('files');
+  const panel = (t: SideTab) => {
     if (side === t) side = null;
     else side = tab = t;
   };

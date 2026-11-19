@@ -126,10 +126,10 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             res
         }
         "ping" => rpc_result(&id, json!({})),
-        "tools/list" => rpc_result(&id, json!({ "tools": tools() })),
+        "tools/list" => rpc_result(&id, json!({ "tools": all_tools(&state) })),
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or("");
-            let Some(schema) = tools().into_iter().find(|t| t["name"] == name) else {
+            let Some(schema) = all_tools(&state).into_iter().find(|t| t["name"] == name) else {
                 return rpc_error(&id, -32602, &format!("outil inconnu : {name}"));
             };
             let args = match params.get("arguments") {
@@ -138,6 +138,9 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             };
             if let Err(e) = validate(&args, &schema["inputSchema"]) {
                 return rpc_error(&id, -32602, &e);
+            }
+            if let Some((content, is_error)) = crate::browser::call(&state, &who.session_id, name, &args).await {
+                return rpc_result(&id, json!({"content": content, "isError": is_error}));
             }
             let out = call(&state, &who, name, &args).await;
             let (text, is_error) = match out {
@@ -171,6 +174,15 @@ fn tool(name: &str, description: &str, props: Value, required: &[&str]) -> Value
             "additionalProperties": false,
         },
     })
+}
+
+/// Outils de la session : ceux d'EngineX, plus le navigateur s'il est configuré.
+fn all_tools(state: &AppState) -> Vec<Value> {
+    let mut t = tools();
+    if state.0.browser.enabled() {
+        t.extend(crate::browser::tools());
+    }
+    t
 }
 
 pub fn tools() -> Vec<Value> {

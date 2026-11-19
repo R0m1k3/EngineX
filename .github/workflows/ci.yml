@@ -10,6 +10,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -36,6 +37,7 @@ jobs:
   # N'empêche pas la publication de l'image.
   contract:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       codex_version: ${{ steps.contract.outputs.codex_version }}
     steps:
@@ -53,6 +55,7 @@ jobs:
   sandbox-e2e:
     needs: contract
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -75,6 +78,15 @@ jobs:
             -v /var/run/docker.sock:/var/run/docker.sock:ro \
             tecnativa/docker-socket-proxy:latest
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:23750/_ping && break; sleep 1; done
+      - name: Navigateur (vrai Chromium de la stack)
+        run: |
+          docker run -d --name browser -p 127.0.0.1:9222:9222 --shm-size=1g docker.io/chromedp/headless-shell:latest
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9222/json/version && break; sleep 1; done
+      - name: Tests du navigateur
+        run: |
+          ENGINEX_TEST_BROWSER=http://127.0.0.1:9222 cargo test -p enginex-browser -- --ignored --nocapture
+          cargo build -p enginex-fake-llama
+          ENGINEX_TEST_BROWSER=http://127.0.0.1:9222 cargo test -p enginex-server --test browser -- --ignored --nocapture --test-threads=1
       - run: cargo build -p enginex-fake-llama
       # Le test tourne en uid 1000, comme EngineX en production : la sandbox
       # (uid 1000) lit le jeton et écrit dans le topic.
@@ -90,15 +102,22 @@ jobs:
         run: |
           docker ps -a
           docker logs proxy 2>&1 | tail -50
+          docker logs browser 2>&1 | tail -30
           for c in $(docker ps -aq --filter label=enginex.session); do docker logs "$c" 2>&1 | tail -50; done
           for c in $(docker ps -aq --filter label=enginex.helper); do docker logs "$c" 2>&1 | tail -50; done
 
   # Publie la devbox avec le Codex validé par `contract` (un contrat rouge
   # bloque la devbox, pas l'image EngineX).
   devbox:
-    needs: contract
+    # Le bout en bout démarre vraiment la devbox : rouge = pas de publication.
+    needs: [contract, sandbox-e2e]
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Deux poussées rapprochées : publications l'une après l'autre (latest = la dernière).
+    concurrency:
+      group: devbox-publish
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -119,28 +138,15 @@ jobs:
           labels: org.opencontainers.image.source=https://github.com/R0m1k3/EngineX
           cache-from: type=gha,scope=devbox
 
+  # Image musl construite et testée sur chaque branche, en parallèle de `test`
+  # (une casse du lien statique se voit avant la fusion) ; publiée par `publish`.
   image:
-    needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/r0m1k3/enginex
-          tags: |
-            type=raw,value=latest
-            type=sha,format=short
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build (local, pour le test de fumée)
         uses: docker/build-push-action@v6
         with:
@@ -169,6 +175,35 @@ jobs:
           # Pas de GPU sur le runner : si --help ne démarre pas sans libcuda, on cherche l'option dans le binaire.
           docker exec smoke sh -c '/app/llama-server --help 2>&1 | grep -q -- --fit-target || grep -aq -- --fit-target /app/llama-server' || fail "llama-server sans --fit"
           echo "Test de fumée réussi"
+
+  # Publication : main seulement, après `test` et `image` verts. Tout vient du
+  # cache gha rempli par `image` : rien n'est recompilé.
+  publish:
+    needs: [test, image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: image-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/r0m1k3/enginex
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push
         uses: docker/build-push-action@v6
         with:

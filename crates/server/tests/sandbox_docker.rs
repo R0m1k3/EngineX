@@ -55,6 +55,7 @@ async fn docker_env(model: &str) -> (Env, u16, PathBuf, tempfile::TempDir) {
             c.sandbox.devbox_image = image;
             c.sandbox.api_url = format!("http://host.docker.internal:{port}/v1");
             c.sandbox.host_gateway = true;
+            c.web.preview_bind = Some("127.0.0.1:0".parse().unwrap());
             c.timings.sandbox.ready_wait = Duration::from_secs(120);
             c.timings.sandbox.rpc_timeout = Duration::from_secs(60);
         },
@@ -258,6 +259,37 @@ async fn code_session_in_a_real_docker_sandbox() {
     term_read_until(&mut ws, &mut out, "s=*** T=xterm-256color c=80 t=/dev/pts/").await;
     assert!(out.contains("u=1000"), "{out}");
     assert!(!out.contains(SECRET), "{out}");
+
+    // Aperçu (6c) : une app sur 127.0.0.1 dans le conteneur, jointe par le
+    // relais de la devbox (port 4501, jeton de la sandbox).
+    term_write(
+        &mut ws,
+        "python3 -m http.server 5173 --bind 127.0.0.1 >/dev/null 2>&1 &\n",
+    )
+    .await;
+    let st = e
+        .until(&format!("/api/sessions/{sid}/preview"), |v| {
+            v["ports"].as_array().is_some_and(|p| p.contains(&json!(5173)))
+        })
+        .await;
+    assert!(!st["ports"].as_array().unwrap().contains(&json!(4500)), "{st}");
+    let r = e
+        .send("POST", &format!("/api/sessions/{sid}/preview"), json!({"port": 5173}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    let grant = r.body["url"].as_str().unwrap().split("g=").nth(1).unwrap().to_string();
+    let pbase = serve_tcp(enginex_server::preview::router(e.state.clone())).await;
+    let page = reqwest::Client::new()
+        .get(format!("{pbase}/"))
+        .header("cookie", format!("enginex_preview={grant}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), 200);
+    assert!(
+        page.text().await.unwrap().contains("un.txt"),
+        "listage du topic attendu"
+    );
 
     // Retour arrière des fichiers puis « Rétablir » : propriétaire 1000 gardé.
     let r = e

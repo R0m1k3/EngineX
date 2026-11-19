@@ -237,6 +237,27 @@ push se font dans un dépôt nu vierge, créé par ce conteneur, qui lit les obj
 EngineX et le jeton ne part que vers son hôte. Une config de dépôt piégée ne peut donc pas détourner le jeton. Une URL
 SSH (`git@github.com:o/r.git`) est poussée en https avec le jeton.
 
+## Aperçu et navigateur
+
+L'onglet **Aperçu** d'une session montre l'app que la session a lancée dans sa sandbox (serveur de dev Vite, Next,
+Flask…), même si elle n'écoute que sur `127.0.0.1`. Les ports ouverts sont détectés tout seuls ; s'il n'y en a qu'un,
+il s'ouvre directement. L'app est servie sur un port à part (8091), donc sur une autre origine que l'interface :
+son code n'a accès ni à l'API, ni aux sessions, ni au coffre. Le rechargement à chaud (WebSocket) fonctionne. Le lien
+« Nouvel onglet » ouvre l'app en plein écran ; il reste valable 7 jours et disparaît avec la session.
+
+- Si le port 8091 est pris sur l'hôte : `ENGINEX_PREVIEW_HOST_PORT` dans la stack (port publié) et
+  `ENGINEX_PREVIEW_PUBLIC_PORT` à la même valeur (port que l'interface met dans les liens).
+- Derrière un reverse proxy : publiez l'aperçu sur un sous-domaine à lui (par exemple `apercu.exemple.fr` vers le
+  port 8091) et donnez son adresse dans `ENGINEX_PREVIEW_URL`. Ne le mettez jamais sous le domaine de l'interface.
+- `ENGINEX_PREVIEW_BIND=off` désactive l'aperçu.
+
+Le service `browser` de la stack (Chromium sans écran, `chromedp/headless-shell`) donne à Codex les outils
+`browser_*` : ouvrir une page, la lire, cliquer, saisir, faire défiler, capturer (capture seulement si le modèle actif
+voit les images). Chaque session a son onglet ; les cookies et connexions sont gardés dans le volume `enginex-browser`.
+L'onglet **Navigateur** montre la page en direct. « Prendre la main » vous laisse cliquer et taper (connexion à un
+site, captcha) : pendant ce temps, les outils de Codex attendent. Rendez la main quand vous avez fini. Les adresses
+`file:`, `chrome:` et `devtools:` sont refusées. Sans `ENGINEX_BROWSER_URL`, les outils ne sont pas proposés.
+
 ## Mémoire et skills
 
 La page **Mémoire** montre trois niveaux : global, projet, topic. Chacun a deux fichiers :
@@ -308,6 +329,10 @@ EngineX ne fait pas de HTTPS. Sur le réseau local, l'accès direct suffit. Hors
 | `ENGINEX_CODEX_BIN` | `codex` | binaire Codex du mode `local` |
 | `ENGINEX_SEARXNG_URL` | `http://searxng:8080` | SearXNG de la stack (outil `web_search`) |
 | `ENGINEX_GITHUB_API` | `https://api.github.com` | API GitHub des pull requests (tests) |
+| `ENGINEX_PREVIEW_BIND` | `0.0.0.0:8091` | écoute de l'aperçu des apps ; `off` le désactive |
+| `ENGINEX_PREVIEW_PUBLIC_PORT` | `8091` | port de l'aperçu dans les liens (même hôte que l'interface) |
+| `ENGINEX_PREVIEW_URL` | absent | adresse publique de l'aperçu (sous-domaine derrière un reverse proxy) |
+| `ENGINEX_BROWSER_URL` | absent (`http://browser:9222` dans la stack) | Chromium des outils `browser_*` |
 | `RUST_LOG` | `info` | niveau des logs |
 
 ## Développement

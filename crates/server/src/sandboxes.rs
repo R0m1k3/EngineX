@@ -317,8 +317,12 @@ pub(crate) async fn start(
     }
 }
 
-/// Supprime la sandbox et révoque sa clé.
+/// Supprime la sandbox et révoque sa clé ; ferme l'onglet du navigateur de
+/// la session, sauf si Michael l'utilise.
 pub async fn stop(state: &AppState, session_id: &str) {
+    if !state.0.browser.taken(session_id) {
+        state.0.browser.close(session_id).await;
+    }
     if let Ok(b) = state.0.sandboxes.backend()
         && let Err(e) = b.stop(session_id).await
     {

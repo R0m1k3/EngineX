@@ -198,6 +198,7 @@ impl Docker {
             readyz_url: format!("http://{ip}:{LISTEN_PORT}/readyz"),
             cwd: WORKDIR.into(),
             attachments: ATTACHMENTS.into(),
+            fwd: Some(format!("{ip}:{}", crate::spec::FWD_PORT)),
         })
     }
 

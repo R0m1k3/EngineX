@@ -1056,6 +1056,16 @@ export interface SessionGit {
   ahead?: number | null;
   forge?: 'github' | 'gitea' | null;
 }
+export type SideTab = 'files' | 'terminal' | 'git' | 'preview' | 'browser';
+
+export type PreviewStatus = { running: boolean; ports: number[]; error?: string | null; enabled: boolean };
+export const previewStatus = (id: string) => request<PreviewStatus>('GET', `${S(id)}/preview`);
+export const previewOpen = (id: string, port: number) =>
+  request<{ url: string; origin: string }>('POST', `${S(id)}/preview`, { port });
+
+export type BrowserStatus = { enabled: boolean; ok?: boolean; version?: string; error?: string };
+export const browserStatus = () => request<BrowserStatus>('GET', '/api/browser');
+
 export const sessionGit = (id: string) => request<SessionGit>('GET', `${S(id)}/git`);
 export const sessionCommit = (id: string, message: string) => request<{ sha: string }>('POST', `${S(id)}/git/commit`, { message });
 export const sessionPush = (id: string) => request<{ branch: string }>('POST', `${S(id)}/git/push`);

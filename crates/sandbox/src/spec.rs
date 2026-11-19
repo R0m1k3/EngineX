@@ -11,6 +11,9 @@ use bollard::models::{ContainerCreateBody, HostConfig};
 use crate::{HelperSpec, Spec};
 
 pub const LISTEN_PORT: u16 = 4500;
+/// Relais d'aperçu de la devbox (`docker/devbox/enginex-fwd.mjs`).
+pub const FWD_PORT: u16 = 4501;
+pub const FWD_SCRIPT: &str = "/usr/local/lib/enginex/fwd.mjs";
 pub const WORKDIR: &str = "/workspace";
 pub const CODEX_HOME: &str = "/home/dev/.codex";
 pub const RUN_DIR: &str = "/run/enginex";
@@ -64,21 +67,16 @@ pub fn container_spec(spec: &Spec, opts: &DockerOpts) -> anyhow::Result<Containe
         image: Some(opts.image.clone()),
         user: Some("1000:1000".into()),
         working_dir: Some(WORKDIR.into()),
-        cmd: Some(
-            [
-                "codex",
-                "app-server",
-                "--listen",
-                &format!("ws://0.0.0.0:{LISTEN_PORT}"),
-                "--ws-auth",
-                "capability-token",
-                "--ws-token-file",
-                &format!("{RUN_DIR}/token"),
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-        ),
+        // Relais d'aperçu en fond (absent d'une ancienne devbox : sans effet),
+        // puis l'app-server à la place du shell.
+        cmd: Some(vec![
+            "sh".into(),
+            "-c".into(),
+            format!(
+                "[ -f {FWD_SCRIPT} ] && node {FWD_SCRIPT} & exec codex app-server --listen ws://0.0.0.0:{LISTEN_PORT} \
+                 --ws-auth capability-token --ws-token-file {RUN_DIR}/token"
+            ),
+        ]),
         env: Some(env),
         labels: Some(labels),
         host_config: Some(HostConfig {

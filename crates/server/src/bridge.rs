@@ -37,6 +37,8 @@ struct Conn {
     client: Client,
     thread_id: String,
     handle: Handle,
+    /// Jeton de la sandbox (app-server et relais d'aperçu).
+    token: String,
     preset: String,
 }
 
@@ -323,6 +325,12 @@ impl Hub {
         st.terminals.insert(pid.to_string(), sink);
         st.last_activity = Instant::now();
         old
+    }
+
+    /// Relais d'aperçu et jeton de la sandbox vivante.
+    pub(crate) fn preview_target(&self) -> Option<(Option<String>, String)> {
+        let st = self.st.lock().expect("verrou");
+        st.conn.as_ref().map(|c| (c.handle.fwd.clone(), c.token.clone()))
     }
 
     pub(crate) fn touch_activity(&self) {
@@ -1016,6 +1024,7 @@ impl Hub {
                 client: client.clone(),
                 thread_id: thread_id.clone(),
                 handle: handle.clone(),
+                token: token.clone(),
                 preset: label,
             });
             st.last_activity = Instant::now();

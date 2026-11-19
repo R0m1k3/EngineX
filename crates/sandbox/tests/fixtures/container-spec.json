@@ -1,13 +1,8 @@
 {
   "Cmd": [
-    "codex",
-    "app-server",
-    "--listen",
-    "ws://0.0.0.0:4500",
-    "--ws-auth",
-    "capability-token",
-    "--ws-token-file",
-    "/run/enginex/token"
+    "sh",
+    "-c",
+    "[ -f /usr/local/lib/enginex/fwd.mjs ] && node /usr/local/lib/enginex/fwd.mjs & exec codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file /run/enginex/token"
   ],
   "Env": [
     "GITHUB_TOKEN=ghp_x",

@@ -39,6 +39,9 @@ ENV PATH=/usr/local/go/bin:$PATH
 RUN npm i -g --no-audit --no-fund "@openai/codex@${CODEX_VERSION}" && npm cache clean --force \
     && codex --version
 
+# Relais d'aperçu (port 4501), lancé avec l'app-server par EngineX.
+COPY enginex-fwd.mjs /usr/local/lib/enginex/fwd.mjs
+
 # Utilisateur dev 1000:1000 (l'image node a déjà `node` en 1000 : renommé).
 RUN usermod -l dev -d /home/dev -m node && groupmod -n dev node \
     && mkdir -p /workspace /cache /home/dev/.codex && chown 1000:1000 /workspace /cache /home/dev/.codex
@@ -54,4 +57,4 @@ ENV HOME=/home/dev \
 
 USER 1000:1000
 WORKDIR /workspace
-CMD ["codex", "app-server", "--listen", "ws://0.0.0.0:4500", "--ws-auth", "capability-token", "--ws-token-file", "/run/enginex/token"]
+CMD ["sh", "-c", "node /usr/local/lib/enginex/fwd.mjs & exec codex app-server --listen ws://0.0.0.0:4500 --ws-auth capability-token --ws-token-file /run/enginex/token"]

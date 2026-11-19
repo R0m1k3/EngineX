@@ -94,6 +94,7 @@ impl Local {
             readyz_url: format!("http://127.0.0.1:{port}/readyz"),
             cwd: m.work.display().to_string(),
             attachments: m.attachments.display().to_string(),
+            fwd: None,
         })
     }
 

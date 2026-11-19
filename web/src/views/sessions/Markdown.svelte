@@ -1,6 +1,23 @@
+<script lang="ts" module>
+  import DOMPurify from 'dompurify';
+
+  // Liens du modèle : jamais dans l'onglet EngineX (un tour en cours serait
+  // quitté, et un `#x` changerait de page). Externes → nouvel onglet ; les
+  // autres (relatifs, ancres) n'ont pas de cible sûre : texte seul.
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.tagName !== 'A') return;
+    const href = node.getAttribute('href') ?? '';
+    if (/^(https?:|mailto:)/i.test(href)) {
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer');
+    } else {
+      node.removeAttribute('href');
+    }
+  });
+</script>
+
 <script lang="ts">
   import { marked } from 'marked';
-  import DOMPurify from 'dompurify';
 
   let { text }: { text: string } = $props();
   // Texte du modèle : rendu Markdown, puis nettoyé (aucun script, aucun gestionnaire).

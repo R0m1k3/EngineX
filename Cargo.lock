@@ -733,6 +733,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "enginex-browser"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "image",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+]
+
+[[package]]
 name = "enginex-codex"
 version = "0.1.0"
 dependencies = [
@@ -838,6 +853,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "croner",
+ "enginex-browser",
  "enginex-codex",
  "enginex-engine",
  "enginex-hub",
@@ -849,6 +865,8 @@ dependencies = [
  "hashlink",
  "html2text",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "image",
  "libc",
  "rand 0.9.5",

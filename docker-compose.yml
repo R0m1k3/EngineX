@@ -11,6 +11,9 @@ services:
     ports:
       # Port de l'hôte réglable (variable ENGINEX_HOST_PORT dans Portainer), 8090 par défaut.
       - "${ENGINEX_HOST_PORT:-8090}:8090"
+      # Aperçu des apps des sessions : origine à part, l'app n'atteint pas l'UI.
+      # Port de l'hôte réglable (ENGINEX_PREVIEW_HOST_PORT), 8091 par défaut.
+      - "${ENGINEX_PREVIEW_HOST_PORT:-8091}:8091"
     environment:
       # true seulement derrière un reverse proxy (voir README).
       ENGINEX_TRUST_PROXY: "false"
@@ -23,6 +26,10 @@ services:
       ENGINEX_SANDBOX_MEMORY: 8g
       # Recherche web de Codex (outil web_search).
       ENGINEX_SEARXNG_URL: http://searxng:8080
+      # Port d'aperçu vu par le navigateur (le même que ci-dessus).
+      ENGINEX_PREVIEW_PUBLIC_PORT: "${ENGINEX_PREVIEW_HOST_PORT:-8091}"
+      # Navigateur piloté par Codex (outils browser_*, fenêtre Regarder).
+      ENGINEX_BROWSER_URL: http://browser:9222
     volumes:
       - enginex-data:/data
       # Modèles GGUF (plusieurs dizaines de Go). Sur l'Unraid, un dossier du
@@ -40,9 +47,11 @@ services:
         aliases: [enginex]
       enginex-docker: {}
       enginex-search: {}
+      enginex-browser: {}
     depends_on:
       - docker-proxy
       - searxng
+      - browser
     labels:
       - com.centurylinklabs.watchtower.enable=true
 
@@ -79,6 +88,21 @@ services:
     labels:
       - com.centurylinklabs.watchtower.enable=true
 
+  # Chromium sans écran piloté par EngineX en CDP (port 9222, non publié).
+  # Profil gardé dans un volume : les connexions aux sites restent.
+  browser:
+    image: docker.io/chromedp/headless-shell:latest
+    container_name: enginex-browser
+    restart: unless-stopped
+    shm_size: 1gb
+    command: ["--user-data-dir=/profile", "--lang=fr-FR", "--window-size=1280,800"]
+    volumes:
+      - enginex-browser:/profile
+    networks:
+      - enginex-browser
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+
 configs:
   searxng-settings:
     content: |
@@ -102,7 +126,11 @@ networks:
     internal: true
   # EngineX ↔ SearXNG (SearXNG a besoin d'Internet pour interroger les moteurs).
   enginex-search: {}
+  # EngineX ↔ navigateur (le navigateur sort sur Internet, ne voit ni les
+  # sandboxes ni le proxy Docker).
+  enginex-browser: {}
 
 volumes:
   enginex-data:
   enginex-models:
+  enginex-browser:

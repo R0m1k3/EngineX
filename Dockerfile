@@ -9,30 +9,31 @@ RUN npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run build
 
+# Squelette du workspace : manifestes + sources vides, pour la couche des
+# dépendances. Généré depuis crates/* (aucune liste à tenir à jour) ; son
+# contenu ne change que si un manifeste change, donc le cache tient.
+FROM alpine:3 AS skeleton
+WORKDIR /src
+COPY crates/ crates/
+RUN set -e; for d in crates/*/; do \
+      mkdir -p "/out/$d/src"; cp "$d/Cargo.toml" "/out/$d"; \
+      [ -f "$d/build.rs" ] && cp "$d/build.rs" "/out/$d"; \
+      [ -f "$d/src/lib.rs" ] && touch "/out/$d/src/lib.rs"; \
+      [ -f "$d/src/main.rs" ] && echo 'fn main() {}' > "/out/$d/src/main.rs"; \
+      for b in "$d"/src/bin/*.rs; do [ -f "$b" ] || continue; \
+        mkdir -p "/out/$d/src/bin"; echo 'fn main() {}' > "/out/$b"; done; \
+    done; true
+
 # Binaire statique musl : indépendant de la glibc de l'image llama.cpp.
 FROM rust:1-alpine AS build
 RUN apk add --no-cache musl-dev build-base
 WORKDIR /src
 # Dépendances d'abord (couche en cache). build.rs exige un web/dist.
-# Chaque crate du workspace : manifeste + source vide (sinon --locked échoue).
 COPY Cargo.toml Cargo.lock ./
-COPY crates/server/Cargo.toml crates/server/build.rs crates/server/
-COPY crates/engine/Cargo.toml crates/engine/
-COPY crates/hub/Cargo.toml crates/hub/
-COPY crates/oai/Cargo.toml crates/oai/
-COPY crates/fake-llama/Cargo.toml crates/fake-llama/
-COPY crates/codex/Cargo.toml crates/codex/
-COPY crates/sandbox/Cargo.toml crates/sandbox/
-RUN mkdir -p crates/server/src crates/engine/src crates/hub/src crates/oai/src crates/fake-llama/src \
-       crates/codex/src crates/sandbox/src web/dist \
-    && echo 'fn main() {}' > crates/server/src/main.rs && touch crates/server/src/lib.rs \
-    && touch crates/engine/src/lib.rs crates/hub/src/lib.rs crates/oai/src/lib.rs \
-       crates/codex/src/lib.rs crates/sandbox/src/lib.rs \
-    && echo 'fn main() {}' > crates/fake-llama/src/main.rs \
-    && echo '<!doctype html>' > web/dist/index.html \
+COPY --from=skeleton /out/crates/ crates/
+RUN mkdir -p web/dist && echo '<!doctype html>' > web/dist/index.html \
     && cargo build --release --locked -p enginex-server \
-    && rm -rf crates/server/src crates/engine/src crates/hub/src crates/oai/src crates/fake-llama/src \
-       crates/codex/src crates/sandbox/src web/dist
+    && rm -rf crates web/dist
 COPY crates/ crates/
 COPY --from=web /src/web/dist web/dist
 # Sources plus récentes que les vides compilés ci-dessus.

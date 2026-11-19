@@ -216,32 +216,42 @@ async fn new_session(state: &AppState, headers: &HeaderMap) -> Result<HeaderValu
     Ok(set_cookie(&token, SESSION_SECS, secure(state, headers)))
 }
 
-fn cookie_token(headers: &HeaderMap) -> Option<String> {
+/// Toutes les valeurs du cookie de session, dans l'ordre du navigateur.
+/// Plusieurs peuvent arriver : une page servie par l'aperçu (autre port, même
+/// hôte : les cookies ignorent le port) peut poser un `enginex_session` bidon
+/// sur un chemin plus long, que le navigateur envoie en premier. Ne garder
+/// que le premier verrouillerait l'UI ; on essaie donc chacun (4 au plus).
+fn cookie_tokens(headers: &HeaderMap) -> Vec<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
         .filter_map(|kv| kv.trim().split_once('='))
-        .find(|(k, _)| *k == COOKIE)
+        .filter(|(k, v)| *k == COOKIE && !v.is_empty())
         .map(|(_, v)| v.to_string())
+        .take(4)
+        .collect()
 }
 
 /// Session valide : prolonge sa durée et renvoie l'empreinte du jeton.
 async fn touch_session(state: &AppState, headers: &HeaderMap) -> Result<Option<Vec<u8>>, ApiError> {
-    let Some(token) = cookie_token(headers) else {
-        return Ok(None);
-    };
-    let hash = sha256(token.as_bytes());
     let now = now_secs();
-    let done = sqlx::query("UPDATE sessions SET last_seen = ?, expires_at = ? WHERE token_hash = ? AND expires_at > ?")
-        .bind(now)
-        .bind(now + SESSION_SECS)
-        .bind(&hash)
-        .bind(now)
-        .execute(state.db())
-        .await?;
-    Ok((done.rows_affected() == 1).then_some(hash))
+    for token in cookie_tokens(headers) {
+        let hash = sha256(token.as_bytes());
+        let done =
+            sqlx::query("UPDATE sessions SET last_seen = ?, expires_at = ? WHERE token_hash = ? AND expires_at > ?")
+                .bind(now)
+                .bind(now + SESSION_SECS)
+                .bind(&hash)
+                .bind(now)
+                .execute(state.db())
+                .await?;
+        if done.rows_affected() == 1 {
+            return Ok(Some(hash));
+        }
+    }
+    Ok(None)
 }
 
 pub async fn require_session(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
@@ -449,6 +459,17 @@ mod tests {
             header::COOKIE,
             HeaderValue::from_static("a=1; enginex_session=tok; b=2"),
         );
-        assert_eq!(cookie_token(&h).as_deref(), Some("tok"));
+        assert_eq!(cookie_tokens(&h), vec!["tok".to_string()]);
+    }
+
+    #[test]
+    fn every_session_cookie_is_tried() {
+        // Cookie bidon posé par une app de l'aperçu sur Path=/api : envoyé en premier.
+        let mut h = HeaderMap::new();
+        h.insert(
+            header::COOKIE,
+            HeaderValue::from_static("enginex_session=x; theme=1; enginex_session=tok"),
+        );
+        assert_eq!(cookie_tokens(&h), vec!["x".to_string(), "tok".to_string()]);
     }
 }

@@ -163,6 +163,14 @@ pub struct WebConfig {
     pub allow_private: bool,
     /// API GitHub (`ENGINEX_GITHUB_API`, tests : faux serveur).
     pub github_api: String,
+    /// Port d'aperçu des apps (`ENGINEX_PREVIEW_BIND`, `off` : désactivé).
+    pub preview_bind: Option<SocketAddr>,
+    /// Adresse publique de l'aperçu (`ENGINEX_PREVIEW_URL`, derrière un proxy).
+    pub preview_url: Option<String>,
+    /// Port d'aperçu publié sur l'hôte (`ENGINEX_PREVIEW_PUBLIC_PORT`).
+    pub preview_public_port: u16,
+    /// Chromium de la stack en CDP (`ENGINEX_BROWSER_URL`, vide : pas de navigateur).
+    pub browser_url: Option<String>,
 }
 
 impl Default for WebConfig {
@@ -171,6 +179,10 @@ impl Default for WebConfig {
             searxng_url: "http://searxng:8080".into(),
             allow_private: false,
             github_api: "https://api.github.com".into(),
+            preview_bind: None,
+            preview_url: None,
+            preview_public_port: 8091,
+            browser_url: None,
         }
     }
 }
@@ -204,6 +216,20 @@ impl Config {
                 searxng_url: var("ENGINEX_SEARXNG_URL", "http://searxng:8080"),
                 allow_private: false,
                 github_api: var("ENGINEX_GITHUB_API", "https://api.github.com"),
+                preview_bind: match var("ENGINEX_PREVIEW_BIND", "0.0.0.0:8091").as_str() {
+                    "" | "off" => None,
+                    v => Some(
+                        v.parse()
+                            .map_err(|e| anyhow::anyhow!("ENGINEX_PREVIEW_BIND invalide ({v}) : {e}"))?,
+                    ),
+                },
+                preview_url: std::env::var("ENGINEX_PREVIEW_URL").ok().filter(|v| !v.is_empty()),
+                preview_public_port: {
+                    let v = var("ENGINEX_PREVIEW_PUBLIC_PORT", "8091");
+                    v.parse()
+                        .map_err(|e| anyhow::anyhow!("ENGINEX_PREVIEW_PUBLIC_PORT invalide ({v}) : {e}"))?
+                },
+                browser_url: std::env::var("ENGINEX_BROWSER_URL").ok().filter(|v| !v.is_empty()),
             },
         })
     }

@@ -86,6 +86,10 @@ pub(crate) struct Inner {
     pub board_lock: tokio::sync::Mutex<()>,
     /// Crons en cours d'exécution.
     pub crons: crate::crons::Running,
+    /// Laissez-passer de l'aperçu des apps.
+    pub previews: crate::preview::Grants,
+    /// Onglets des sessions sur le navigateur de la stack.
+    pub browser: enginex_browser::Browser,
 }
 
 impl AppState {
@@ -101,6 +105,7 @@ impl AppState {
             nvidia_smi: config.nvidia_smi.clone(),
             ready_timeout: READY_TIMEOUT,
         });
+        let browser = enginex_browser::Browser::new(config.web.browser_url.clone());
         Self(Arc::new(Inner {
             hf: Hf::new(http.clone(), &config.hf_base),
             registry: Registry::new(http.clone(), &config.registry),
@@ -133,7 +138,14 @@ impl AppState {
             memory_lock: tokio::sync::Mutex::new(()),
             board_lock: tokio::sync::Mutex::new(()),
             crons: Default::default(),
+            previews: Default::default(),
+            browser,
         }))
+    }
+
+    /// Navigateur de la stack (onglets des sessions).
+    pub fn browser(&self) -> &enginex_browser::Browser {
+        &self.0.browser
     }
 
     /// Le code de configuration en cours, s'il y en a un (sert aussi aux tests).
