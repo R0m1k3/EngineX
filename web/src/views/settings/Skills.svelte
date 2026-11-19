@@ -75,11 +75,13 @@
     <tbody>
       {#each list as s (s.name)}
         <tr>
-          <td><code>{s.name}</code>{#if s.shipped} <span class="muted small">livrée</span>{/if}</td>
+          <td class="name"><code>{s.name}</code>{#if s.shipped}<br /><span class="muted small">livrée</span>{/if}</td>
           <td class="small">{#if s.valid}{s.description}{:else}<span class="error">SKILL.md invalide : non installée</span>{/if}</td>
-          <td class="actions">
-            <label class="check small"><input type="checkbox" checked={s.enabled} onchange={() => toggle(s)} /> active</label>
-            <button class="link" onclick={() => edit(s.name)}>Modifier</button>
+          <td class="act">
+            <div class="row-act">
+              <label class="check small"><input type="checkbox" checked={s.enabled} onchange={() => toggle(s)} /> active</label>
+              <button class="link" onclick={() => edit(s.name)}>Modifier</button>
+            </div>
           </td>
         </tr>
       {/each}
@@ -103,6 +105,8 @@
 
 <style>
   textarea { width: 100%; font-family: var(--mono, monospace); font-size: 13px; }
-  td.actions { white-space: nowrap; text-align: right; }
+  td.name { white-space: nowrap; vertical-align: top; }
+  td.act { white-space: nowrap; vertical-align: top; }
+  .row-act { display: flex; gap: var(--s3); align-items: center; justify-content: flex-end; }
   .check { display: inline-flex; flex-direction: row; gap: var(--s1); align-items: center; }
 </style>

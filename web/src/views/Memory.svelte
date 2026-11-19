@@ -16,7 +16,8 @@
   let viewing = $state<{ id: number; content: string } | null>(null);
   let showHistory = $state(false);
 
-  const kio = (n: number) => (n / 1024).toFixed(n < 10240 ? 1 : 0).replace('.', ',');
+  const kio = (n: number) =>
+    n < 1024 ? `${n} o` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0).replace('.', ',')} Kio`;
   const bytes = (s: string) => new TextEncoder().encode(s).length;
   const date = (t: number | null) => (t ? new Date(t * 1000).toLocaleString('fr-FR') : '');
   const who = (a: string | null) => (!a ? '' : a === 'michael' ? 'Michael' : a.startsWith('session:') ? `session ${a.slice(8, 16)}` : a);
@@ -127,17 +128,17 @@
   <nav class="levels">
     {#if tree}
       <button class="lvl" class:active={path === ''} onclick={() => open('', file)}>
-        Global <span class="muted tiny">{kio(tree.global.memory.size)} Kio</span>
+        Global <span class="muted tiny">{kio(tree.global.memory.size)}</span>
       </button>
       {#each tree.projects as p (p.slug)}
         <button class="lvl" class:active={path === p.slug} onclick={() => open(p.slug!, file)}>
-          {p.name} <span class="muted tiny">{kio(p.memory.size)} Kio</span>
+          {p.name} <span class="muted tiny">{kio(p.memory.size)}</span>
         </button>
         {#each p.topics as t (t.slug)}
           {@const tp = `${p.slug}/${t.slug}`}
           <button class="lvl sub" class:active={path === tp} class:warn={t.memory.size > tree.warn}
             onclick={() => open(tp, file)}>
-            {t.name} <span class="muted tiny">{kio(t.memory.size)} Kio</span>
+            {t.name} <span class="muted tiny">{kio(t.memory.size)}</span>
           </button>
         {/each}
       {/each}
@@ -158,7 +159,7 @@
       placeholder={file === 'memory' ? '(vide) Une ligne par fait : - AAAA-MM-JJ : …' : '(vide) Vos consignes pour Codex à ce niveau.'}></textarea>
     <div class="row foot">
       <span class="small" class:warn={size > limit * 0.75} class:error={size > limit}>
-        {kio(size)} Kio / {limit / 1024}
+        {kio(size)} / {limit / 1024} Kio
       </span>
       {#if current?.[file].updated}
         <span class="small muted">
@@ -187,7 +188,7 @@
               <tr class:active={viewing?.id === r.id}>
                 <td>{date(r.created_at)}</td>
                 <td>{#if sessionOf(r.author)}<a href="#sessions/{sessionOf(r.author)}">{who(r.author)}</a>{:else}{who(r.author)}{/if}</td>
-                <td class="muted">{kio(r.size)} Kio</td>
+                <td class="muted">{kio(r.size)}</td>
                 <td><button class="link" onclick={() => view(r.id)}>Voir</button></td>
               </tr>
             {/each}
