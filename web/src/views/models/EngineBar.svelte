@@ -1,6 +1,15 @@
 <script lang="ts">
-  import ProgressBar from '../../lib/ui/ProgressBar.svelte';
+  // Bandeau du moteur, en haut de la page Modèles : état, preset chargé, débit, cartes, journaux.
   import { onDestroy } from 'svelte';
+  import ScrollText from '@lucide/svelte/icons/scroll-text';
+  import Square from '@lucide/svelte/icons/square';
+  import Button from '../../lib/ui/Button.svelte';
+  import StatusDot from '../../lib/ui/StatusDot.svelte';
+  import ProgressBar from '../../lib/ui/ProgressBar.svelte';
+  import Gauge from '../../lib/ui/Gauge.svelte';
+  import { dec1, int } from '../../lib/ui/format';
+  import type { DotKind, GaugeRow } from '../../lib/ui/types';
+  import Note from '../settings/Note.svelte';
   import {
     engine, engineLogs, presets, stopEngine, versions, message, jobError, JOB_KIND, JOB_STEP,
     type EngineInfo, type Preset, type Job,
@@ -40,6 +49,7 @@
     failed: 'échec',
     stopping: 'arrêt',
   };
+  const dot: Record<string, DotKind> = { stopped: 'off', starting: 'warn', ready: 'ok', failed: 'err', stopping: 'warn' };
   const originLabel: Record<string, string> = {
     env: 'binaire imposé par l’environnement',
     active: 'moteur installé',
@@ -63,89 +73,152 @@
   let shownJob = $derived(
     job && (!job.finished || (job.step === 'failed' && ['activate', 'stop', 'delete'].includes(job.kind))) ? job : null,
   );
+  let rows = $derived<GaugeRow[]>(
+    (info?.gpus ?? []).map((g) => ({ label: `CUDA${g.index}`, sub: g.name, total_mib: g.total_mib, used_mib: g.used_mib })),
+  );
 
   load();
   const timer = setInterval(load, 2000);
   onDestroy(() => clearInterval(timer));
 </script>
 
-<section class="card engine-bar">
+<section class="eng" aria-label="Moteur">
   {#if info}
-    <div class="row wrap">
-      <div>
-        <strong class="state state-{info.state.state}">{label[info.state.state]}</strong>
-        {#if presetName}<span> · {presetName}</span>{/if}
-        {#if info.state.state === 'starting'}<span class="muted"> · {info.state.progress} %</span>{/if}
-        <span class="muted small"> · {info.build ?? 'build inconnu'}, {originLabel[info.origin]}</span>
-        {#if info.state.state === 'ready'}
-          <span class="muted small">
-            · contexte {info.n_ctx ?? '?'} · outils
-            {#if info.tools_ok === true}OK{:else if info.tools_ok === false}<span class="error">KO</span>{:else}?{/if}
-            {#if gen?.tokens_per_s != null}
-              · dernière réponse {gen.tokens_per_s.toFixed(1)} jetons/s
-              {#if gen.draft_n}
-                · brouillon accepté {gen.draft_accepted ?? 0}/{gen.draft_n}
-                ({Math.round(((gen.draft_accepted ?? 0) / gen.draft_n) * 100)} %)
-              {/if}
-            {/if}
-          </span>
-        {/if}
+    {@const st = info.state.state}
+    <div class="main">
+      <div class="who">
+        <div class="line1">
+          <StatusDot kind={dot[st]} />
+          <span class="state">{label[st]}</span>
+          {#if presetName}<strong class="ell pname">{presetName}</strong>{/if}
+          {#if info.state.state === 'starting'}<span class="num muted">{info.state.progress} %</span>{/if}
+        </div>
+        <div class="line2 muted">{info.build ?? 'build inconnu'}, {originLabel[info.origin]}</div>
       </div>
-      <div class="actions">
-        <button class="link" onclick={() => { showLogs = !showLogs; load(); }}>{showLogs ? 'Masquer les logs' : 'Logs'}</button>
-        {#if info.state.state === 'ready' || info.state.state === 'starting'}
-          <button class="secondary" onclick={stop} disabled={!!job && !job.finished}>Arrêter</button>
+
+      {#if st === 'ready'}
+        <dl class="stats">
+          <div><dt>Contexte</dt><dd class="num">{info.n_ctx != null ? int(info.n_ctx) : '?'}</dd></div>
+          <div>
+            <dt>Outils</dt>
+            <dd>{#if info.tools_ok === true}OK{:else if info.tools_ok === false}<span class="bad">KO</span>{:else}?{/if}</dd>
+          </div>
+          {#if gen?.tokens_per_s != null}
+            <div><dt>Dernière réponse</dt><dd class="num">{dec1(gen.tokens_per_s)} jetons/s</dd></div>
+            {#if gen.draft_n}
+              <div>
+                <dt>Brouillon accepté</dt>
+                <dd class="num">{gen.draft_accepted ?? 0}/{gen.draft_n} ({Math.round(((gen.draft_accepted ?? 0) / gen.draft_n) * 100)} %)</dd>
+              </div>
+            {/if}
+          {/if}
+        </dl>
+      {/if}
+
+      {#if rows.length}
+        <div class="eg"><Gauge {rows} size="md" compact /></div>
+      {/if}
+
+      <div class="acts">
+        <Button variant="ghost" icon={ScrollText} aria-pressed={showLogs} onclick={() => { showLogs = !showLogs; load(); }}>
+          {showLogs ? 'Masquer les journaux' : 'Journaux'}
+        </Button>
+        {#if st === 'ready' || st === 'starting'}
+          <Button icon={Square} onclick={stop} disabled={!!job && !job.finished}>Arrêter</Button>
         {/if}
       </div>
     </div>
+
     {#if info.state.state === 'starting'}
-      <div class="pb"><ProgressBar value={info.state.progress} label="Chargement du modèle" /></div>
+      <ProgressBar value={info.state.progress} label="Chargement du modèle" />
     {/if}
+
     {#if ctxCut && preset}
-      <p class="small error">
-        Contexte réduit par --fit : {info.n_ctx} jetons chargés au lieu de {preset.settings.ctx} (VRAM courte).
-        Codex reçoit {info.n_ctx}. Baisser le contexte, passer le KV en q4_0 ou mettre des experts en RAM.
-      </p>
+      <Note tone="warn">
+        Contexte réduit par --fit : {int(info.n_ctx ?? 0)} jetons chargés au lieu de {int(preset.settings.ctx)} (VRAM courte).
+        Codex reçoit {int(info.n_ctx ?? 0)}. Baisser le contexte, passer le KV en q4_0 ou mettre des experts en RAM.
+      </Note>
     {/if}
     {#if cpuHeavy && gen}
-      <p class="small error">
+      <Note tone="warn">
         Le processeur calcule une partie du modèle ({gen.cpu_cores} cœurs occupés pendant la dernière réponse) :
         il ne tient pas entier dans la VRAM, d’où la lenteur. Dans le preset : flash attention activée, cache q8_0,
         contexte plus court, ou vision désactivée.
-      </p>
+      </Note>
     {/if}
-    {#if info.spec_fallback && info.spec_fallback.preset_id === info.preset_id && info.state.state === 'ready'}
-      <p class="small error">Chargé sans décodage spéculatif : le brouillon a fait échouer le chargement ({info.spec_fallback.why}).</p>
+    {#if info.spec_fallback && info.spec_fallback.preset_id === info.preset_id && st === 'ready'}
+      <Note tone="warn">Chargé sans décodage spéculatif : le brouillon a fait échouer le chargement ({info.spec_fallback.why}).</Note>
     {/if}
     {#if info.state.state === 'failed'}
-      <p class="error">{info.state.cause}</p>
+      <Note tone="danger">{info.state.cause}</Note>
     {/if}
     {#if shownJob}
-      <p class="small">
+      <div class="job">
         {JOB_KIND[shownJob.kind]}{shownJob.tag && !['activate', 'stop', 'delete'].includes(shownJob.kind) ? ` (${shownJob.tag})` : ''} :
-        <span class="state state-{shownJob.step}">{JOB_STEP[shownJob.step]}</span>
-      </p>
-      {#if shownJob.error}<p class="error small">{jobError(shownJob.error)}</p>{/if}
+        <span class:okc={shownJob.step === 'done'} class:bad={shownJob.step === 'failed'}>{JOB_STEP[shownJob.step]}</span>
+      </div>
+      {#if shownJob.error}<Note tone="danger">{jobError(shownJob.error)}</Note>{/if}
     {/if}
     {#if !info.has_fit}
-      <p class="small error">Ce llama-server n’a pas --fit : placement par défaut de llama.cpp.</p>
+      <Note tone="warn">Ce llama-server n’a pas --fit : placement par défaut de llama.cpp.</Note>
     {/if}
-    <div class="gpus">
-      {#each info.gpus as g}
-        <div class="small">
-          <span class="muted">CUDA{g.index}</span> {g.name}
-          <div class="pb"><ProgressBar value={g.used_mib} max={g.total_mib} label="VRAM utilisée" /></div>
-          <span class="muted">{(g.used_mib / 1024).toFixed(1)} / {(g.total_mib / 1024).toFixed(1)} Gio</span>
-        </div>
-      {/each}
-    </div>
     {#if showLogs}
-      <pre class="logs">{lines.join('\n')}</pre>
+      <pre class="elog" aria-label="Journal de llama-server">{lines.join('\n') || 'Journal vide.'}</pre>
     {/if}
   {/if}
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error}<Note tone="danger">{error}</Note>{/if}
 </section>
 
 <style>
-  .pb { margin-bottom: var(--s2); }
+  .eng {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s3);
+    padding: var(--s3) var(--s6);
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    font-size: var(--fs-sm);
+  }
+  .eng:empty { display: none; }
+  .main { display: flex; align-items: center; gap: var(--s6); flex-wrap: wrap; min-height: 40px; }
+  .who { min-width: 0; flex: 0 1 auto; }
+  .line1 { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+  .state { color: var(--muted); }
+  .pname { font-weight: 600; font-size: var(--fs-md); max-width: 36ch; }
+  .line2 { margin-top: 2px; }
+  .stats { display: flex; gap: var(--s5); margin: 0; }
+  .stats div { display: flex; flex-direction: column; gap: 2px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; color: var(--text); }
+  .eg { flex: 1 1 300px; max-width: 420px; min-width: 240px; }
+  .acts { display: flex; gap: var(--s2); margin-left: auto; }
+  .bad { color: var(--danger); }
+  .okc { color: var(--accent); }
+  .job { color: var(--muted); }
+  .elog {
+    margin: 0;
+    max-height: 360px;
+    overflow: auto;
+    padding: var(--s3) var(--s4);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: var(--fs-code);
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    tab-size: 4;
+  }
+  @media (max-width: 767px) {
+    .eng { padding: var(--s3) var(--s4); }
+    .main { gap: var(--s3); }
+    .stats { flex-wrap: wrap; gap: var(--s2) var(--s4); }
+    /* Téléphone : la barre d'état montre déjà la VRAM. */
+    .eg, .line2 { display: none; }
+    .main { flex-wrap: wrap; }
+    .acts { margin-left: auto; }
+    .acts :global(.btn) { height: var(--touch); }
+  }
 </style>

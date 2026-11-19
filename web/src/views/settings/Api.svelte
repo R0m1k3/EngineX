@@ -1,4 +1,13 @@
 <script lang="ts">
+  import Plus from '@lucide/svelte/icons/plus';
+  import Copy from '@lucide/svelte/icons/copy';
+  import Check from '@lucide/svelte/icons/check';
+  import Button from '../../lib/ui/Button.svelte';
+  import Input from '../../lib/ui/Input.svelte';
+  import { confirmDialog } from '../../lib/ui/dialog.svelte';
+  import { toast } from '../../lib/ui/toast.svelte';
+  import Section from './Section.svelte';
+  import Note from './Note.svelte';
   import {
     apiKeys, createApiKey, deleteApiKey, codexConfig, message, ApiError,
     type ApiKey, type CodexConfig,
@@ -45,9 +54,15 @@
   }
 
   async function revoke(k: ApiKey) {
-    if (!confirm(`Révoquer la clé « ${k.name} » ? Les programmes qui l’utilisent seront refusés.`)) return;
+    const ok = await confirmDialog(`Révoquer la clé « ${k.name} » ? Les programmes qui l’utilisent seront refusés.`, {
+      title: 'Révoquer la clé',
+      confirm: 'Révoquer',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await deleteApiKey(k.id);
+      toast(`Clé « ${k.name} » révoquée.`, 'ok');
       await load();
     } catch (err) {
       error = message(err);
@@ -71,80 +86,93 @@
   load();
 </script>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<div class="err"><Note tone="danger">{error}</Note></div>{/if}
 
-<section class="card">
-  <h3>Clés d’API</h3>
-  <p class="small muted">
-    Codex et les autres clients OpenAI s’identifient avec une clé sur <code>{config?.base_url ?? '/v1'}</code>.
-    La valeur n’est montrée qu’à la création ; une clé perdue se remplace par une nouvelle.
-  </p>
-  <form class="row wrap" onsubmit={create}>
-    <input bind:value={name} placeholder="Nom (ex. codex-portable)" maxlength="50" required />
-    <button type="submit" disabled={!name.trim()}>Nouvelle clé</button>
+<Section title="Clés d’API" text="Codex et les autres clients OpenAI s’identifient avec une clé. Sa valeur n’est montrée qu’à la création.">
+  <p class="hint">Adresse : <code>{config?.base_url ?? '/v1'}</code>. Une clé perdue se remplace par une nouvelle.</p>
+  <form class="newkey" onsubmit={create}>
+    <Input label="Nom de la clé" bind:value={name} placeholder="codex-portable" maxlength={50} required />
+    <Button type="submit" variant="primary" icon={Plus} disabled={!name.trim()}>Nouvelle clé</Button>
   </form>
   {#if created}
-    <div class="created">
-      <p class="small">Clé « {created.name} » : copiez-la maintenant, elle ne sera plus affichée.</p>
-      <div class="row wrap">
-        <code class="secret">{created.key}</code>
-        <button class="secondary" onclick={() => created && copy(created.key, 'key')}>{copied === 'key' ? 'Copiée' : 'Copier'}</button>
-        <button class="link" onclick={() => (created = null)}>Masquer</button>
+    <div class="created" role="status">
+      <p>Clé « {created.name} » : copiez-la maintenant, elle ne sera plus affichée.</p>
+      <code class="secret">{created.key}</code>
+      <div class="acts">
+        <Button icon={copied === 'key' ? Check : Copy} onclick={() => created && copy(created.key, 'key')}>{copied === 'key' ? 'Copiée' : 'Copier'}</Button>
+        <Button variant="ghost" onclick={() => (created = null)}>Masquer</Button>
       </div>
     </div>
   {/if}
   {#if keys.length}
-    <table>
-      <thead><tr><th>Nom</th><th>Créée le</th><th>Dernière utilisation</th><th></th></tr></thead>
-      <tbody>
-        {#each keys as k (k.id)}
-          <tr>
-            <td>{k.name}</td>
-            <td class="small">{date(k.created_at)}</td>
-            <td class="small">{date(k.last_used_at)}</td>
-            <td class="actions"><button class="link" onclick={() => revoke(k)}>Révoquer</button></td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+    <ul class="rows" aria-label="Clés d’API">
+      {#each keys as k (k.id)}
+        <li>
+          <div class="rmain">
+            <span class="rname">{k.name}</span>
+            <span class="rmeta">Créée le {date(k.created_at)}, dernière utilisation : {date(k.last_used_at)}</span>
+          </div>
+          <Button variant="danger" size="sm" onclick={() => revoke(k)}>Révoquer</Button>
+        </li>
+      {/each}
+    </ul>
   {:else}
-    <p class="muted small">Aucune clé.</p>
+    <p class="hint">Aucune clé.</p>
   {/if}
-</section>
+</Section>
 
-<section class="card">
-  <h3>Configuration de Codex</h3>
+<Section title="Configuration de Codex" text="Pour utiliser EngineX depuis un Codex installé ailleurs, avec le preset actif.">
   {#if config}
-    <p class="small muted">
-      À mettre dans <code>~/.codex/config.toml</code>, pour le preset actif. La clé se lit dans la variable
-      <code>{config.env_key}</code>.
-    </p>
-    <pre class="toml">{config.toml}</pre>
-    <div class="actions">
-      <button class="secondary" onclick={() => config && copy(config.toml, 'toml')}>{copied === 'toml' ? 'Copié' : 'Copier le config.toml'}</button>
+    {@const cfg = config}
+    <p class="hint">À mettre dans <code>~/.codex/config.toml</code>. La clé se lit dans la variable <code>{cfg.env_key}</code>.</p>
+    <div class="snip">
+      <div class="snip-h">
+        <span class="mono">config.toml</span>
+        <Button size="sm" variant="ghost" icon={copied === 'toml' ? Check : Copy} onclick={() => copy(cfg.toml, 'toml')}>{copied === 'toml' ? 'Copié' : 'Copier'}</Button>
+      </div>
+      <pre>{cfg.toml}</pre>
     </div>
-    <pre class="toml">{envLine}</pre>
-    <div class="actions">
-      <button class="secondary" onclick={() => copy(envLine, 'env')}>{copied === 'env' ? 'Copié' : 'Copier la ligne export'}</button>
+    <div class="snip">
+      <div class="snip-h">
+        <span class="mono">shell</span>
+        <Button size="sm" variant="ghost" icon={copied === 'env' ? Check : Copy} onclick={() => copy(envLine, 'env')}>{copied === 'env' ? 'Copié' : 'Copier'}</Button>
+      </div>
+      <pre>{envLine}</pre>
     </div>
   {:else if configError}
-    <p class="muted">{configError}</p>
+    <p class="hint">{configError}</p>
   {/if}
-</section>
+</Section>
 
 <style>
+  .err { padding: var(--s4) var(--s6) 0; }
+  .hint { margin: 0; color: var(--muted); font-size: var(--fs-sm); }
+  .newkey { display: flex; gap: var(--s2); align-items: flex-end; max-width: 520px; }
+  .newkey > :global(.f) { flex: 1; }
   .created {
-    margin-top: var(--s3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s2);
     padding: var(--s3);
     border: 1px solid var(--accent);
-    border-radius: 6px;
+    border-radius: var(--r);
+    background: var(--accent-soft);
+    font-size: var(--fs-sm);
   }
-  .secret {
-    word-break: break-all;
-    user-select: all;
-  }
-  .toml {
-    white-space: pre-wrap;
-    user-select: all;
+  .created p { margin: 0; }
+  .secret { word-break: break-all; user-select: all; color: var(--text); }
+  .acts { display: flex; gap: var(--s2); }
+  .rows { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  .rows li { display: flex; align-items: center; gap: var(--s3); padding: var(--s3) 0; border-bottom: 1px solid var(--line); }
+  .rmain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .rname { font-weight: 600; }
+  .rmeta { color: var(--muted); font-size: var(--fs-sm); }
+  .snip { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+  .snip-h { display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 var(--s1) 0 var(--s3); background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); }
+  .snip pre { margin: 0; padding: var(--s3); overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; line-height: 1.6; }
+  @media (max-width: 767px) {
+    .err { padding: var(--s4) var(--s4) 0; }
+    .newkey { flex-direction: column; align-items: stretch; }
+    .newkey :global(.box), .newkey :global(.btn), .acts :global(.btn), .rows :global(.btn) { height: var(--touch); }
   }
 </style>

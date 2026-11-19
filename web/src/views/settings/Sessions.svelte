@@ -1,4 +1,11 @@
 <script lang="ts">
+  import Button from '../../lib/ui/Button.svelte';
+  import Input from '../../lib/ui/Input.svelte';
+  import Switch from '../../lib/ui/Switch.svelte';
+  import StatusDot from '../../lib/ui/StatusDot.svelte';
+  import { toast } from '../../lib/ui/toast.svelte';
+  import Section from './Section.svelte';
+  import Note from './Note.svelte';
   import {
     sandboxStatus, sessionSettings, saveSessionSettings, message, type SandboxStatus,
   } from '../../lib/api';
@@ -14,7 +21,6 @@
   let gitEmail = $state('');
   let diskPct = $state(90);
   let error = $state('');
-  let saved = $state(false);
 
   async function load() {
     try {
@@ -38,7 +44,6 @@
   async function save(e: SubmitEvent) {
     e.preventDefault();
     error = '';
-    saved = false;
     try {
       const s = await saveSessionSettings({
         idle_minutes: idle,
@@ -53,7 +58,7 @@
       });
       idle = s.idle_minutes;
       max = s.max;
-      saved = true;
+      toast('Réglages des sessions enregistrés.', 'ok');
     } catch (err) {
       error = message(err);
     }
@@ -63,76 +68,104 @@
   load();
 </script>
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}<div class="err"><Note tone="danger">{error}</Note></div>{/if}
 
-<section class="card">
-  <h3>Sandboxes</h3>
-  <p class="small muted">
-    Chaque session a sa sandbox Docker, où tourne Codex. Elle démarre au premier message et s’arrête après le délai
-    ci-dessous sans tour en cours. Le code et l’historique sont gardés.
-  </p>
-  <form class="fields" onsubmit={save}>
-    <label>Arrêt après inactivité (minutes, 5 à 1440)
-      <input class="num" type="number" min="5" max="1440" bind:value={idle} required />
-    </label>
-    <label>Sandboxes actives en même temps (1 à 10)
-      <input class="num" type="number" min="1" max="10" bind:value={max} required />
-    </label>
-    <label class="check"><input type="checkbox" bind:checked={verifyOn} /> Vérification après chaque tour qui change des fichiers</label>
-    <label>Corrections automatiques au plus (0 à 10)
-      <input class="num" type="number" min="0" max="10" bind:value={fixes} required disabled={!verifyOn} />
-    </label>
-    <label class="check"><input type="checkbox" bind:checked={appCheck} /> Essai de l’app au navigateur après une modification de l’interface
-      <span class="small muted">(si l’agent ne l’a pas ouverte lui-même : un tour de plus, un seul par message ; demande le navigateur de la stack)</span></label>
-    <label class="check"><input type="checkbox" bind:checked={memoryAuto} /> Mettre à jour la mémoire en fin de session
-      <span class="small muted">(un tour de Codex avant l’arrêt pour inactivité, s’il y a eu un message depuis le précédent)</span></label>
-    <label>Nom git des commits d’EngineX
-      <input bind:value={gitName} placeholder="EngineX" maxlength="100" />
-    </label>
-    <label>E-mail git
-      <input type="email" bind:value={gitEmail} placeholder="enginex@localhost" maxlength="200" />
-    </label>
-    <label>Alerte disque de /data au-delà de (%, 50 à 99)
-      <input class="num" type="number" min="50" max="99" bind:value={diskPct} required />
-      <span class="small muted">Bandeau sur les pages Fichiers et Système ; les fichiers des sessions sont gardés jusqu’à leur suppression.</span>
-    </label>
-    <div class="actions"><button type="submit">Enregistrer</button>{#if saved}<span class="ok small">Enregistré.</span>{/if}</div>
-  </form>
-</section>
+<form onsubmit={save}>
+  <Section title="Sandboxes" text="Chaque session a sa sandbox Docker, où tourne Codex. Elle démarre au premier message ; le code et l’historique sont gardés.">
+    <div class="g2">
+      <Input label="Arrêt après inactivité" unit="min" hint="5 à 1440, sans tour en cours" type="number" min="5" max="1440" bind:value={idle} required />
+      <Input label="Sandboxes actives en même temps" hint="1 à 10" type="number" min="1" max="10" bind:value={max} required />
+    </div>
+  </Section>
+
+  <Section title="Vérification" text="Tests lancés par EngineX après chaque tour qui change des fichiers ; un échec est renvoyé à Codex.">
+    <Switch bind:checked={verifyOn}>Vérifier après chaque tour qui change des fichiers</Switch>
+    <div class="g2">
+      <Input label="Corrections automatiques au plus" hint="0 à 10" type="number" min="0" max="10" bind:value={fixes} required disabled={!verifyOn} />
+    </div>
+    <Switch bind:checked={appCheck}>Essai de l’app au navigateur après une modification de l’interface</Switch>
+    <p class="small muted">Si l’agent ne l’a pas ouverte lui-même : un tour de plus, un seul par message ; demande le navigateur de la stack.</p>
+  </Section>
+
+  <Section title="Mémoire" text="Un tour de Codex avant l’arrêt pour inactivité, s’il y a eu un message depuis le précédent.">
+    <Switch bind:checked={memoryAuto}>Mettre à jour la mémoire en fin de session</Switch>
+  </Section>
+
+  <Section title="Git" text="Auteur des commits faits par EngineX dans les dépôts des topics.">
+    <div class="g2">
+      <Input label="Nom git des commits" bind:value={gitName} placeholder="EngineX" maxlength={100} />
+      <Input label="E-mail git" type="email" bind:value={gitEmail} placeholder="enginex@localhost" maxlength={200} />
+    </div>
+  </Section>
+
+  <Section title="Disque" text="Bandeau sur les pages Fichiers et Système ; les fichiers des sessions sont gardés jusqu’à leur suppression.">
+    <div class="g2">
+      <Input label="Alerte disque de /data au-delà de" unit="%" hint="50 à 99" type="number" min="50" max="99" bind:value={diskPct} required />
+    </div>
+  </Section>
+
+  <div class="savebar"><Button type="submit" variant="primary">Enregistrer</Button></div>
+</form>
 
 {#if status}
-  <section class="card">
-    <h3>État</h3>
-    <table>
-      <tbody>
-        <tr><th>Mode</th><td>{status.backend === 'docker' ? 'Docker' : 'Local, sans isolation (développement)'}</td></tr>
-        {#if status.backend === 'docker'}
-          <tr>
-            <th>Docker</th>
-            <td>
-              {#if status.docker.reachable}<span class="ok">joignable</span>{:else}<span class="error">injoignable</span>{/if}
-              {#if status.docker.error}<div class="small muted">{status.docker.error}</div>{/if}
-            </td>
-          </tr>
-          <tr>
-            <th>Dossier /data sur l’hôte</th>
-            <td>
-              {#if status.host_data.path}<code>{status.host_data.path}</code>{:else}<span class="error">introuvable</span>{/if}
-              {#if status.host_data.error}<div class="small muted">{status.host_data.error}</div>{/if}
-            </td>
-          </tr>
-          <tr>
-            <th>Image devbox</th>
-            <td>
-              <code>{status.image.name}</code>
-              {#if status.image.present}<span class="ok">présente</span>{:else}<span class="muted">pas encore téléchargée (au premier message)</span>{/if}
-              <div class="small muted">Dernière mise à jour : {date(status.image.last_pull_at)}</div>
-              {#if status.image.last_pull_error}<div class="small error">Échec de la mise à jour : {status.image.last_pull_error}</div>{/if}
-            </td>
-          </tr>
-        {/if}
-        <tr><th>Sandboxes actives</th><td>{status.live}</td></tr>
-      </tbody>
-    </table>
-  </section>
+  <Section title="État" text="Ce que voit EngineX de Docker en ce moment.">
+    <dl class="kv">
+      <dt>Mode</dt>
+      <dd>{status.backend === 'docker' ? 'Docker' : 'Local, sans isolation (développement)'}</dd>
+      {#if status.backend === 'docker'}
+        <dt>Docker</dt>
+        <dd>
+          <span class="st"><StatusDot kind={status.docker.reachable ? 'ok' : 'err'} />{status.docker.reachable ? 'joignable' : 'injoignable'}</span>
+          {#if status.docker.error}<div class="sub mono">{status.docker.error}</div>{/if}
+        </dd>
+        <dt>Dossier /data sur l’hôte</dt>
+        <dd>
+          {#if status.host_data.path}<code>{status.host_data.path}</code>{:else}<span class="bad">introuvable</span>{/if}
+          {#if status.host_data.error}<div class="sub mono">{status.host_data.error}</div>{/if}
+        </dd>
+        <dt>Image devbox</dt>
+        <dd>
+          <code>{status.image.name}</code>
+          <span class="st">
+            <StatusDot kind={status.image.present ? 'ok' : 'off'} />
+            {status.image.present ? 'présente' : 'pas encore téléchargée (au premier message)'}
+          </span>
+          <div class="sub">Dernière mise à jour : {date(status.image.last_pull_at)}</div>
+          {#if status.image.last_pull_error}<div class="sub bad">Échec de la mise à jour : {status.image.last_pull_error}</div>{/if}
+        </dd>
+      {/if}
+      <dt>Sandboxes actives</dt>
+      <dd class="num">{status.live}</dd>
+    </dl>
+  </Section>
 {/if}
+
+<style>
+  .err { padding: var(--s4) var(--s6) 0; }
+  .g2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4); }
+  .savebar {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    display: flex;
+    padding: var(--s3) var(--s6) var(--s3) calc(var(--s6) + 220px + var(--s8));
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  @media (max-width: 1023px) { .savebar { padding-left: var(--s4); } }
+  .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s3) var(--s5); margin: 0; font-size: var(--fs-sm); }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; display: flex; flex-direction: column; align-items: flex-start; gap: var(--s1); overflow-wrap: anywhere; }
+  .st { display: inline-flex; align-items: center; gap: var(--s2); }
+  .sub { color: var(--muted); }
+  .bad { color: var(--danger); }
+  @media (max-width: 767px) {
+    .err { padding: var(--s4) var(--s4) 0; }
+    .g2 { grid-template-columns: minmax(0, 1fr); }
+    .g2 :global(.box) { height: var(--touch); }
+    .savebar { padding: var(--s3) var(--s4); bottom: 0; }
+    .savebar :global(.btn) { height: var(--touch); flex: 1; }
+    .kv { grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
+    .kv dd { margin-bottom: var(--s3); }
+  }
+</style>
