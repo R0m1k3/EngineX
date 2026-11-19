@@ -250,8 +250,12 @@ async fn code_session_in_a_real_docker_sandbox() {
         .await
         .expect("terminal ouvert");
     let mut out = String::new();
-    term_write(&mut ws, "echo \"u=$(id -u) s=$E2E_SECRET t=$(tty)\"\n").await;
-    term_read_until(&mut ws, &mut out, "s=*** t=/dev/pts/").await;
+    term_write(
+        &mut ws,
+        "echo \"u=$(id -u) s=$E2E_SECRET T=$TERM c=$(tput cols) t=$(tty)\"\n",
+    )
+    .await;
+    term_read_until(&mut ws, &mut out, "s=*** T=xterm-256color c=80 t=/dev/pts/").await;
     assert!(out.contains("u=1000"), "{out}");
     assert!(!out.contains(SECRET), "{out}");
 

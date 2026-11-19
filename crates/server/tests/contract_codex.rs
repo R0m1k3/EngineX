@@ -920,8 +920,8 @@ async fn bridge_terminal() {
     let (b, sid) = terminal_bridge().await;
     let mut ws = open_term(&b, &sid).await;
     let mut out = String::new();
-    term_send(&mut ws, "echo \"s=$E2E_SECRET\"\n").await;
-    term_until(&mut ws, &mut out, "s=***").await;
+    term_send(&mut ws, "echo \"s=$E2E_SECRET t=$TERM\"\n").await;
+    term_until(&mut ws, &mut out, "s=*** t=xterm-256color").await;
     assert!(!out.contains(E2E_SECRET), "{out}");
     ws.send(tokio_tungstenite::tungstenite::Message::Text(
         json!({"type": "resize", "cols": 100, "rows": 30}).to_string().into(),

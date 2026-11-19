@@ -637,10 +637,12 @@ impl Hub {
         {
             Ok(_) => {
                 let _ = sessions::set_session_field(state, &self.id, "pending_revert", None).await;
+                sessions::emit_session(state, &self.id).await;
                 Ok(())
             }
             Err(enginex_codex::Error::Rpc { message, .. }) => {
                 let _ = sessions::set_session_field(state, &self.id, "pending_revert", None).await;
+                sessions::emit_session(state, &self.id).await;
                 let msg = state.masker().mask(&message).into_owned();
                 self.notice(
                     state,
@@ -842,6 +844,7 @@ impl Hub {
                         let _ = sessions::set_thread(state, &self.id, &t).await;
                         // Nouveau fil : plus rien à retirer chez Codex.
                         let _ = sessions::set_session_field(state, &self.id, "pending_revert", None).await;
+                        sessions::emit_session(state, &self.id).await;
                         t
                     }
                     None => return Err(fail("thread/start sans id".into()).await),

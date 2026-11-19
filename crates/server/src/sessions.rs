@@ -758,7 +758,7 @@ pub async fn undo_file(
 }
 
 /// Le détail de la session a changé (bandeau, note) : nouvel instantané SSE.
-async fn emit_session(state: &AppState, id: &str) {
+pub(crate) async fn emit_session(state: &AppState, id: &str) {
     if let Ok(r) = row(state, id).await {
         bridge::hub(state, id).emit_event("session", session_json(state, &r));
     }

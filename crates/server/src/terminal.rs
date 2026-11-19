@@ -167,6 +167,8 @@ async fn run(state: AppState, id: String, socket: WebSocket) {
             let mut params = types::command_exec(&["bash", "-l"], &cwd, Some(&pid), Some((24, 80)), None);
             // Sans cela, Codex cesse d'envoyer la sortie après 1 Mio.
             params["disableOutputCap"] = json!(true);
+            // Codex fixe TERM=dumb : vim, less ou top refuseraient le plein écran.
+            params["env"] = json!({"TERM": "xterm-256color", "COLORTERM": "truecolor"});
             let r = client.request_with_timeout("command/exec", params, None).await;
             let m = state.masker();
             match r {

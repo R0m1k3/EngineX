@@ -670,6 +670,16 @@ async fn conversation_revert_with_a_live_sandbox() {
         v["session"]["pending_revert"] == false
     })
     .await;
+    // L'UI l'apprend aussi : le bandeau « en attente » disparaît.
+    let mut applied = false;
+    for _ in 0..50 {
+        if ev.last("session").is_some_and(|s| s["pending_revert"] == false) {
+            applied = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(applied, "{:?}", ev.last("session"));
     turn(&e, &sid, "Deuxième").await;
     let t = ev.until("turn_stored", |_| true).await;
     assert_eq!(t["turn"]["status"], "completed", "{t}");

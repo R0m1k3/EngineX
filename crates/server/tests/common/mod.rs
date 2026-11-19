@@ -702,6 +702,14 @@ impl Sse {
         }
     }
 
+    /// Dernier événement `name` reçu jusqu'ici (sans attendre).
+    pub fn last(&mut self, name: &str) -> Option<Value> {
+        while let Ok(ev) = self.rx.try_recv() {
+            self.seen.push(ev);
+        }
+        self.seen.iter().rev().find(|(n, _)| n == name).map(|(_, v)| v.clone())
+    }
+
     pub fn names(&self) -> Vec<String> {
         self.seen
             .iter()

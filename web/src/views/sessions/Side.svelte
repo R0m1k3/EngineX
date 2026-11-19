@@ -13,10 +13,10 @@
 
 <aside class="side card">
   <div class="row">
-    <nav class="tabs">
+    <div class="tabs" role="tablist">
       <a href={'#'} class:active={tab === 'files'} onclick={(e) => { e.preventDefault(); tab = 'files'; }}>Fichiers</a>
       <a href={'#'} class:active={tab === 'terminal'} onclick={(e) => { e.preventDefault(); tab = 'terminal'; }}>Terminal</a>
-    </nav>
+    </div>
     <button class="link" onclick={close} title="Fermer le panneau">✕</button>
   </div>
   <div class="body" class:hidden={tab !== 'files'}><Files {sessionId} /></div>
