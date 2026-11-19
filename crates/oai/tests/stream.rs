@@ -106,7 +106,7 @@ fn truncated_call_becomes_a_notice() {
     let text = out[1]["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("32768 jetons"), "{text}");
     assert!(text.contains("`exec_command`"), "{text}");
-    assert!(text.contains("plusieurs fois"), "{text}");
+    assert!(text.contains("plusieurs fichiers"), "{text}");
 }
 
 #[test]

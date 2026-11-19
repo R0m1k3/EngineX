@@ -14,22 +14,41 @@ fn toml_str(s: &str) -> String {
     serde_json::to_string(s).expect("chaîne")
 }
 
-/// Seuil de compactage automatique de Codex : 80 % du contexte, et jamais
-/// plus que le contexte moins la sortie max, pour qu'historique et réponse
-/// tiennent toujours ensemble (Codex vérifie aussi ce seuil entre deux appels
-/// d'outils d'un même tour). Pas en dessous de la moitié du contexte, sinon
-/// il compacterait sans arrêt.
-pub fn compact_limit(ctx: u64, max_output: Option<u64>) -> u64 {
-    let pct = (ctx as f64 * 0.8).round() as u64;
-    let room = max_output.map_or(pct, |n| ctx.saturating_sub(n));
-    pct.min(room).max(ctx / 2)
+/// Seuil de compactage automatique de Codex : 75 % du contexte (Loki,
+/// `COMPACT_TRIGGER_FRAC`). Codex le compare à `usage.total_tokens` de la
+/// dernière réponse, entre deux appels d'outils aussi ; un compactage efface
+/// tout le travail du tour, il doit rester rare. Le dépassement éventuel est
+/// couvert par le plafond de Codex (95 %) et par le relais (appel tronqué
+/// remplacé par un message).
+pub fn compact_limit(ctx: u64) -> u64 {
+    (ctx as f64 * 0.75).round() as u64
 }
+
+/// Consigne de résumé du compactage (`compact_prompt`) : celle de Codex, plus
+/// la règle du mode Code de Loki (fichiers touchés et leur état). Le
+/// compactage efface les appels d'outils du tour : sans cette liste, le modèle
+/// réécrit des fichiers déjà faits.
+pub const COMPACT_PROMPT: &str = "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary \
+for another LLM that will resume the task. Everything except the user messages and your summary will be erased, \
+including every tool call and its output.
+
+Include:
+- Current progress and key decisions made
+- Important context, constraints, or user preferences
+- FILES: every file created or modified so far, one line each: path, approximate line count, and state \
+(COMPLETE, or PARTIAL with the last section written and the sections still missing)
+- What remains to be done (clear next steps, in order)
+- Any critical data, commands, examples, or references needed to continue
+
+Files are on disk and intact. The next LLM must NOT rewrite a file marked COMPLETE; it may inspect it in \
+slices (wc -l, grep -n, sed -n 'a,bp') and continue a PARTIAL file from its last section. Be concise and \
+structured.";
 
 /// Texte du `config.toml` (sans la clé, lue dans `ENGINEX_API_KEY`).
 /// Config Codex ; `mcp` : URL du serveur MCP d'EngineX (sandboxes seulement,
 /// il exige leur clé interne).
-pub fn render(model: &str, ctx: u64, max_output: Option<u64>, base_url: &str, mcp: Option<&str>) -> String {
-    let compact = compact_limit(ctx, max_output);
+pub fn render(model: &str, ctx: u64, base_url: &str, mcp: Option<&str>) -> String {
+    let compact = compact_limit(ctx);
     let mut out = format!(
         "model = {model}\n\
          model_provider = \"enginex\"\n\
@@ -38,6 +57,7 @@ pub fn render(model: &str, ctx: u64, max_output: Option<u64>, base_url: &str, mc
          model_reasoning_summary = \"none\"\n\
          show_raw_agent_reasoning = true\n\
          web_search = \"disabled\"\n\
+         compact_prompt = {prompt}\n\
          \n\
          [model_providers.enginex]\n\
          name = \"EngineX\"\n\
@@ -45,6 +65,7 @@ pub fn render(model: &str, ctx: u64, max_output: Option<u64>, base_url: &str, mc
          env_key = \"{ENV_KEY}\"\n",
         model = toml_str(model),
         base = toml_str(base_url),
+        prompt = toml_str(COMPACT_PROMPT),
     );
     if let Some(url) = mcp {
         // `default_tools_approval_mode` doit rester dans la section du serveur :
@@ -70,7 +91,6 @@ pub async fn codex_config(State(state): State<AppState>, headers: HeaderMap) -> 
         "toml": render(
             &p.name,
             crate::engine_api::effective_ctx(&state, id, s.ctx),
-            s.max_output,
             &base_url,
             None,
         ),
@@ -82,15 +102,18 @@ pub async fn codex_config(State(state): State<AppState>, headers: HeaderMap) -> 
 mod tests {
     use super::compact_limit;
 
+
     #[test]
-    fn compact_keeps_room_for_the_answer() {
-        // Preset de l'Unraid : 65k de contexte, 32k de sortie max.
-        assert_eq!(compact_limit(65536, Some(32768)), 32768);
-        // Petite sortie : 80 % du contexte.
-        assert_eq!(compact_limit(65536, Some(4096)), 52429);
-        // Sortie illimitée : 80 %.
-        assert_eq!(compact_limit(65536, None), 52429);
-        // Sortie plus grande que le contexte : la moitié, jamais 0.
-        assert_eq!(compact_limit(16384, Some(32768)), 8192);
+    fn compact_at_three_quarters() {
+        assert_eq!(compact_limit(65536), 49152);
+        assert_eq!(compact_limit(16384), 12288);
+    }
+
+    #[test]
+    fn toml_has_compact_prompt() {
+        let t = super::render("qwen", 65536, "http://x/v1", None);
+        let v: toml::Value = toml::from_str(&t).expect("TOML valide");
+        assert_eq!(v["model_auto_compact_token_limit"].as_integer(), Some(49152));
+        assert!(v["compact_prompt"].as_str().unwrap().contains("must NOT rewrite a file marked COMPLETE"));
     }
 }

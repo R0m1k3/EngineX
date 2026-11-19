@@ -294,3 +294,68 @@ fn truncated_call_in_history_is_repaired() {
     let parsed: Value = serde_json::from_str(args).expect("arguments JSON valides");
     assert!(parsed["enginex_erreur"].as_str().unwrap().contains("sortie coupée"));
 }
+
+fn write_call(id: &str, path: &str, lines: usize) -> Value {
+    let body: Vec<String> = (0..lines).map(|i| format!("const l{i} = {i};")).collect();
+    json!({"type": "function_call", "name": "exec_command", "call_id": id,
+        "arguments": json!({"cmd": format!("cat > {path} <<'EOF'\n{}\nEOF", body.join("\n"))}).to_string()})
+}
+
+fn out(id: &str) -> Value {
+    json!({"type": "function_call_output", "call_id": id, "output": "Process exited with code 0"})
+}
+
+#[test]
+fn old_big_writes_are_shrunk_last_step_kept() {
+    let input = json!([
+        {"type": "message", "role": "user", "content": "fais une app"},
+        write_call("c1", "app.js", 300), out("c1"),
+        write_call("c2", "app.js", 300), out("c2"),
+        write_call("c3", "app.js", 300), out("c3"),
+    ]);
+    let m = msgs(base(input), &ctx());
+    let args: Vec<String> = m
+        .iter()
+        .filter_map(|x| x.pointer("/tool_calls/0/function/arguments").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(args.len(), 3);
+    for a in &args[..2] {
+        assert!(a.contains("enginex_resume") && a.contains("«300 lignes"), "{a}");
+        assert!(a.len() < 500);
+    }
+    assert!(args[2].contains("const l299 = 299;"), "dernière étape entière");
+    let tools: Vec<&str> = m
+        .iter()
+        .filter(|x| x["role"] == "tool")
+        .map(|x| x["content"].as_str().unwrap())
+        .collect();
+    assert_eq!(tools[0], "Process exited with code 0");
+    assert!(tools[2].contains("app.js vient d'être réécrit en entier pour la 3e fois"));
+    // Requête suivante : même préfixe jusqu'à l'étape qui n'est plus la dernière.
+    let next = json!([
+        {"type": "message", "role": "user", "content": "fais une app"},
+        write_call("c1", "app.js", 300), out("c1"),
+        write_call("c2", "app.js", 300), out("c2"),
+        write_call("c3", "app.js", 300), out("c3"),
+        {"type": "function_call", "name": "exec_command", "call_id": "c4", "arguments": "{\"cmd\":\"ls\"}"}, out("c4"),
+    ]);
+    let m2 = msgs(base(next), &ctx());
+    assert_eq!(m[..4], m2[..4]);
+    assert!(m2[5]["tool_calls"][0]["function"]["arguments"].as_str().unwrap().contains("enginex_resume"));
+    assert_eq!(m2[6]["content"], m[6]["content"], "note gardée telle quelle");
+}
+
+#[test]
+fn notes_only_count_the_current_turn() {
+    let input = json!([
+        {"type": "message", "role": "user", "content": "un"},
+        write_call("a1", "x.js", 2), out("a1"),
+        write_call("a2", "x.js", 2), out("a2"),
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "fini"}]},
+        {"type": "message", "role": "user", "content": "deux"},
+        write_call("b1", "x.js", 2), out("b1"),
+    ]);
+    let m = msgs(base(input), &ctx());
+    assert!(m.iter().filter(|x| x["role"] == "tool").all(|x| !x["content"].as_str().unwrap().contains("[EngineX]")));
+}

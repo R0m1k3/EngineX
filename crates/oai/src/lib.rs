@@ -5,6 +5,7 @@
 //! octets (`serde_json` sans `preserve_order`, donc clés triées), pour que le
 //! cache de prompt de `llama-server` serve d'un tour à l'autre.
 
+pub mod history;
 pub mod names;
 pub mod request;
 pub mod sampling;

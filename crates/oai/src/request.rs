@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use enginex_hub::sampling::Sampling;
 use serde_json::{Map, Value, json};
 
+use crate::history;
 use crate::names::NameMap;
 use crate::sampling;
 use crate::types::{Input, ResponsesRequest};
@@ -73,6 +74,8 @@ struct Builder<'a> {
     msgs: Vec<Msg>,
     reasoning: Option<String>,
     tool_images: Vec<Part>,
+    /// Message `user` qui ouvre le tour en cours (notes de `history`).
+    turn_start: usize,
 }
 
 enum Msg {
@@ -111,6 +114,7 @@ impl<'a> Builder<'a> {
             msgs: Vec::new(),
             reasoning: None,
             tool_images: Vec::new(),
+            turn_start: 0,
         }
     }
 
@@ -292,9 +296,56 @@ impl<'a> Builder<'a> {
                 // Un raisonnement non suivi d'une réponse est perdu.
                 self.reasoning = None;
                 self.push_user(parts);
+                self.turn_start = self.msgs.len().saturating_sub(1);
             }
         }
         Ok(())
+    }
+
+    /// Allège l'historique (`history`) : écritures passées résumées, notes du
+    /// tour en cours. La dernière étape (dernier message à appels) reste entière.
+    fn lighten(&mut self) {
+        let last = self
+            .msgs
+            .iter()
+            .rposition(|m| matches!(m, Msg::Assistant { calls, .. } if !calls.is_empty()));
+        let start = self.turn_start.min(self.msgs.len());
+        let turn_calls: Vec<(String, String)> = self.msgs[start..]
+            .iter()
+            .filter_map(|m| match m {
+                Msg::Assistant { calls, .. } => Some(calls),
+                _ => None,
+            })
+            .flatten()
+            .map(|c| {
+                let id = c.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+                let args = c.pointer("/function/arguments").and_then(Value::as_str).unwrap_or("");
+                (id, args.to_string())
+            })
+            .collect();
+        let notes = history::turn_notes(turn_calls.iter().map(|(a, b)| (a.as_str(), b.as_str())));
+        for (i, m) in self.msgs.iter_mut().enumerate() {
+            match m {
+                Msg::Assistant { calls, .. } if Some(i) != last => {
+                    for c in calls {
+                        let short = c
+                            .pointer("/function/arguments")
+                            .and_then(Value::as_str)
+                            .and_then(history::shrink_write);
+                        if let (Some(a), Some(f)) = (short, c.get_mut("function")) {
+                            f["arguments"] = json!(a);
+                        }
+                    }
+                }
+                Msg::Tool { call_id, content } if i >= start => {
+                    if let Some(n) = notes.get(call_id.as_str()).filter(|_| !call_id.is_empty()) {
+                        content.push_str("\n\n");
+                        content.push_str(n);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn messages(&mut self) -> Vec<Value> {
@@ -434,6 +485,7 @@ pub fn to_chat(req: &ResponsesRequest, ctx: &Ctx) -> Result<Translated, Translat
             }
         }
     }
+    b.lighten();
     let messages = b.messages();
     let mut body = Map::new();
     body.insert("model".into(), json!(ctx.model_name));

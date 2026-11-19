@@ -402,8 +402,8 @@ impl Translator {
             .collect();
         format!(
             "[EngineX] Réponse coupée à la limite de sortie{limit} au milieu de l'appel {} : \
-             il n'a pas été exécuté. Écris les gros fichiers en plusieurs fois : un squelette court, \
-             puis une section par commande (apply_patch ou `cat >>`), puis reprends la tâche.",
+             il n'a pas été exécuté. Découpe le programme en plusieurs fichiers de 400 lignes au plus, \
+             chacun écrit en entier en une commande, puis reprends la tâche.",
             what.join(", ")
         )
     }
