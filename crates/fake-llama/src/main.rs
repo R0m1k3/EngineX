@@ -60,7 +60,9 @@ fn arg<'a>(args: &'a [String], names: &[&str]) -> Option<&'a str> {
 
 fn append_line(path: &str, line: &str) {
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{line}");
+        // Un seul write : `writeln!` en fait deux (texte, puis saut de ligne),
+        // et deux écrivains en O_APPEND s'entremêlaient (« trailing characters »).
+        let _ = f.write_all(format!("{line}\n").as_bytes());
     }
 }
 
