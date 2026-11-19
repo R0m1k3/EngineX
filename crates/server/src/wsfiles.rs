@@ -295,9 +295,12 @@ fn rename_at(fa: &OwnedFd, na: &CString, fb: &OwnedFd, nb: &CString) -> std::io:
 /// partage utilisateur d'Unraid) passent par `linkat` (atomique, fichier
 /// seulement) ou, pour un dossier, par un contrôle d'absence juste avant.
 fn rename_noreplace(fa: &OwnedFd, na: &CString, fb: &OwnedFd, nb: &CString, is_file: bool) -> std::io::Result<()> {
+    // Appel système direct : la musl (binaire statique de l'image) n'expose
+    // pas `renameat2`.
     // SAFETY: descripteurs de dossier valides, noms C valides.
     let r = unsafe {
-        libc::renameat2(
+        libc::syscall(
+            libc::SYS_renameat2,
             fa.as_raw_fd(),
             na.as_ptr(),
             fb.as_raw_fd(),
