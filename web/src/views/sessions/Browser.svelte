@@ -151,7 +151,7 @@
   .go { flex: 1; min-width: 10em; }
   .go input { width: 100%; }
   .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; }
-  .screen { border: 1px solid var(--line, #ddd); border-radius: 6px; outline: none; line-height: 0; }
-  .screen.taken { border-color: var(--accent, #c60); box-shadow: 0 0 0 2px var(--accent, #c60); cursor: pointer; }
+  .screen { border: 1px solid var(--line); border-radius: 6px; outline: none; line-height: 0; }
+  .screen.taken { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); cursor: pointer; }
   img { width: 100%; height: auto; user-select: none; border-radius: 6px; }
 </style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProgressBar from '../lib/ui/ProgressBar.svelte';
   import { onDestroy } from 'svelte';
   import { system, message, diskUsage, type SystemInfo, type DiskUsage } from '../lib/api';
 
@@ -45,7 +46,7 @@
     {#each info.gpus as gpu}
       <article class="card">
         <h3>GPU {gpu.index} · {gpu.name}</h3>
-        <div class="bar"><span style:width="{gpu.total_mib ? (gpu.used_mib / gpu.total_mib) * 100 : 0}%"></span></div>
+        <div class="pb"><ProgressBar value={gpu.used_mib} max={gpu.total_mib} label="VRAM utilisée" /></div>
         <p>{gib(gpu.used_mib)} / {gib(gpu.total_mib)} Gio · {gpu.temp_c} °C · pilote {gpu.driver}</p>
       </article>
     {/each}
@@ -70,3 +71,7 @@
   </section>
   <p class="muted small">EngineX {info.version} · démarré il y a {Math.floor(info.uptime_s / 60)} min</p>
 {/if}
+
+<style>
+  .pb { margin-bottom: var(--s2); }
+</style>

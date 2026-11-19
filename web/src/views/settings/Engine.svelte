@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProgressBar from '../../lib/ui/ProgressBar.svelte';
   import { onDestroy } from 'svelte';
   import {
     versions, engine, checkVersion, installVersion, useVersion, rollbackVersion, deleteVersion, setAutoUpdate,
@@ -95,7 +96,7 @@
           {#if v.job.step === 'download' && v.job.total_bytes}<span class="muted"> · {size(v.job.done_bytes)} / {size(v.job.total_bytes)}</span>{/if}
         </p>
         {#if v.job.step === 'download' && v.job.total_bytes}
-          <div class="bar"><span style:width="{(v.job.done_bytes / v.job.total_bytes) * 100}%"></span></div>
+          <div class="pb"><ProgressBar value={v.job.done_bytes} max={v.job.total_bytes} label="Téléchargement" /></div>
         {/if}
         {#if v.job.error}<p class="error small">{jobError(v.job.error)}</p>{/if}
         {#if v.job.message}<p class="ok small">{v.job.message}</p>{/if}
@@ -127,3 +128,7 @@
     </tbody>
   </table>
 {/if}
+
+<style>
+  .pb { margin-bottom: var(--s2); }
+</style>

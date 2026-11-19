@@ -114,7 +114,7 @@
   }
   summary { cursor: pointer; display: flex; gap: var(--s2); align-items: baseline; flex-wrap: wrap; }
   .cmd { white-space: pre-wrap; word-break: break-all; }
-  .meta { color: var(--muted); font-size: 12px; display: flex; gap: var(--s2); }
+  .meta { color: var(--muted); font-size: var(--fs-sm); display: flex; gap: var(--s2); }
   .out {
     max-height: 360px;
     overflow: auto;
@@ -122,10 +122,10 @@
     border: 1px solid var(--line);
     border-radius: var(--radius);
     padding: var(--s2);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     white-space: pre-wrap;
     margin: var(--s2) 0 0;
   }
-  .pre { white-space: pre-wrap; font-size: 13px; margin-top: var(--s1); }
+  .pre { white-space: pre-wrap; font-size: var(--fs-sm); margin-top: var(--s1); }
   .view { max-width: 100%; max-height: 400px; border-radius: 4px; }
 </style>

@@ -323,7 +323,7 @@
   .feed li { display: flex; gap: var(--s2); align-items: flex-start; border-left: 3px solid var(--line); background: var(--panel); border-radius: var(--radius); padding: var(--s2) var(--s3); }
   .feed li.unread { background: color-mix(in srgb, var(--panel) 80%, var(--accent) 8%); }
   .feed li.lvl-success { border-left-color: var(--accent); }
-  .feed li.lvl-warning { border-left-color: #d9a54a; }
+  .feed li.lvl-warning { border-left-color: var(--warn); }
   .feed li.lvl-error { border-left-color: var(--error); }
   .item { all: unset; cursor: pointer; flex: 1; display: flex; flex-direction: column; gap: var(--s1); min-width: 0; }
   .top { display: flex; gap: var(--s3); align-items: baseline; flex-wrap: wrap; }
@@ -335,7 +335,7 @@
   .add { gap: var(--s2); justify-content: flex-start; flex-wrap: wrap; }
   .url { overflow-wrap: anywhere; }
   .hooks { width: 100%; border-collapse: collapse; }
-  .hooks th { text-align: left; font-weight: 500; color: var(--muted); font-size: 13px; }
+  .hooks th { text-align: left; font-weight: 500; color: var(--muted); font-size: var(--fs-sm); }
   .hooks th, .hooks td { padding: var(--s2); border-bottom: 1px solid var(--line); }
   .hooks tr.off td { opacity: 0.6; }
   .actions { white-space: nowrap; display: flex; gap: var(--s2); }

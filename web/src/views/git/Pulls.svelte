@@ -167,7 +167,7 @@
 <style>
   .pulls { display: grid; grid-template-columns: minmax(240px, 340px) 1fr; gap: var(--s3); min-height: 0; height: 100%; }
   .list, .detail { overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: var(--s2); }
-  .pr { all: unset; display: flex; flex-direction: column; cursor: pointer; padding: var(--s2); border: 1px solid var(--line); border-radius: var(--radius); font-size: 13px; }
+  .pr { all: unset; display: flex; flex-direction: column; cursor: pointer; padding: var(--s2); border: 1px solid var(--line); border-radius: var(--radius); font-size: var(--fs-sm); }
   .pr.sel, .pr:hover { border-color: var(--accent); }
   .new { display: flex; flex-direction: column; gap: var(--s2); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2); }
   .merge { display: flex; gap: var(--s2); align-items: center; }
@@ -175,7 +175,7 @@
   h3 { margin: var(--s2) 0 0; }
   textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2); font: inherit; }
   .detail > button { align-self: flex-start; }
-  .tiny { font-size: 12px; margin: 0; }
+  .tiny { font-size: var(--fs-sm); margin: 0; }
   .pre { white-space: pre-wrap; }
   a { color: var(--accent); }
 </style>

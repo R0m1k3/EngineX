@@ -186,7 +186,7 @@
   .big { font-size: 18px; margin: 0; }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: var(--s2); background: var(--muted); }
   .s-ready { background: var(--accent); }
-  .s-starting, .s-stopping { background: #d9a54a; }
+  .s-starting, .s-stopping { background: var(--warn); }
   .s-failed { background: var(--error); }
   .gpu { display: grid; grid-template-columns: 1fr; gap: 2px; margin-top: var(--s2); }
   .meter { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }

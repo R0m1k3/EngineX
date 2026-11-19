@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProgressBar from '../../lib/ui/ProgressBar.svelte';
   import { onDestroy } from 'svelte';
   import {
     engine, engineLogs, presets, stopEngine, versions, message, jobError, JOB_KIND, JOB_STEP,
@@ -98,7 +99,7 @@
       </div>
     </div>
     {#if info.state.state === 'starting'}
-      <div class="bar"><span style:width="{info.state.progress}%"></span></div>
+      <div class="pb"><ProgressBar value={info.state.progress} label="Chargement du modèle" /></div>
     {/if}
     {#if ctxCut && preset}
       <p class="small error">
@@ -133,7 +134,7 @@
       {#each info.gpus as g}
         <div class="small">
           <span class="muted">CUDA{g.index}</span> {g.name}
-          <div class="bar"><span style:width="{g.total_mib ? (g.used_mib / g.total_mib) * 100 : 0}%"></span></div>
+          <div class="pb"><ProgressBar value={g.used_mib} max={g.total_mib} label="VRAM utilisée" /></div>
           <span class="muted">{(g.used_mib / 1024).toFixed(1)} / {(g.total_mib / 1024).toFixed(1)} Gio</span>
         </div>
       {/each}
@@ -144,3 +145,7 @@
   {/if}
   {#if error}<p class="error">{error}</p>{/if}
 </section>
+
+<style>
+  .pb { margin-bottom: var(--s2); }
+</style>

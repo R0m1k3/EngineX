@@ -113,13 +113,13 @@
 <style>
   .files { display: grid; grid-template-rows: minmax(120px, 40%) 1fr; gap: var(--s3); height: 100%; min-height: 0; }
   .list, .preview { overflow: auto; min-height: 0; }
-  .entry { display: block; width: 100%; padding-top: 1px; padding-bottom: 1px; font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .entry { display: block; width: 100%; padding-top: 1px; padding-bottom: 1px; font-size: var(--fs-sm); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .entry:disabled { color: var(--muted); opacity: 1; }
   .entry.sel { color: var(--accent); }
   .name { overflow: hidden; text-overflow: ellipsis; }
   .preview img, .preview video { max-width: 100%; }
   iframe { width: 100%; height: 70vh; border: 1px solid var(--line); border-radius: var(--radius); background: white; }
-  pre { font-size: 12px; white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2); }
-  .tiny { font-size: 12px; margin: 0; }
+  pre { font-size: var(--fs-sm); white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2); }
+  .tiny { font-size: var(--fs-sm); margin: 0; }
   a { color: var(--accent); }
 </style>

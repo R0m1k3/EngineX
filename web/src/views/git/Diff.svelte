@@ -13,7 +13,7 @@
 {/if}
 
 <style>
-  .diff { overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2); font-size: 12px; margin: 0; }
+  .diff { overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2); font-size: var(--fs-sm); margin: 0; }
   .add { color: var(--accent); }
   .del { color: var(--error); }
   .h { color: var(--muted); }

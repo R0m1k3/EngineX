@@ -206,21 +206,21 @@
 
 <style>
   .mem { display: grid; grid-template-columns: minmax(180px, 240px) 1fr; gap: var(--s4); align-items: start; }
-  .levels { display: flex; flex-direction: column; gap: 2px; }
+  .levels { display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); padding: var(--s4); }
   .lvl { text-align: left; background: none; border: 1px solid transparent; color: var(--text); padding: var(--s1) var(--s2);
     border-radius: var(--radius); display: flex; justify-content: space-between; gap: var(--s2); }
   .lvl.sub { padding-left: var(--s4); }
   .lvl.active { border-color: var(--accent); }
-  .lvl.warn .tiny { color: var(--warn, #c77700); }
+  .lvl.warn .tiny { color: var(--warn); }
   .editor { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
   .head { justify-content: space-between; }
   .tabs button { background: none; border: none; padding: var(--s1) var(--s2); color: var(--muted); }
   .tabs button.active { color: var(--text); border-bottom: 2px solid var(--accent); }
-  textarea { width: 100%; font-family: var(--mono, monospace); font-size: 13px; resize: vertical; }
+  textarea { width: 100%; font-family: var(--mono, monospace); font-size: var(--fs-sm); resize: vertical; }
   .foot { gap: var(--s3); align-items: center; }
   .spacer { flex: 1; }
-  .warn { color: var(--warn, #c77700); }
-  .tiny { font-size: 12px; }
+  .warn { color: var(--warn); }
+  .tiny { font-size: var(--fs-sm); }
   .history table { width: 100%; }
   .history tr.active td { font-weight: 600; }
   .out { white-space: pre-wrap; max-height: 320px; overflow: auto; }

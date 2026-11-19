@@ -355,7 +355,7 @@
   .head { justify-content: flex-start; gap: var(--s4); flex-wrap: wrap; }
   .head h1 { margin: 0; }
   .actions { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
-  .actions button { padding: var(--s1) var(--s3); font-size: 13px; }
+  .actions button { padding: var(--s1) var(--s3); font-size: var(--fs-sm); }
   .sep { flex: 1; }
   .danger { color: var(--error); }
   .split { display: grid; grid-template-columns: minmax(240px, 340px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: var(--s3); flex: 1; min-height: 0; }
@@ -365,19 +365,19 @@
   .body > :global(.cm) { flex: 1; }
   .line { display: flex; align-items: center; gap: var(--s1); }
   .line input { margin: 0; }
-  .entry { display: block; flex: 1; padding-top: 1px; padding-bottom: 1px; font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .entry { display: block; flex: 1; padding-top: 1px; padding-bottom: 1px; font-size: var(--fs-sm); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .entry:disabled { color: var(--muted); opacity: 1; }
   .entry.sel, .entry.here { color: var(--accent); }
   .tag { margin-left: var(--s2); font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
   .filebar { gap: var(--s3); flex: none; }
   .view > p, .view > .banner { flex: none; }
   .tools { display: flex; gap: var(--s3); align-items: center; }
-  .tools button:not(.link) { padding: var(--s1) var(--s3); font-size: 13px; }
+  .tools button:not(.link) { padding: var(--s1) var(--s3); font-size: var(--fs-sm); }
   .name { overflow: hidden; text-overflow: ellipsis; }
   .banner { background: color-mix(in srgb, var(--error) 15%, transparent); border: 1px solid var(--error); border-radius: var(--radius); padding: var(--s2) var(--s3); margin: 0; }
   .body img, .body video { max-width: 100%; }
   iframe { width: 100%; height: 100%; min-height: 70vh; border: 1px solid var(--line); border-radius: var(--radius); background: white; }
-  .tiny { font-size: 12px; margin: 0; }
+  .tiny { font-size: var(--fs-sm); margin: 0; }
   .pre { white-space: pre-wrap; }
   a { color: var(--accent); }
   @media (max-width: 800px) { .split { grid-template-columns: 1fr; } }

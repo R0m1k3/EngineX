@@ -53,11 +53,11 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
   .v-passed .dot { background: var(--accent); }
   .v-failed .dot, .v-error .dot { background: var(--error); }
-  .v-running .dot { background: #d9b36c; }
+  .v-running .dot { background: var(--warn); }
   .step { margin: var(--s1) 0 0; display: flex; gap: var(--s2); align-items: baseline; flex-wrap: wrap; }
   .out {
     max-height: 240px; overflow: auto; background: var(--bg); border: 1px solid var(--line);
-    border-radius: var(--radius); padding: var(--s2); font-size: 12px; white-space: pre-wrap; margin: var(--s1) 0;
+    border-radius: var(--radius); padding: var(--s2); font-size: var(--fs-sm); white-space: pre-wrap; margin: var(--s1) 0;
   }
   .badge { margin-left: 0; }
 </style>

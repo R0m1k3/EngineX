@@ -265,7 +265,7 @@
   .task.late { border-left: 3px solid var(--error); }
   .title { all: unset; cursor: pointer; display: block; overflow-wrap: anywhere; }
   .title:hover { color: var(--accent); }
-  .meta { display: flex; gap: var(--s2); align-items: center; font-size: 12px; margin-top: var(--s1); flex-wrap: wrap; }
+  .meta { display: flex; gap: var(--s2); align-items: center; font-size: var(--fs-sm); margin-top: var(--s1); flex-wrap: wrap; }
   .overlay { position: fixed; inset: 0; background: rgb(0 0 0 / 0.5); display: grid; place-items: center; z-index: 10; }
   .overlay form { width: min(520px, 92vw); }
   textarea { width: 100%; }

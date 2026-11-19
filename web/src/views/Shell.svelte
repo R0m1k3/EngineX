@@ -5,6 +5,16 @@
   import Dashboard from './Dashboard.svelte';
   import { openEvents } from '../lib/sse';
   import Sessions from './Sessions.svelte';
+  import ActivityBar from './shell/ActivityBar.svelte';
+  import StatusBar from './shell/StatusBar.svelte';
+  import TabBar from './shell/TabBar.svelte';
+  import Dialog from '../lib/ui/Dialog.svelte';
+  import DialogHost from '../lib/ui/DialogHost.svelte';
+  import Toaster from '../lib/ui/Toaster.svelte';
+  import Button from '../lib/ui/Button.svelte';
+  import Input from '../lib/ui/Input.svelte';
+  import { toast } from '../lib/ui/toast.svelte';
+  import { page as pageDef } from './shell/pages';
 
   // Pages moins courantes chargées à la demande (premier affichage plus léger).
   type Loader = () => Promise<{ default: Component<any> }>;
@@ -33,23 +43,41 @@
   onDestroy(() => window.removeEventListener('hashchange', onHash));
   let page = $derived(route.split('/')[0]);
   let sub = $derived(route.split('/')[1] ?? '');
-  const pages = [
-    { id: 'dashboard', label: 'Tableau de bord' },
-    { id: 'sessions', label: 'Sessions' },
-    { id: 'tasks', label: 'Tâches' },
-    { id: 'crons', label: 'Crons' },
-    { id: 'agents', label: 'Agents' },
-    { id: 'files', label: 'Fichiers' },
-    { id: 'git', label: 'Git' },
-    { id: 'memory', label: 'Mémoire' },
-    { id: 'models', label: 'Modèles' },
-    { id: 'system', label: 'Système' },
-    { id: 'settings', label: 'Paramètres' },
-  ];
+
+  $effect(() => {
+    const p = pageDef(page);
+    document.title = p ? `${p.label} · EngineX` : 'EngineX';
+  });
+
   // Non lues du fil, en direct.
   let unread = $state(0);
   const closeFeed = openEvents('/api/feed/events', { feed: (d) => typeof d.unread === 'number' && (unread = d.unread) });
   onDestroy(closeFeed);
+
+  // Palette (Ctrl+K / Cmd+K), « Plus » du téléphone, mot de passe.
+  // Les deux sont chargés au premier usage (bundle principal plus léger).
+  let palette = $state(false);
+  let more = $state(false);
+  let PaletteView = $state<Component<any> | null>(null);
+  let MoreView = $state<Component<any> | null>(null);
+  async function openPalette() {
+    PaletteView ??= (await import('./shell/Palette.svelte')).default;
+    palette = true;
+  }
+  async function openMore() {
+    MoreView ??= (await import('./shell/MoreSheet.svelte')).default;
+    more = true;
+  }
+  const onKey = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (palette) palette = false;
+      else openPalette();
+    }
+  };
+  window.addEventListener('keydown', onKey);
+  onDestroy(() => window.removeEventListener('keydown', onKey));
+
   let showPassword = $state(false);
   let current = $state('');
   let next = $state('');
@@ -63,58 +91,93 @@
     }
   }
 
+  function openPassword() {
+    pwMessage = '';
+    showPassword = true;
+  }
+
   async function submitPassword(e: SubmitEvent) {
     e.preventDefault();
     pwMessage = '';
     try {
       await changePassword(current, next);
-      pwMessage = 'Mot de passe changé. Les autres sessions sont fermées.';
       current = '';
       next = '';
+      showPassword = false;
+      toast('Mot de passe changé. Les autres sessions sont fermées.', 'ok');
     } catch (err) {
       pwMessage = message(err);
     }
   }
 </script>
 
-<div class="layout">
-  <nav>
-    <div class="brand">EngineX</div>
-    {#each pages as p}
-      <a class:active={page === p.id} href="#{p.id}" aria-current={page === p.id ? 'page' : undefined}>{p.label}</a>
-    {/each}
-    <a class:active={page === 'feed'} href="#feed" class="bell" title="Notifications">
-      Notifications{#if unread}<span class="count">{unread > 99 ? '99+' : unread}</span>{/if}
-    </a>
-    <div class="spacer"></div>
-    <button class="link" onclick={() => (showPassword = !showPassword)}>Mot de passe</button>
-    <button class="link" onclick={doLogout}>Déconnexion</button>
-  </nav>
-  <main>
-    {#if showPassword}
-      <form class="card narrow" onsubmit={submitPassword}>
-        <h2>Changer le mot de passe</h2>
-        <label>Mot de passe actuel <input type="password" bind:value={current} autocomplete="current-password" required /></label>
-        <label>Nouveau (12 caractères minimum) <input type="password" bind:value={next} autocomplete="new-password" minlength="12" required /></label>
-        {#if pwMessage}<p class="muted">{pwMessage}</p>{/if}
-        <button type="submit">Changer</button>
-      </form>
-    {/if}
-    {#if page === 'dashboard'}
-      <Dashboard />
-    {:else if LAZY[page]}
-      {#await view(page) then View}
-        <View sub={page === 'git' ? route.split('/').slice(1).join('/') : sub} />
-      {:catch e}
-        <p class="error">Page impossible à charger : {message(e)}</p>
-      {/await}
-    {:else}
-      <Sessions {sub} />
-    {/if}
+<a class="skip" href="#main" onclick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>Aller au contenu</a>
+<div class="shell">
+  <div class="act-slot"><ActivityBar {page} onPalette={openPalette} onPassword={openPassword} onLogout={doLogout} /></div>
+  <main class="work" id="main" tabindex="-1">
+    <div class="view">
+      {#if page === 'dashboard'}
+        <Dashboard />
+      {:else if LAZY[page]}
+        {#await view(page) then View}
+          <View sub={page === 'git' ? route.split('/').slice(1).join('/') : sub} />
+        {:catch e}
+          <p class="error">Page impossible à charger : {message(e)}</p>
+        {/await}
+      {:else}
+        <Sessions {sub} />
+      {/if}
+    </div>
   </main>
+  <div class="status-slot"><StatusBar {unread} /></div>
+  <div class="tab-slot"><TabBar {page} {unread} onMore={openMore} /></div>
 </div>
 
+{#if MoreView}<MoreView bind:open={more} {page} onPalette={openPalette} onPassword={openPassword} onLogout={doLogout} />{/if}
+{#if PaletteView}<PaletteView bind:open={palette} />{/if}
+
+<Dialog bind:open={showPassword} title="Changer le mot de passe" width="420px">
+  <form id="pw-form" class="pw" onsubmit={submitPassword}>
+    <Input label="Mot de passe actuel" type="password" bind:value={current} autocomplete="current-password" required />
+    <Input label="Nouveau mot de passe" hint="12 caractères au moins" type="password" bind:value={next} autocomplete="new-password" minlength={12} required />
+    {#if pwMessage}<p class="error small" role="alert">{pwMessage}</p>{/if}
+  </form>
+  {#snippet actions()}
+    <Button onclick={() => (showPassword = false)}>Annuler</Button>
+    <Button variant="primary" type="submit" form="pw-form">Changer le mot de passe</Button>
+  {/snippet}
+</Dialog>
+
+<DialogHost />
+<Toaster />
+
 <style>
-  .bell { margin-top: var(--s2); display: flex; align-items: center; gap: var(--s2); }
-  .count { background: var(--accent); color: var(--bg); border-radius: 9px; padding: 0 6px; font-size: 12px; font-weight: 600; line-height: 18px; }
+  .shell {
+    height: 100dvh;
+    display: grid;
+    grid-template-columns: var(--act-w) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) var(--status-h);
+    grid-template-areas: 'act work' 'status status';
+    background: var(--bg);
+  }
+  .act-slot { grid-area: act; display: flex; min-height: 0; }
+  .work { grid-area: work; min-width: 0; min-height: 0; overflow: auto; outline: none; }
+  .status-slot { grid-area: status; min-width: 0; }
+  .tab-slot { display: none; }
+  .view { padding: var(--s6); display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+  .pw { display: flex; flex-direction: column; gap: var(--s4); }
+  .pw p { margin: 0; }
+  .skip { position: absolute; left: -9999px; top: 8px; z-index: 100; padding: var(--s2) var(--s3); background: var(--accent-fill); color: var(--accent-ink); border-radius: var(--r); }
+  .skip:focus { left: 8px; }
+
+  @media (max-width: 767px) {
+    .shell {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      grid-template-areas: 'status' 'work' 'tabs';
+    }
+    .act-slot { display: none; }
+    .tab-slot { display: block; grid-area: tabs; }
+    .view { padding: var(--s4) calc(var(--s4) + var(--safe-right)) var(--s4) calc(var(--s4) + var(--safe-left)); }
+  }
 </style>

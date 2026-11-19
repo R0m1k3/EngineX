@@ -83,12 +83,12 @@
 
 <style>
   .graph { display: flex; flex-direction: column; min-width: 0; }
-  .row-c { all: unset; box-sizing: border-box; width: 100%; min-width: 0; display: flex; align-items: center; gap: var(--s2); height: 26px; cursor: pointer; font-size: 13px; padding-right: var(--s2); border-radius: 4px; }
+  .row-c { all: unset; box-sizing: border-box; width: 100%; min-width: 0; display: flex; align-items: center; gap: var(--s2); height: 26px; cursor: pointer; font-size: var(--fs-sm); padding-right: var(--s2); border-radius: 4px; }
   .row-c:hover { background: var(--bg); }
   .row-c.sel { background: color-mix(in srgb, var(--accent) 15%, transparent); }
   svg { flex: none; }
   .subject { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .meta { flex: none; font-size: 12px; white-space: nowrap; }
+  .meta { flex: none; font-size: var(--fs-sm); white-space: nowrap; }
   .ref { font-size: 11px; border-radius: 3px; padding: 0 5px; margin-right: 4px; border: 1px solid var(--line); }
   .ref.branch { color: var(--accent); border-color: var(--accent); }
   .ref.remote { color: #8fa6e0; border-color: #8fa6e0; }

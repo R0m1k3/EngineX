@@ -53,7 +53,7 @@
     display: grid;
     grid-template-columns: 260px 1fr;
     gap: var(--s6);
-    height: calc(100vh - 2 * var(--s6));
+    height: calc(100dvh - var(--status-h) - 2 * var(--s6));
     min-height: 0;
   }
   .sessions.with-side { grid-template-columns: 260px 1fr 45%; }

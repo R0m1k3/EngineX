@@ -35,7 +35,7 @@
     border-radius: var(--radius);
     padding: var(--s3);
     overflow: auto;
-    font-size: 13px;
+    font-size: var(--fs-sm);
   }
   .md :global(code) { background: var(--bg); padding: 0 3px; border-radius: 3px; }
   .md :global(pre code) { background: none; padding: 0; }

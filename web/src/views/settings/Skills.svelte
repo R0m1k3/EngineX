@@ -104,7 +104,7 @@
 {/if}
 
 <style>
-  textarea { width: 100%; font-family: var(--mono, monospace); font-size: 13px; }
+  textarea { width: 100%; font-family: var(--mono, monospace); font-size: var(--fs-sm); }
   td.name { white-space: nowrap; vertical-align: top; }
   td.act { white-space: nowrap; vertical-align: top; }
   .row-act { display: flex; gap: var(--s3); align-items: center; justify-content: flex-end; }

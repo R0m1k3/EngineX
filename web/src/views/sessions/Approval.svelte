@@ -76,9 +76,9 @@
 </div>
 
 <style>
-  .approval { border-color: #d9b36c; display: flex; flex-direction: column; gap: var(--s2); }
+  .approval { border-color: var(--warn); display: flex; flex-direction: column; gap: var(--s2); }
   .approval h3 { margin: 0; }
-  .cmd { margin: 0; white-space: pre-wrap; word-break: break-all; background: var(--bg); padding: var(--s2); border-radius: var(--radius); font-size: 13px; }
+  .cmd { margin: 0; white-space: pre-wrap; word-break: break-all; background: var(--bg); padding: var(--s2); border-radius: var(--radius); font-size: var(--fs-sm); }
   fieldset { border: 1px solid var(--line); border-radius: var(--radius); margin: 0 0 var(--s2); padding: var(--s2) var(--s3); display: flex; flex-direction: column; gap: var(--s1); }
-  legend { color: var(--muted); font-size: 13px; }
+  legend { color: var(--muted); font-size: var(--fs-sm); }
 </style>

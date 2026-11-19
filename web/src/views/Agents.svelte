@@ -375,13 +375,13 @@
   .head { align-items: center; }
   .head h1 { margin: 0; }
   .agents { width: 100%; border-collapse: collapse; margin-top: var(--s4); }
-  .agents th { text-align: left; font-weight: 500; color: var(--muted); font-size: 13px; }
+  .agents th { text-align: left; font-weight: 500; color: var(--muted); font-size: var(--fs-sm); }
   .agents th, .agents td { padding: var(--s2); border-bottom: 1px solid var(--line); vertical-align: top; }
   .agents tr.off td { opacity: 0.6; }
   .actions { white-space: nowrap; display: flex; gap: var(--s2); }
   .strong { font-weight: 600; }
   .history { margin-top: var(--s6); }
-  .history pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; background: var(--bg); padding: var(--s2); border-radius: var(--radius); font-size: 13px; }
+  .history pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; background: var(--bg); padding: var(--s2); border-radius: var(--radius); font-size: var(--fs-sm); }
   .ctx { white-space: pre-wrap; margin: var(--s1) 0; }
   summary { cursor: pointer; padding: var(--s1) 0; }
   .overlay { position: fixed; inset: 0; background: rgb(0 0 0 / 0.5); display: grid; place-items: center; z-index: 10; }

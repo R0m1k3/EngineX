@@ -546,11 +546,11 @@
   .mode { flex-direction: row; align-items: center; gap: var(--s2); }
   .banner { border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2) var(--s3); margin: 0; white-space: pre-wrap; }
   .banner.bad { border-color: var(--error); color: var(--error); }
-  .tiny { font-size: 12px; margin: 0; }
+  .tiny { font-size: var(--fs-sm); margin: 0; }
   .empty { margin-top: var(--s6); text-align: center; }
   .working { margin: 0; }
   .msg-actions { align-self: flex-end; margin-top: calc(-1 * var(--s2)); }
-  .fix { border-left: 2px solid #d9b36c; padding-left: var(--s3); }
+  .fix { border-left: 2px solid var(--warn); padding-left: var(--s3); }
   .fix summary { cursor: pointer; }
   .fix .pre { white-space: pre-wrap; margin-top: var(--s1); max-height: 320px; overflow: auto; }
   .banner.row { justify-content: space-between; gap: var(--s3); }

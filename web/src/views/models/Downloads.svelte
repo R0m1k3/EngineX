@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProgressBar from '../../lib/ui/ProgressBar.svelte';
   import { onDestroy } from 'svelte';
   import {
     downloads, pauseDownload, resumeDownload, deleteDownload, message, size, jobError, type Download,
@@ -56,7 +57,7 @@
         <button class="link" onclick={() => act(deleteDownload, d.id)}>{d.state === 'done' || d.state === 'cancelled' ? 'Retirer' : 'Annuler'}</button>
       </div>
     </div>
-    <div class="bar"><span style:width="{d.total_bytes ? (d.received_bytes / d.total_bytes) * 100 : 0}%"></span></div>
+    <div class="pb"><ProgressBar value={d.received_bytes} max={d.total_bytes} label="Téléchargement" /></div>
     <p class="small">
       <span class="state state-{d.state}">{label[d.state]}</span>
       <span class="muted"> · {size(d.received_bytes)} / {size(d.total_bytes)}</span>
@@ -66,3 +67,7 @@
     {#if d.state === 'done'}<p class="small"><a href="#models/presets">Preset créé : voir les presets</a></p>{/if}
   </article>
 {/each}
+
+<style>
+  .pb { margin-bottom: var(--s2); }
+</style>

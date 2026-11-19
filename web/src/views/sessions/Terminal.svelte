@@ -3,6 +3,7 @@
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import '@xterm/xterm/css/xterm.css';
+  import { onThemeChange, token, isDark } from '../../lib/ui/theme.svelte';
 
   let { sessionId }: { sessionId: string } = $props();
 
@@ -13,6 +14,37 @@
   let ws: WebSocket | null = null;
   let observer: ResizeObserver | null = null;
   const enc = new TextEncoder();
+  let unwatch: (() => void) | null = null;
+  const FONT = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
+
+  // Couleurs du terminal depuis les jetons (app.css), refaites à chaque bascule de thème.
+  function palette() {
+    const v = (n: string) => token(n);
+    const dark = isDark();
+    return {
+      background: v('bg'),
+      foreground: v('text'),
+      cursor: v('accent'),
+      cursorAccent: v('bg'),
+      selectionBackground: v('accent-soft'),
+      black: dark ? v('raised') : v('text'),
+      red: v('danger'),
+      green: v('accent'),
+      yellow: v('warn'),
+      blue: v('term-blue'),
+      magenta: v('term-magenta'),
+      cyan: v('term-cyan'),
+      white: dark ? v('text') : v('muted'),
+      brightBlack: v('faint'),
+      brightRed: v('danger'),
+      brightGreen: v('add-fg'),
+      brightYellow: v('warn'),
+      brightBlue: v('term-blue'),
+      brightMagenta: v('term-magenta'),
+      brightCyan: v('term-cyan'),
+      brightWhite: dark ? '#ffffff' : v('text'),
+    };
+  }
 
   const note = (s: string) => term?.write(`\r\n\x1b[2m${s}\x1b[0m\r\n`);
 
@@ -54,12 +86,19 @@
 
   onMount(() => {
     term = new Terminal({
-      fontSize: 13,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+      fontSize: 14,
+      fontFamily: FONT,
       cursorBlink: true,
       scrollback: 5000,
-      theme: { background: '#111316', foreground: '#e6e8eb' },
+      theme: palette(),
     });
+    unwatch = onThemeChange(() => term && (term.options.theme = palette()));
+    // Police embarquée chargée après coup : xterm remesure les cellules.
+    document.fonts?.load('14px "JetBrains Mono"').then(() => {
+      if (!term) return;
+      term.options.fontFamily = FONT;
+      fit?.fit();
+    }).catch(() => {});
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host!);
@@ -77,10 +116,12 @@
 
   onDestroy(() => {
     observer?.disconnect();
+    unwatch?.();
     const s = ws;
     ws = null;
     s?.close();
     term?.dispose();
+    term = null;
   });
 </script>
 
@@ -97,6 +138,6 @@
 
 <style>
   .terminal { display: flex; flex-direction: column; gap: var(--s2); height: 100%; min-height: 0; }
-  .xterm-host { flex: 1; min-height: 240px; background: #111316; border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s1); }
-  .tiny { font-size: 12px; margin: 0; }
+  .xterm-host { flex: 1; min-height: 240px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s1); }
+  .tiny { font-size: var(--fs-sm); margin: 0; }
 </style>

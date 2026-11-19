@@ -80,5 +80,5 @@
   .top { gap: var(--s2); flex-wrap: wrap; align-items: center; }
   .grow { flex: 1; }
   .on { font-weight: 600; text-decoration: underline; }
-  iframe { flex: 1; min-height: 240px; width: 100%; border: 1px solid var(--line, #ddd); border-radius: 6px; background: #fff; }
+  iframe { flex: 1; min-height: 240px; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 </style>

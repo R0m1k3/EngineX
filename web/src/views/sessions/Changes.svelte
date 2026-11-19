@@ -91,7 +91,7 @@
   .path { padding: 0; }
   .diff {
     max-height: 420px; overflow: auto; background: var(--bg); border: 1px solid var(--line);
-    border-radius: var(--radius); padding: var(--s2); font-size: 12px; margin: var(--s1) 0;
+    border-radius: var(--radius); padding: var(--s2); font-size: var(--fs-sm); margin: var(--s1) 0;
   }
   .add { color: var(--accent); }
   .del { color: var(--error); }

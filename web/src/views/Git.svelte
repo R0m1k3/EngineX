@@ -210,7 +210,7 @@
   .page { display: flex; flex-direction: column; gap: var(--s3); height: calc(100vh - 2 * var(--s6)); min-height: 0; min-width: 0; overflow: hidden; }
   .head { justify-content: flex-start; gap: var(--s3); flex-wrap: wrap; }
   .head h1 { margin: 0; }
-  .head button { padding: var(--s1) var(--s3); font-size: 13px; }
+  .head button { padding: var(--s1) var(--s3); font-size: var(--fs-sm); }
   .grow { flex: 1; }
   .tabs { display: flex; gap: var(--s3); }
   .tabs a { color: var(--muted); text-decoration: none; }
@@ -224,7 +224,7 @@
   .branch.cur code { color: var(--accent); }
   .acts { display: flex; gap: var(--s3); flex-wrap: wrap; }
   .acts button { padding: 0; }
-  .msg { white-space: pre-wrap; font-size: 13px; margin: 0; }
+  .msg { white-space: pre-wrap; font-size: var(--fs-sm); margin: 0; }
   .file { display: flex; gap: var(--s2); }
   .add { color: var(--accent); }
   .del { color: var(--error); }
