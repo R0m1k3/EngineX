@@ -1,13 +1,13 @@
 <script lang="ts">
   import { changePassword, logout, message } from '../lib/api';
   import { onDestroy } from 'svelte';
+  import Memory from './Memory.svelte';
   import Models from './Models.svelte';
   import Sessions from './Sessions.svelte';
   import Settings from './Settings.svelte';
   import System from './System.svelte';
 
   let { loggedOut }: { loggedOut: () => void } = $props();
-  const later = ['Mémoire'];
 
   // Routage par l'ancre : #sessions/<id>, #models/presets, #settings/engine...
   const read = () => location.hash.replace(/^#/, '') || 'sessions';
@@ -19,6 +19,7 @@
   let sub = $derived(route.split('/')[1] ?? '');
   const pages = [
     { id: 'sessions', label: 'Sessions' },
+    { id: 'memory', label: 'Mémoire' },
     { id: 'models', label: 'Modèles' },
     { id: 'system', label: 'Système' },
     { id: 'settings', label: 'Paramètres' },
@@ -56,9 +57,6 @@
     {#each pages as p}
       <a class:active={page === p.id} href="#{p.id}" aria-current={page === p.id ? 'page' : undefined}>{p.label}</a>
     {/each}
-    {#each later as item}
-      <span class="disabled" title="Étape suivante">{item}</span>
-    {/each}
     <div class="spacer"></div>
     <button class="link" onclick={() => (showPassword = !showPassword)}>Mot de passe</button>
     <button class="link" onclick={doLogout}>Déconnexion</button>
@@ -77,6 +75,8 @@
       <System />
     {:else if page === 'settings'}
       <Settings {sub} />
+    {:else if page === 'memory'}
+      <Memory />
     {:else if page === 'models'}
       <Models {sub} />
     {:else}

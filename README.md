@@ -3,10 +3,11 @@
 Application locale qui pilote un agent de code. Elle fait tourner des modèles GGUF avec llama.cpp sur GPU NVIDIA, et
 Codex CLI sert d'agent dans une sandbox par session. Un seul utilisateur, tout reste sur la machine.
 
-**État : étape 4a (sessions).** EngineX fait tourner les modèles GGUF : recherche et téléchargement sur Hugging Face,
+**État : étape 5 (mémoire).** EngineX fait tourner les modèles GGUF : recherche et téléchargement sur Hugging Face,
 presets réglés d'après la page du modèle, mise à jour de llama.cpp. Il sert une API compatible OpenAI pour Codex, et la
-page Sessions permet de travailler avec Codex dans une sandbox Docker. La mémoire, les tâches, les fichiers et la
-vérification automatique arrivent aux étapes suivantes.
+page Sessions permet de travailler avec Codex dans une sandbox Docker, avec instantanés, vérification automatique,
+terminal et fichiers. Codex garde une mémoire en trois niveaux et retrouve les discussions passées. Les tâches, les
+crons et les agents arrivent aux étapes suivantes.
 
 ## Installation (Portainer ou compose de l'Unraid)
 
@@ -189,6 +190,44 @@ interne que les sandboxes ne voient pas. Les sandboxes ont accès à Internet et
 
 Docker attend des chemins de l'hôte. EngineX lit donc le montage de son propre conteneur pour savoir où se trouve
 `/data` sur l'hôte. Si la détection échoue, donnez ce chemin avec `ENGINEX_HOST_DATA`.
+
+## Mémoire et skills
+
+La page **Mémoire** montre trois niveaux : global, projet, topic. Chacun a deux fichiers :
+- `instructions.md` (4 Kio au plus) : vos consignes. Codex les lit sans pouvoir les modifier ;
+- `memory.md` (16 Kio au plus) : les notes de travail, une ligne datée par fait. Codex les tient pendant les sessions
+  et vous pouvez les corriger.
+
+Les fichiers sont dans `/data/workspace/memory/`, hors du dossier du topic : ils ne passent ni dans vos commits ni
+dans les retours arrière, et aucune sandbox ne les voit. Au début d'une session, Codex reçoit les six fichiers de son
+topic dans ses instructions. Si la mémoire change pendant la session, la nouvelle version est jointe au message
+suivant. Chaque écriture garde son auteur (vous ou la session) et les 20 dernières versions de chaque fichier
+restent dans l'**Historique**, d'où elles se restaurent. La suppression d'un topic ou d'un projet efface sa mémoire.
+
+Codex écrit par les outils du serveur MCP intégré d'EngineX (`/mcp`, joint par la clé interne de la sandbox), qu'il
+voit sous le nom `mcp__enginex__*` :
+- `mem_read`, `mem_add` (une ligne datée, doublons refusés), `mem_replace` (un extrait unique), `mem_write`
+  (réécriture complète, refusée si le fichier a changé depuis sa lecture) ;
+- `recall` : recherche dans les messages de toutes les sessions (vos messages et les réponses de Codex, sans les
+  tours automatiques ni les tours retirés) ;
+- `session_read` : lecture d'une session trouvée par `recall`.
+
+Au-delà de 12 Kio, Codex est invité à compacter `memory.md` ; au-delà de 16 Kio, l'ajout est refusé. Quand une
+sandbox arrive au bout de son délai d'inactivité après au moins un de vos messages, EngineX lance d'abord un tour
+« Mise à jour de la mémoire en fin de session » (10 minutes au plus, replié dans le fil, sans commande ni
+modification de fichier), puis arrête la sandbox. Votre message suivant interrompt ce tour. Il se désactive dans
+Paramètres → Sessions.
+
+La recherche de la liste des sessions utilise le même index : elle trouve les débuts de mots (« vérif » trouve
+« vérification ») et ignore les accents, mais ne trouve plus un morceau au milieu d'un mot.
+
+Paramètres → **Skills** liste les skills de Codex (`/data/workspace/skills/<nom>/SKILL.md`). `memory` et
+`memory-compaction` sont livrées ; elles ne sont jamais écrasées une fois modifiées. Une skill se crée, se modifie et
+se désactive depuis cette page ; elle est copiée dans chaque sandbox à son démarrage.
+
+Une note écrite dans la mémoire passe dans toutes les sessions suivantes du niveau. Codex a pour consigne de ne pas
+y recopier de consigne lue dans un fichier ou une page web, mais relisez l'historique si une session a lu du contenu
+douteux.
 
 ## Accès depuis l'extérieur
 

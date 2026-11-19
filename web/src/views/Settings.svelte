@@ -3,11 +3,13 @@
   import Api from './settings/Api.svelte';
   import Vault from './settings/Vault.svelte';
   import Sessions from './settings/Sessions.svelte';
+  import Skills from './settings/Skills.svelte';
 
   let { sub }: { sub: string } = $props();
   const tabs = [
     { id: 'engine', label: 'Moteur' },
     { id: 'sessions', label: 'Sessions' },
+    { id: 'skills', label: 'Skills' },
     { id: 'vault', label: 'Clés' },
     { id: 'api', label: 'API' },
   ];
@@ -24,4 +26,4 @@
   {/each}
 </div>
 
-{#if tab === 'api'}<Api />{:else if tab === 'vault'}<Vault />{:else if tab === 'sessions'}<Sessions />{:else}<Engine />{/if}
+{#if tab === 'api'}<Api />{:else if tab === 'vault'}<Vault />{:else if tab === 'sessions'}<Sessions />{:else if tab === 'skills'}<Skills />{:else}<Engine />{/if}

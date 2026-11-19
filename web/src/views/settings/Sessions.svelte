@@ -8,6 +8,7 @@
   let max = $state(3);
   let verifyOn = $state(true);
   let fixes = $state(3);
+  let memoryAuto = $state(true);
   let gitName = $state('');
   let gitEmail = $state('');
   let error = $state('');
@@ -20,6 +21,7 @@
       max = s.max;
       verifyOn = s.verify_enabled ?? true;
       fixes = s.verify_max_fixes ?? 3;
+      memoryAuto = s.memory_auto ?? true;
       gitName = s.git_name ?? '';
       gitEmail = s.git_email ?? '';
       status = await sandboxStatus();
@@ -39,6 +41,7 @@
         max,
         verify_enabled: verifyOn,
         verify_max_fixes: fixes,
+        memory_auto: memoryAuto,
         git_name: gitName.trim() || undefined,
         git_email: gitEmail.trim() || undefined,
       });
@@ -73,6 +76,8 @@
     <label>Corrections automatiques au plus (0 à 10)
       <input class="num" type="number" min="0" max="10" bind:value={fixes} required disabled={!verifyOn} />
     </label>
+    <label class="check"><input type="checkbox" bind:checked={memoryAuto} /> Mettre à jour la mémoire en fin de session
+      <span class="small muted">(un tour de Codex avant l’arrêt pour inactivité, s’il y a eu un message depuis le précédent)</span></label>
     <label>Nom git des commits d’EngineX
       <input bind:value={gitName} placeholder="EngineX" maxlength="100" />
     </label>

@@ -1,0 +1,5 @@
+[
+ {"tool_calls": [{"name": "mcp__enginex__mem_add", "arguments": "{\"level\": \"topic\", \"text\": \"port de prod 8095\"}", "id": "call_mem"}]},
+ {"content": "C'est noté."},
+ {"content": "Le port de prod est 8095."}
+]

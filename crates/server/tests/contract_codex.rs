@@ -753,6 +753,49 @@ async fn bridge_resume() {
     b.check_fixture("resume", &sid);
 }
 
+/// Étape 5 : le modèle appelle l'outil MCP `mem_add` d'EngineX (mode prudent,
+/// sans demande d'approbation) ; la session suivante du topic reçoit la ligne
+/// dans son message developer et voit la skill `memory`.
+#[tokio::test]
+#[ignore = "lancé par scripts/contract-codex.sh (ENGINEX_CODEX_BIN)"]
+async fn bridge_memory() {
+    let b = bridge_env("memory", "", false).await;
+    let sid = new_session(&b.e, "prudent").await;
+    let mut ev = sse(&b.e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&b.e, &sid, "Retiens que le port de prod est 8095").await;
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}\n{:?}", ev.names());
+    assert!(!ev.names().iter().any(|n| n == "request"), "{:?}", ev.names());
+    let mem = std::fs::read_to_string(b.e.dir.path().join("data/workspace/memory/general/inbox/memory.md"))
+        .expect("memory.md du topic écrit par mem_add");
+    assert!(mem.trim_end().ends_with(" : port de prod 8095"), "{mem}");
+    let items = b.items(&sid).await;
+    let call = items
+        .iter()
+        .find(|i| i["kind"] == "mcpToolCall")
+        .unwrap_or_else(|| panic!("appel MCP absent : {items:?}"));
+    assert_eq!(call["data"]["server"], "enginex");
+    assert_eq!(call["data"]["tool"], "mem_add");
+    b.check_fixture("memory", &sid);
+
+    let other = new_session(&b.e, "auto").await;
+    let mut ev2 = sse(&b.e, &format!("/api/sessions/{other}/events")).await;
+    turn(&b.e, &other, "Quel est le port de prod ?").await;
+    let t = ev2.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "completed", "{t}");
+    let chat = std::fs::read_to_string(&b.chat_log).unwrap();
+    let last: Value = serde_json::from_str(chat.lines().last().unwrap()).unwrap();
+    let system: String = last["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "system" || m["role"] == "developer")
+        .map(|m| m["content"].to_string())
+        .collect();
+    assert!(system.contains("port de prod 8095"), "bloc absent : {system}");
+    assert!(system.contains("- memory:"), "skill memory non annoncée : {system}");
+}
+
 /// Un secret du coffre atteint les commandes de Codex (variable d'environnement
 /// de la sandbox) et reste masqué dans l'historique et pour le modèle.
 #[tokio::test]

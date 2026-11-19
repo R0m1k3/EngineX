@@ -13,6 +13,11 @@
   const kindLabel = (k: any) =>
     k?.type === 'add' ? 'ajouté' : k?.type === 'delete' ? 'supprimé' : k?.move_path ? `déplacé vers ${k.move_path}` : 'modifié';
   const running = (s: unknown) => s === 'inProgress';
+  // Texte de la réponse d'un outil MCP (`content[].text`).
+  const toolText = (it: ItemData) =>
+    Array.isArray(it.result?.content)
+      ? it.result.content.map((c: { text?: string }) => c.text ?? '').join('\n').trim()
+      : '';
 </script>
 
 {#if item.type === 'userMessage'}
@@ -63,8 +68,11 @@
   </details>
 {:else if item.type === 'mcpToolCall'}
   <details class="tool">
-    <summary>Outil <code>{item.server}.{item.tool}</code> {#if item.error}<span class="error">échec</span>{/if}</summary>
-    <pre class="out">{JSON.stringify({ arguments: item.arguments, result: item.result, error: item.error }, null, 2)}</pre>
+    <summary>{item.server === 'enginex' ? 'EngineX' : 'Outil'} <code>{item.server === 'enginex' ? item.tool : `${item.server}.${item.tool}`}</code>
+      {#if item.error || item.result?.isError}<span class="error">échec</span>{/if}</summary>
+    <pre class="out">{JSON.stringify(item.arguments, null, 2)}</pre>
+    {#if toolText(item)}<pre class="out">{toolText(item)}</pre>
+    {:else if item.result || item.error}<pre class="out">{JSON.stringify({ result: item.result, error: item.error }, null, 2)}</pre>{/if}
   </details>
 {:else if item.type === 'imageView' && item.path}
   <div class="tool">

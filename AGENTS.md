@@ -41,4 +41,10 @@ UI Svelte 5 (`web/`, embarquée dans le binaire), image Docker basée sur `ghcr.
   `-c` communs) ; aucune valeur venue de l'utilisateur dans le script, tout passe par l'environnement.
 - Retours arrière, annulations et instantanés : prendre le verrou du dossier (`snapshots::lock`) une fois par fonction
   publique ; les fonctions `*_locked` le demandent en argument.
+- Mémoire (`<data>/workspace/memory/`) : toute écriture passe par `memory::update` (verrou, masquage, taille,
+  versions, `memory_seen`), jamais d'écriture directe.
+- Serveur MCP (`mcp.rs`) : une méthode ou un outil nouveau arrive avec son test dans `tests/mcp.rs` ; les arguments
+  sont contrôlés par le schéma de l'outil (`validate`).
+- Écritures dans `CODEX_HOME` d'une session (monté en écriture dans la sandbox) : seulement par
+  `sandboxes::write_private` ou `skills::install_into`, qui ne suivent pas les liens.
 - Textes de l'UI et de la doc en français.

@@ -322,7 +322,13 @@
     }
   }
 
-  const isVerify = (tid: string | null) => !!tid && turns[tid]?.origin === 'verify';
+  // Tour lancé par EngineX (vérification, mémoire de fin de session) : message replié.
+  const autoOrigin = (it: { turn_id: string | null; data: ItemData }) =>
+    (it.data as { origin?: string }).origin ?? (it.turn_id ? turns[it.turn_id]?.origin : undefined);
+  const AUTO_LABEL: Record<string, string> = {
+    verify: 'Vérification EngineX : rapport d’échec envoyé à Codex',
+    memory: 'Mise à jour de la mémoire en fin de session',
+  };
 
   async function rename() {
     const t = prompt('Titre de la session', session?.title ?? '');
@@ -380,15 +386,15 @@
       <p class="muted empty">Écrivez une demande ci-dessous. La sandbox démarre au premier message ; elle s’arrête seule après un moment sans activité.</p>
     {/if}
     {#each rows as { it, end } (it.item_id)}
-      {#if it.kind === 'userMessage' && isVerify(it.turn_id)}
+      {#if it.kind === 'userMessage' && AUTO_LABEL[autoOrigin(it) ?? '']}
         <details class="fix">
-          <summary class="small">Vérification EngineX : rapport d’échec envoyé à Codex</summary>
+          <summary class="small">{AUTO_LABEL[autoOrigin(it) ?? '']}</summary>
           <div class="pre small">{it.data.text}</div>
         </details>
       {:else}
         <Item item={it.data} sessionId={id} />
       {/if}
-      {#if it.kind === 'userMessage' && it.turn_id && !isVerify(it.turn_id) && !live}
+      {#if it.kind === 'userMessage' && it.turn_id && (autoOrigin(it) ?? 'user') === 'user' && !live}
         {@const t = turns[it.turn_id]}
         <div class="msg-actions small">
           <button class="link" disabled={!t?.has_snapshot} title={t?.has_snapshot ? '' : 'Instantané absent : retour arrière indisponible pour ce message'}

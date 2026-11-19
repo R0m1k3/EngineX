@@ -629,6 +629,11 @@ impl Hub {
         } else {
             types::approval_policy(&approval)
         };
+        // Noté avant l'envoi : la fin du tour (lue par la boucle de
+        // notifications) peut arriver avant la réponse à `turn/start`.
+        if let Some((_, sha)) = &refresh {
+            let _ = sessions::set_session_field(&state, &self.id, "memory_seen", Some(sha)).await;
+        }
         match client
             .request("turn/start", types::turn_start(&thread_id, input, policy))
             .await
@@ -637,15 +642,18 @@ impl Hub {
                 if let Some(tid) = types::turn_id(&r) {
                     self.adopt_turn(&state, tid).await;
                 }
-                if let Some((_, sha)) = &refresh {
-                    let _ = sessions::set_session_field(&state, &self.id, "memory_seen", Some(sha)).await;
-                }
                 if note.is_some() {
                     let _ = sessions::set_session_field(&state, &self.id, "pending_note", None).await;
                 }
                 let _ = sessions::set_session_field(&state, &self.id, "undo_snap", None).await;
             }
-            Err(e) => self.fail_turn(&state, &format!("turn/start : {e}")).await,
+            Err(e) => {
+                if refresh.is_some() {
+                    let prev = row.as_ref().and_then(|r| r.memory_seen.as_deref());
+                    let _ = sessions::set_session_field(&state, &self.id, "memory_seen", prev).await;
+                }
+                self.fail_turn(&state, &format!("turn/start : {e}")).await
+            }
         }
     }
 
@@ -709,18 +717,13 @@ impl Hub {
             &self.id,
             &tid,
             t.started_at,
+            t.origin,
             "failed",
             Some(&error),
             t.usage.as_ref(),
         )
         .await;
         let _ = sessions::set_item_turn(state, &self.id, t.user["id"].as_str().unwrap_or(""), &tid).await;
-        let _ = sqlx::query("UPDATE chat_turns SET origin = ? WHERE session_id = ? AND id = ?")
-            .bind(t.origin)
-            .bind(&self.id)
-            .bind(&tid)
-            .execute(state.db())
-            .await;
         self.emit(
             "turn_stored",
             json!({"turn": {"id": tid, "status": "failed", "error": error, "usage": t.usage, "origin": t.origin}}),
@@ -1278,6 +1281,7 @@ impl Hub {
             &self.id,
             &tid,
             started,
+            origin,
             &status,
             error.as_deref(),
             usage.as_ref(),

@@ -362,7 +362,12 @@ async fn idle_loop(state: AppState) {
             if !hub.idle_for().is_some_and(|d| d >= idle) {
                 continue;
             }
-            if crate::memory::should_close_with_turn(&state, &hub.id).await && hub.start_memory_turn(&state) {
+            // Tour de mémoire seulement si le modèle est chargé (sinon il échouerait).
+            let engine_ready = crate::v1::not_ready(&state.supervisor().state()).is_none();
+            if engine_ready
+                && crate::memory::should_close_with_turn(&state, &hub.id).await
+                && hub.start_memory_turn(&state)
+            {
                 tracing::info!("sandbox {} inactive : mise à jour de la mémoire avant l'arrêt", hub.id);
             } else if hub.stop_if_idle(&state, idle, "inactivité").await {
                 tracing::info!("sandbox {} inactive : arrêtée", hub.id);

@@ -151,22 +151,27 @@ pub async fn insert_turn_status(state: &AppState, sid: &str, tid: &str, status: 
     .map(|_| ())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn finish_turn(
     state: &AppState,
     sid: &str,
     tid: &str,
     started: i64,
+    origin: &str,
     status: &str,
     error: Option<&str>,
     usage: Option<&Value>,
 ) -> Result<(), sqlx::Error> {
+    // `origin` aussi à l'insertion : la fin du tour peut arriver avant
+    // `insert_turn` (réponse à `turn/start` pas encore lue).
     sqlx::query(
-        "INSERT INTO chat_turns (id, session_id, status, error, usage, started_at, completed_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, id) DO UPDATE SET status = excluded.status, \
+        "INSERT INTO chat_turns (id, session_id, origin, status, error, usage, started_at, completed_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, id) DO UPDATE SET status = excluded.status, \
          error = excluded.error, usage = excluded.usage, completed_at = excluded.completed_at",
     )
     .bind(tid)
     .bind(sid)
+    .bind(origin)
     .bind(status)
     .bind(error)
     .bind(usage.map(Value::to_string))

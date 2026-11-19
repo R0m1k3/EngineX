@@ -84,10 +84,10 @@
       act(() => deleteSession(s.id));
   }
   function removeTopic(name: string, id: number) {
-    if (confirm(`Supprimer le topic « ${name} » ? Il doit être vide (ni session ni fichier).`)) act(() => deleteTopic(id));
+    if (confirm(`Supprimer le topic « ${name} » ? Il doit être vide (ni session ni fichier). Sa mémoire et ses instructions seront supprimées avec lui.`)) act(() => deleteTopic(id));
   }
   function removeProject(p: Project) {
-    if (confirm(`Supprimer le projet « ${p.name} » ? Ses topics doivent être vides.`)) act(() => deleteProject(p.id));
+    if (confirm(`Supprimer le projet « ${p.name} » ? Ses topics doivent être vides. La mémoire et les instructions du projet et de ses topics seront supprimées.`)) act(() => deleteProject(p.id));
   }
 </script>
 

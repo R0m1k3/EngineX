@@ -785,7 +785,8 @@ async fn user_message_preempts_memory_turn() {
     assert_eq!(turns_of(&e, &sid).await[1].1, "interrupted");
     // Nouvelle inactivité : un tour de mémoire de nouveau, puis l'arrêt.
     ev.until("sandbox", |v| v["state"] == "stopped").await;
-    assert_eq!(turns_of(&e, &sid).await.len(), 4);
+    let all = turns_of(&e, &sid).await;
+    assert_eq!(all.len(), 4, "{all:?} {:?}", ev.names());
     assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
 }
 
