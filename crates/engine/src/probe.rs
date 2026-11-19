@@ -183,9 +183,21 @@ pub async fn help(bin: &Path) -> Result<String, String> {
 
 /// L'aide propose-t-elle le placement automatique (`--fit` et `--fit-target`) ?
 pub fn has_fit(help: &str) -> bool {
-    help.split(|c: char| c.is_whitespace() || c == ',')
-        .any(|w| w == "--fit")
-        && help.contains("--fit-target")
+    has_flag(help, "--fit") && help.contains("--fit-target")
+}
+
+fn has_flag(help: &str, flag: &str) -> bool {
+    help.split(|c: char| c.is_whitespace() || c == ',').any(|w| w == flag)
+}
+
+/// Options d'accélération connues du binaire (un moteur ancien, après un
+/// retour arrière, peut ne pas les avoir : elles sont alors omises).
+pub fn caps(help: &str) -> crate::args::Caps {
+    crate::args::Caps {
+        fit: has_fit(help),
+        spec: has_flag(help, "--spec-type") && help.contains("draft-mtp") && has_flag(help, "--spec-draft-n-max"),
+        moe: has_flag(help, "--cpu-moe") && has_flag(help, "--n-cpu-moe"),
+    }
 }
 
 /// Numéro de build tiré de la version : `1.0.0-dev (build 12464, commit
@@ -284,6 +296,19 @@ mod tests {
             Some("b12464")
         );
         assert_eq!(build_of("inconnue"), None);
+    }
+
+    #[test]
+    fn acceleration_caps_from_help() {
+        // Lignes relevées dans `llama-server --help` de b12464.
+        let help = "-cmoe, --cpu-moe                        keep all Mixture of Experts (MoE) weights in the CPU\n\
+                    -ncmoe, --n-cpu-moe N                   keep the Mixture of Experts (MoE) weights\n\
+                    --spec-draft-n-max N                    number of tokens to draft\n\
+                    --spec-type none,draft-simple,draft-eagle3,draft-mtp,ngram-mod\n";
+        let c = caps(help);
+        assert!(c.spec && c.moe && !c.fit);
+        let old = caps("--draft-max N\n-ngl N\n");
+        assert!(!old.spec && !old.moe);
     }
 
     #[test]

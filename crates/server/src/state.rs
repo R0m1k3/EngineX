@@ -53,6 +53,9 @@ pub(crate) struct Inner {
     pub downloads: DownloadQueue,
     /// VRAM prise par d'autres programmes (Mio par carte), avec l'heure de mesure.
     pub vram_others: Mutex<Option<(i64, Vec<u64>)>>,
+    /// Dernière génération servie par /v1 : débit et brouillon accepté
+    /// (`timings` de llama-server), pour la page Modèles.
+    pub last_gen: Mutex<Option<serde_json::Value>>,
     /// Installation ou bascule de moteur en cours (ou la dernière terminée).
     pub engine_job: Mutex<Option<JobState>>,
     /// Moteur de secours : le moteur actif a échoué au lancement d'EngineX.
@@ -108,6 +111,7 @@ impl AppState {
             started: Instant::now(),
             downloads: DownloadQueue::default(),
             vram_others: Mutex::new(None),
+            last_gen: Mutex::new(None),
             engine_job: Mutex::new(None),
             fallback: AtomicBool::new(false),
             latest: Mutex::new(None),

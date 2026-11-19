@@ -1,10 +1,12 @@
 <script lang="ts">
   import {
-    savePreset, activatePreset, message, SAMPLING,
-    type Preset, type LocalModel, type PresetSettings, type SamplingKey, type CandidateSet,
+    savePreset, activatePreset, message, engine, hasMtp, SAMPLING,
+    type Preset, type LocalModel, type PresetSettings, type SamplingKey, type CandidateSet, type EngineInfo,
   } from '../../lib/api';
 
-  let { preset, model, saved }: { preset: Preset; model: LocalModel | undefined; saved: () => void } = $props();
+  let { preset, model, models = [], saved }: {
+    preset: Preset; model: LocalModel | undefined; models?: LocalModel[]; saved: () => void;
+  } = $props();
 
   // Copie modifiable du preset (l'original reste celui du serveur).
   const init = () => $state.snapshot(preset);
@@ -14,6 +16,27 @@
   let extra = $state(init().settings.extra_args.join(' '));
   let error = $state('');
   let notice = $state('');
+  let caps = $state<EngineInfo['caps']>(null);
+  engine().then((e) => (caps = e.caps)).catch(() => {});
+
+  const mtpOk = $derived(hasMtp(model?.meta));
+  const isMoe = $derived(!!model?.meta.expert_count);
+  // Brouillon possible : un autre modèle local, plus petit, de la même architecture.
+  const drafts = $derived(
+    models.filter((m) => m.id !== model?.id && m.size_bytes < (model?.size_bytes ?? 0) && m.meta.arch === model?.meta.arch),
+  );
+  const optNum = (v: string) => (v.trim() === '' ? null : Number(v));
+
+  function setDraft(v: string) {
+    if (v === 'mtp' || v === 'none') {
+      s.spec.draft = v;
+      s.spec.draft_model_id = null;
+    } else {
+      s.spec.draft = 'model';
+      s.spec.draft_model_id = Number(v);
+    }
+  }
+  const draftValue = $derived(s.spec.draft === 'model' ? String(s.spec.draft_model_id) : s.spec.draft);
 
   const sourceLabel: Record<string, string> = {
     card_repo: 'page HF du dépôt',
@@ -85,6 +108,51 @@
     {#if model?.mmproj}<label class="check"><input type="checkbox" bind:checked={s.mmproj} /> Vision (mmproj)</label>{/if}
     <label>Options llama-server en plus <input placeholder="ex. --no-mmap" bind:value={extra} /></label>
   </div>
+
+  <h4>Accélération <span class="muted small">(rechargement nécessaire)</span></h4>
+  {#if caps && !caps.spec}<p class="small error">Ce llama-server n’a pas le décodage spéculatif (MTP, brouillon) : options ignorées.</p>{/if}
+  <div class="fields">
+    <label>Brouillon (décodage spéculatif)
+      <select value={draftValue} onchange={(e) => setDraft(e.currentTarget.value)}>
+        <option value="none">aucun</option>
+        <option value="mtp" disabled={!mtpOk}>MTP du modèle{mtpOk ? '' : ' (absent de ce GGUF)'}</option>
+        {#each drafts as d}<option value={String(d.id)}>{d.repo.split('/').pop()} ({d.file.split('/').pop()})</option>{/each}
+      </select>
+    </label>
+    {#if s.spec.draft !== 'none'}
+      <label>Jetons proposés par étape <input type="number" min="1" max="16" bind:value={s.spec.draft_max} /></label>
+    {/if}
+    <label class="check" title="Propose la suite à partir des répétitions du contexte (code, fichiers relus). Sans VRAM.">
+      <input type="checkbox" bind:checked={s.spec.ngram} /> Brouillon ngram (répétitions)
+    </label>
+    {#if isMoe}
+      <label>Experts MoE ({model?.meta.expert_count} experts, {model?.meta.expert_used_count ?? '?'} actifs)
+        <select bind:value={s.moe.mode}>
+          <option value="auto">automatique (--fit)</option>
+          <option value="all_cpu">tous en RAM</option>
+          <option value="layers">N premières couches en RAM</option>
+        </select>
+      </label>
+      {#if s.moe.mode === 'layers'}
+        <label>Couches d’experts en RAM <input type="number" min="1" max={model?.meta.block_count ?? 1024} bind:value={s.moe.cpu_layers} /></label>
+      {/if}
+      {#if s.moe.mode !== 'auto'}
+        <label>Cache GPU des experts (Mio, 0 = sans) <input type="number" min="0" max="65536" step="512" bind:value={s.moe.cache_mib} /></label>
+      {/if}
+    {/if}
+    <label>Lot logique -b (vide = 2048)
+      <input type="number" min="32" max="16384" step="512" value={s.batch ?? ''} oninput={(e) => (s.batch = optNum(e.currentTarget.value))} />
+    </label>
+    <label>Lot physique -ub (vide = 512)
+      <input type="number" min="32" max="16384" step="256" value={s.ubatch ?? ''} oninput={(e) => (s.ubatch = optNum(e.currentTarget.value))} />
+    </label>
+  </div>
+  {#if s.spec.ngram && s.moe.mode !== 'auto'}
+    <p class="small muted">ngram est retiré au lancement tant que des experts sont en RAM : la vérification passerait par le CPU.</p>
+  {/if}
+  {#if s.spec.draft !== 'none'}
+    <p class="small muted">Si le brouillon empêche le chargement, le modèle est relancé sans et la barre du moteur le signale.</p>
+  {/if}
 
   <h4>Échantillonnage <span class="muted small">(envoyé avec chaque requête, sans recharger)</span></h4>
   {#if preset.sources.error}<p class="error small">Sources non lues : {preset.sources.error}</p>{/if}

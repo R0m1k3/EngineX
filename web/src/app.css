@@ -79,7 +79,7 @@ th, td { padding: var(--s2) var(--s3) var(--s2) 0; border-bottom: 1px solid var(
 .badge { display: inline-block; margin-left: var(--s2); padding: 0 var(--s2); border: 1px solid var(--accent); border-radius: var(--radius); color: var(--accent); font-size: 12px; }
 .state-ready, .state-done, .v-fits { color: var(--accent); }
 .state-failed, .v-no_fit { color: var(--error); }
-.v-tight { color: #d9b36c; }
+.v-tight, .v-offload { color: #d9b36c; }
 .v-unknown { color: var(--muted); }
 .engine-bar { display: flex; flex-direction: column; gap: var(--s2); }
 .gpus { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--s3); }

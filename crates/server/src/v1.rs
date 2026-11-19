@@ -288,8 +288,34 @@ struct Log {
     dropped: BTreeMap<String, usize>,
 }
 
+/// `vitesse=… t/s brouillon=a/n (p %)` tiré des `timings` de llama-server.
+fn speed_of(t: Option<&Value>) -> (String, Option<Value>) {
+    let Some(t) = t else { return (String::new(), None) };
+    let f = |k: &str| t.get(k).and_then(Value::as_f64);
+    let tps = f("predicted_per_second").filter(|v| v.is_finite() && *v > 0.0);
+    let draft = f("draft_n").filter(|n| *n > 0.0);
+    let accepted = f("draft_n_accepted");
+    let mut s = String::new();
+    if let Some(v) = tps {
+        s.push_str(&format!(" vitesse={v:.1} t/s"));
+    }
+    if let (Some(n), Some(a)) = (draft, accepted) {
+        s.push_str(&format!(" brouillon={a}/{n} ({:.0} %)", a * 100.0 / n));
+    }
+    let stats = tps.map(|v| {
+        json!({
+            "at": now(),
+            "tokens_per_s": (v * 10.0).round() / 10.0,
+            "predicted": f("predicted_n"),
+            "draft_n": draft,
+            "draft_accepted": draft.and(accepted),
+        })
+    });
+    (s, stats)
+}
+
 impl Log {
-    fn write(&self, outcome: &str, usage: Option<&Value>) {
+    fn write(&self, state: &AppState, outcome: &str, usage: Option<&Value>, timings: Option<&Value>) {
         let tok = |k: &str| usage.and_then(|u| u.get(k)).and_then(Value::as_u64).unwrap_or(0);
         let dropped = if self.dropped.is_empty() {
             String::new()
@@ -297,14 +323,20 @@ impl Log {
             let d: Vec<String> = self.dropped.iter().map(|(k, n)| format!("{k}×{n}")).collect();
             format!(" ignorés=[{}]", d.join(", "))
         };
+        let (speed, stats) = speed_of(timings);
+        if let Some(mut st) = stats {
+            st["preset"] = json!(self.preset);
+            *state.0.last_gen.lock().expect("stats") = Some(st);
+        }
         tracing::info!(
-            "{} preset=« {} » [{}] {} ms entrée={} sortie={} → {}{}",
+            "{} preset=« {} » [{}] {} ms entrée={} sortie={}{} → {}{}",
             self.route,
             self.preset,
             self.sampling,
             self.started.elapsed().as_millis(),
             tok("prompt_tokens"),
             tok("completion_tokens"),
+            speed,
             outcome,
             dropped
         );
@@ -356,7 +388,7 @@ pub async fn responses(State(state): State<AppState>, body: Bytes) -> Response {
             (true, Some(code)) => code,
             (true, None) => tr.finish_reason().unwrap_or("fin").to_string(),
         };
-        log.write(&result, usage.as_ref());
+        log.write(&state, &result, usage.as_ref(), tr.timings());
     });
     sse_response(rx)
 }
@@ -558,7 +590,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> Res
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("llama-server injoignable : {e}");
-            log.write("server_error", None);
+            log.write(&state, "server_error", None, None);
             return V1Error::new(StatusCode::BAD_GATEWAY, "server_error", "llama-server injoignable").into_response();
         }
     };
@@ -570,10 +602,14 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> Res
         .unwrap_or_else(|| header::HeaderValue::from_static("application/json"));
     if !streamed || !status.is_success() {
         let bytes = res.bytes().await.unwrap_or_default();
-        let usage = serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .and_then(|v| v.get("usage").cloned());
-        log.write(&format!("HTTP {}", status.as_u16()), usage.as_ref());
+        let body = serde_json::from_slice::<Value>(&bytes).ok();
+        let field = |k: &str| body.as_ref().and_then(|v| v.get(k));
+        log.write(
+            &state,
+            &format!("HTTP {}", status.as_u16()),
+            field("usage"),
+            field("timings"),
+        );
         drop(served);
         return (status, [(header::CONTENT_TYPE, ctype)], bytes).into_response();
     }
@@ -582,6 +618,9 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> Res
         let _served = served;
         let mut stream = res.bytes_stream();
         let mut outcome = "fin";
+        // Débit et jetons : lus au passage dans les derniers événements SSE.
+        let mut pending = Vec::<u8>::new();
+        let (mut usage, mut timings) = (None::<Value>, None::<Value>);
         loop {
             let next = tokio::select! {
                 n = stream.next() => n,
@@ -589,6 +628,28 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> Res
             };
             match next {
                 Some(Ok(b)) => {
+                    pending.extend_from_slice(&b);
+                    while let Some(i) = pending.iter().position(|c| *c == b'\n') {
+                        let line: Vec<u8> = pending.drain(..=i).collect();
+                        let Some(data) = line.strip_prefix(b"data: ") else {
+                            continue;
+                        };
+                        if !(data.windows(9).any(|w| w == b"\"timings\"") || data.windows(7).any(|w| w == b"\"usage\""))
+                        {
+                            continue;
+                        }
+                        if let Ok(v) = serde_json::from_slice::<Value>(data) {
+                            if let Some(u) = v.get("usage").filter(|u| u.is_object()) {
+                                usage = Some(u.clone());
+                            }
+                            if let Some(t) = v.get("timings").filter(|t| t.is_object()) {
+                                timings = Some(t.clone());
+                            }
+                        }
+                    }
+                    if pending.len() > 1 << 20 {
+                        pending.clear();
+                    }
                     if tx.send(Ok(b)).await.is_err() {
                         outcome = "client parti";
                         break;
@@ -602,7 +663,7 @@ pub async fn chat_completions(State(state): State<AppState>, body: Bytes) -> Res
                 None => break,
             }
         }
-        log.write(outcome, None);
+        log.write(&state, outcome, usage.as_ref(), timings.as_ref());
     });
     Response::builder()
         .status(status)
@@ -618,7 +679,7 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
     match active(&state).await {
         Ok(Some(p)) => Json(json!({"object": "list", "data": [{
             "id": p.name, "object": "model", "owned_by": "enginex", "created": 0,
-            "context_window": p.settings.ctx,
+            "context_window": crate::engine_api::effective_ctx(&state, p.id, p.settings.ctx),
         }]}))
         .into_response(),
         Ok(None) => Json(json!({"object": "list", "data": []})).into_response(),

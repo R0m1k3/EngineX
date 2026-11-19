@@ -12,7 +12,7 @@ use axum::{
     extract::{Path as UrlPath, Query, State},
 };
 use enginex_engine::{
-    args::{PresetSettings, build_argv},
+    args::{Caps, DraftKind, Launch, PresetSettings, build_argv, fallback_argv, launch_env},
     oci::{Release, UpdateError},
     probe,
     resolve::{IMAGE_TAG, Origin, installed_bin},
@@ -120,6 +120,22 @@ pub async fn measure_vram_others(state: &AppState) {
     }
 }
 
+/// Contexte à annoncer aux clients (Codex) : celui que llama-server a
+/// réellement chargé (`/props`), `--fit` pouvant le réduire quand la VRAM
+/// manque ; le contexte du preset tant que la sonde n'a pas répondu.
+pub fn effective_ctx(state: &AppState, preset_id: i64, preset_ctx: u64) -> u64 {
+    let probed = state
+        .0
+        .probe
+        .lock()
+        .expect("sonde")
+        .as_ref()
+        .filter(|p| p.preset_id == preset_id)
+        .and_then(|p| p.n_ctx)
+        .filter(|n| *n > 0);
+    probed.map_or(preset_ctx, |n| n.min(preset_ctx))
+}
+
 /// Lance le preset `id` avec le moteur courant (arrête l'éventuel précédent).
 pub async fn launch(state: &AppState, id: i64) -> Result<(), ApiError> {
     let p = presets::preset(state, id).await?;
@@ -131,9 +147,47 @@ pub async fn launch(state: &AppState, id: i64) -> Result<(), ApiError> {
         (Some(f), true) => Some(model_path(dir, &m.repo, f)?),
         _ => None,
     };
+    let meta: enginex_hub::gguf::GgufMeta = serde_json::from_str(&m.meta)?;
+    // Petit modèle brouillon : son fichier, et sa taille ajoutée à la marge
+    // de `--fit` (qui ne compte que le modèle principal), répartie par carte.
+    let (draft, draft_bytes) = match (s.spec.draft, s.spec.draft_model_id) {
+        (DraftKind::Model, Some(did)) if did != m.id => match models::model(state, did).await {
+            Ok(d) => (Some(model_path(dir, &d.repo, &d.file)?), d.size_bytes.max(0) as u64),
+            Err(_) => {
+                tracing::warn!("preset {id} : modèle brouillon {did} introuvable, ignoré");
+                (None, 0)
+            }
+        },
+        _ => (None, 0),
+    };
     let (bin, _) = current_bin(state).await?;
-    let has_fit = probe::help(&bin).await.is_ok_and(|h| probe::has_fit(&h));
-    let argv = build_argv(&s, &model, mmproj.as_deref(), state.config().llama_port, has_fit);
+    let caps = probe::help(&bin).await.map(|h| probe::caps(&h)).unwrap_or(Caps::NONE);
+    let gpus = probe::read_gpus(&state.config().nvidia_smi)
+        .await
+        .map(|g| g.len())
+        .unwrap_or(0);
+    let n_gpus = gpus.max(1) as u64;
+    let extra_margin_mib = if draft_bytes > 0 {
+        (draft_bytes >> 20).div_ceil(n_gpus) + 256
+    } else {
+        0
+    };
+    let has_mtp = meta.has_mtp();
+    if s.spec.draft == DraftKind::Mtp && !(has_mtp && caps.spec) {
+        tracing::warn!("preset {id} : MTP demandé mais indisponible (modèle ou moteur), ignoré");
+    }
+    let l = Launch {
+        model: &model,
+        mmproj: mmproj.as_deref(),
+        draft: draft.as_deref(),
+        has_mtp,
+        port: state.config().llama_port,
+        caps,
+        extra_margin_mib,
+    };
+    let argv = build_argv(&s, &l);
+    let fallback_argv = fallback_argv(&s, &l);
+    let env = launch_env(&s, &l, gpus);
     *state.0.probe.lock().expect("sonde") = None;
     state
         .supervisor()
@@ -142,6 +196,8 @@ pub async fn launch(state: &AppState, id: i64) -> Result<(), ApiError> {
             argv,
             model_bytes: m.size_bytes.max(1) as u64,
             preset_id: id,
+            env,
+            fallback_argv,
         })
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))
@@ -331,6 +387,12 @@ pub async fn engine(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
         "has_fit": has_fit,
         "vram_others": others.as_ref().map(|(_, v)| v.clone()),
         "measured_at": others.map(|(t, _)| t),
+        "caps": probe::help(&bin).await.ok().map(|h| {
+            let c = probe::caps(&h);
+            json!({"fit": c.fit, "spec": c.spec, "moe": c.moe})
+        }),
+        "last_gen": state.0.last_gen.lock().expect("stats").clone(),
+        "spec_fallback": state.supervisor().fell_back().map(|(preset_id, why)| json!({"preset_id": preset_id, "why": why})),
         "auto_update": crate::autoupdate::enabled(&state).await,
         "pending": crate::autoupdate::pending(&state).await,
         "auto_last": crate::autoupdate::auto_last(&state).await,

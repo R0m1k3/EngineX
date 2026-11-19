@@ -5,7 +5,7 @@ use axum::{
     Json,
     extract::{Path as UrlPath, State},
 };
-use enginex_engine::args::{PresetSettings, Reasoning, needs_reload};
+use enginex_engine::args::{DraftKind, PresetSettings, Reasoning, needs_reload};
 use enginex_hub::{
     fit::Verdict,
     gguf::GgufMeta,
@@ -114,6 +114,17 @@ pub async fn create_auto(state: &AppState, model_id: i64) -> anyhow::Result<i64>
     }
     s.sampling = merged.values.clone();
     s.mmproj = m.mmproj.is_some();
+    // Couches MTP dans le GGUF : brouillon MTP actif d'office (désactivable).
+    if meta.has_mtp() {
+        s.spec.draft = DraftKind::Mtp;
+    }
+    // MoE plus gros que la VRAM (experts en RAM) : lots plus grands, comme Loki.
+    if let Ok(r) = models::local_fit(state, &m, &s).await
+        && r.verdict == enginex_hub::fit::Verdict::Offload
+    {
+        s.batch = Some(4096);
+        s.ubatch = Some(2048);
+    }
     let quant = enginex_hub::hf::quant_of(&m.file);
     let short = m.repo.rsplit('/').next().unwrap_or(&m.repo).trim_end_matches("-GGUF");
     let t = now();
@@ -135,7 +146,7 @@ pub async fn create_auto(state: &AppState, model_id: i64) -> anyhow::Result<i64>
 fn to_json(p: &PresetRow, active: Option<i64>) -> Result<Value, ApiError> {
     Ok(json!({
         "id": p.id, "name": p.name, "model_id": p.model_id,
-        "settings": serde_json::from_str::<Value>(&p.settings)?,
+        "settings": serde_json::to_value(serde_json::from_str::<PresetSettings>(&p.settings)?)?,
         "sources": serde_json::from_str::<Value>(&p.sources)?,
         "active": Some(p.id) == active,
     }))
@@ -185,6 +196,28 @@ pub async fn copy(State(state): State<AppState>, ApiJson(b): ApiJson<CopyBody>) 
     Ok(Json(json!({ "id": id })))
 }
 
+/// MTP seulement si le GGUF a des couches MTP ; brouillon = un autre modèle
+/// local.
+async fn check_accel(state: &AppState, model_id: i64, s: &PresetSettings) -> Result<(), ApiError> {
+    match s.spec.draft {
+        DraftKind::Mtp => {
+            let m = models::model(state, model_id).await?;
+            let meta: GgufMeta = serde_json::from_str(&m.meta)?;
+            if !meta.has_mtp() {
+                return Err(ApiError::BadRequest);
+            }
+        }
+        DraftKind::Model => {
+            let did = s.spec.draft_model_id.ok_or(ApiError::BadRequest)?;
+            if did == model_id || models::model(state, did).await.is_err() {
+                return Err(ApiError::BadRequest);
+            }
+        }
+        DraftKind::None => {}
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct UpdateBody {
     name: String,
@@ -201,6 +234,7 @@ pub async fn update(
         return Err(ApiError::BadRequest);
     }
     let old = preset(&state, id).await?;
+    check_accel(&state, old.model_id, &b.settings).await?;
     let old_s: PresetSettings = serde_json::from_str(&old.settings)?;
     let reload_needed = active_id(&state).await? == Some(id) && needs_reload(&old_s, &b.settings);
     sqlx::query("UPDATE presets SET name = ?, settings = ?, updated_at = ? WHERE id = ?")

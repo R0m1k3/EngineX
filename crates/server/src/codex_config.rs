@@ -56,7 +56,7 @@ pub async fn codex_config(State(state): State<AppState>, headers: HeaderMap) -> 
     let base_url = format!("{}/v1", origin(&state, &headers));
     Ok(Json(json!({
         "base_url": base_url,
-        "toml": render(&p.name, s.ctx, &base_url, None),
+        "toml": render(&p.name, crate::engine_api::effective_ctx(&state, id, s.ctx), &base_url, None),
         "env_key": ENV_KEY,
     })))
 }

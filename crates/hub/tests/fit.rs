@@ -43,6 +43,7 @@ fn run(ctx: u64, cards: &[CardVram]) -> enginex_hub::fit::FitReport {
             parallel: 1,
             kv: KvType::Q8_0,
             fit_target_mib: 1024,
+            draft_bytes: 0,
         },
         cards,
     )
@@ -106,7 +107,54 @@ fn unknown_without_metadata_or_cards() {
         parallel: 1,
         kv: KvType::F16,
         fit_target_mib: 0,
+        draft_bytes: 0,
     };
     assert_eq!(estimate(&input, &CARDS).verdict, Verdict::Unknown);
     assert_eq!(run(1024, &[]).verdict, Verdict::Unknown);
+}
+
+#[test]
+fn moe_too_big_offloads_and_draft_counts() {
+    // 40 Gio de poids sur 28 Gio de cartes : dense = ne tient pas, MoE =
+    // experts en RAM.
+    let dense = meta();
+    let moe = GgufMeta {
+        expert_count: Some(128),
+        ..meta()
+    };
+    let input = |m| FitInput {
+        meta: m,
+        weights_bytes: 40 << 30,
+        mmproj_bytes: 0,
+        ctx: 8192,
+        parallel: 1,
+        kv: KvType::Q8_0,
+        fit_target_mib: 1024,
+        draft_bytes: 0,
+    };
+    assert_eq!(estimate(&input(&dense), &CARDS).verdict, Verdict::NoFit);
+    assert_eq!(estimate(&input(&moe), &CARDS).verdict, Verdict::Offload);
+    // Le brouillon s'ajoute aux poids.
+    let base = run(8192, &CARDS);
+    let m = meta();
+    let with = estimate(
+        &FitInput {
+            meta: &m,
+            weights_bytes: (16.5 * (1u64 << 30) as f64) as u64,
+            mmproj_bytes: 0,
+            ctx: 8192,
+            parallel: 1,
+            kv: KvType::Q8_0,
+            fit_target_mib: 1024,
+            draft_bytes: 1 << 30,
+        },
+        &CARDS,
+    );
+    let sum = |r: &enginex_hub::fit::FitReport| r.cards.iter().map(|c| c.need_mib).sum::<u64>();
+    assert!(
+        (1023..=1025).contains(&(sum(&with) - sum(&base))),
+        "{} {}",
+        sum(&with),
+        sum(&base)
+    );
 }

@@ -28,6 +28,8 @@ fn spec(bin: std::path::PathBuf, port: u16) -> LaunchSpec {
         ],
         model_bytes: 1 << 30,
         preset_id: 7,
+        env: Vec::new(),
+        fallback_argv: None,
     }
 }
 

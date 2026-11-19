@@ -198,6 +198,7 @@ pub async fn fit_route(State(state): State<AppState>, Query(q): Query<FitQuery>)
             parallel: 1,
             kv,
             fit_target_mib: 1024,
+            draft_bytes: 0,
         },
         &cards,
     );
@@ -479,9 +480,43 @@ pub async fn boot(state: &AppState) -> anyhow::Result<()> {
     }
     let dir = state.config().models_dir.clone();
     tokio::task::spawn_blocking(move || remove_orphans(&dir, &keep, 0)).await?;
+    let r = state.clone();
+    tokio::spawn(async move { refresh_meta(&r).await });
     let s = state.clone();
     tokio::spawn(async move { download_loop(s).await });
     Ok(())
+}
+
+/// Relit l'en-tête des modèles locaux : un modèle téléchargé avant l'ajout
+/// d'un champ (experts MoE, couches MTP…) le reçoit sans retéléchargement.
+async fn refresh_meta(state: &AppState) {
+    let rows: Vec<(i64, String, String, String)> = sqlx::query_as("SELECT id, repo, shards, meta FROM models")
+        .fetch_all(&state.0.db)
+        .await
+        .unwrap_or_default();
+    for (id, repo, shards, old) in rows {
+        let names: Vec<String> = serde_json::from_str(&shards).unwrap_or_default();
+        let Ok(paths) = names
+            .iter()
+            .map(|n| model_path(&state.config().models_dir, &repo, n))
+            .collect::<Result<Vec<_>, _>>()
+        else {
+            continue;
+        };
+        let read = tokio::task::spawn_blocking(move || gguf::read_shards(&paths)).await;
+        let Ok(Ok(meta)) = read else { continue };
+        let Ok(new) = serde_json::to_string(&meta) else {
+            continue;
+        };
+        let same = serde_json::from_str::<Value>(&old).ok() == serde_json::from_str::<Value>(&new).ok();
+        if !same {
+            let _ = sqlx::query("UPDATE models SET meta = ? WHERE id = ?")
+                .bind(&new)
+                .bind(id)
+                .execute(&state.0.db)
+                .await;
+        }
+    }
 }
 
 fn remove_orphans(dir: &Path, keep: &HashSet<PathBuf>, depth: usize) {
@@ -625,8 +660,12 @@ async fn finish(state: &AppState, row: &DownloadRow) -> anyhow::Result<()> {
     let main = shards
         .first()
         .ok_or_else(|| anyhow::anyhow!("aucun fichier de poids"))?;
-    let path = model_path(&state.config().models_dir, &row.repo, &main.name).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let meta = tokio::task::spawn_blocking(move || gguf::read_file(&path)).await??;
+    let paths = shards
+        .iter()
+        .map(|f| model_path(&state.config().models_dir, &row.repo, &f.name))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let meta = tokio::task::spawn_blocking(move || gguf::read_shards(&paths)).await??;
     let sha: HashMap<&str, &str> = files.iter().map(|f| (f.name.as_str(), f.sha256.as_str())).collect();
     let names: Vec<&str> = shards.iter().map(|f| f.name.as_str()).collect();
     let size: u64 = shards.iter().map(|f| f.size).sum();
@@ -740,6 +779,12 @@ pub async fn local_fit(
         }
         _ => 0,
     };
+    let draft_bytes = match (s.spec.draft, s.spec.draft_model_id) {
+        (enginex_engine::args::DraftKind::Model, Some(d)) if d != m.id => {
+            model(state, d).await.map(|d| d.size_bytes.max(0) as u64).unwrap_or(0)
+        }
+        _ => 0,
+    };
     let (cards, _) = cards(state).await;
     Ok(fit::estimate(
         &FitInput {
@@ -750,6 +795,7 @@ pub async fn local_fit(
             parallel: s.parallel,
             kv: KvType::parse(&s.kv_type).unwrap_or(KvType::Q8_0),
             fit_target_mib: s.fit_target_mib,
+            draft_bytes,
         },
         &cards,
     ))

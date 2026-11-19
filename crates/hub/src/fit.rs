@@ -58,6 +58,8 @@ pub struct FitInput<'a> {
     pub kv: KvType,
     /// Marge libre par carte (la même que `--fit-target`).
     pub fit_target_mib: u64,
+    /// Petit modèle brouillon chargé à côté (0 sans).
+    pub draft_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +67,9 @@ pub struct FitInput<'a> {
 pub enum Verdict {
     Fits,
     Tight,
+    /// MoE trop gros pour les cartes : `--fit` envoie des experts en RAM
+    /// (marche, plus lentement).
+    Offload,
     NoFit,
     Unknown,
 }
@@ -123,8 +128,11 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
         .iter()
         .enumerate()
         .map(|(i, &a)| {
-            let mut need =
-                share(input.weights_bytes, a) + layer + share(kv, a) + COMPUTE_PER_CARD + input.fit_target_mib * MIB;
+            let mut need = share(input.weights_bytes + input.draft_bytes, a)
+                + layer
+                + share(kv, a)
+                + COMPUTE_PER_CARD
+                + input.fit_target_mib * MIB;
             if i == 0 {
                 need += input.mmproj_bytes;
             }
@@ -142,6 +150,8 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
         Verdict::Fits
     } else if all(100) {
         Verdict::Tight
+    } else if input.meta.expert_count.is_some() {
+        Verdict::Offload
     } else {
         Verdict::NoFit
     };

@@ -1,16 +1,21 @@
 //! Lecteur GGUF sur des fichiers fabriqués en mémoire.
 
-use enginex_hub::gguf::{GgufError, is_mmproj, parse, read_file};
+use enginex_hub::gguf::{GgufError, is_mmproj, parse, read_file, read_shards};
 
 /// Écrit un GGUF v3 minimal : en-tête + paires clé/valeur.
 struct Gguf {
     kv: Vec<u8>,
     n: u64,
+    tensors: Vec<String>,
 }
 
 impl Gguf {
     fn new() -> Self {
-        Self { kv: Vec::new(), n: 0 }
+        Self {
+            kv: Vec::new(),
+            n: 0,
+            tensors: Vec::new(),
+        }
     }
     fn key(&mut self, k: &str, t: u32) {
         self.kv.extend((k.len() as u64).to_le_bytes());
@@ -59,12 +64,25 @@ impl Gguf {
         }
         self
     }
+    fn tensor(mut self, name: &str) -> Self {
+        self.tensors.push(name.into());
+        self
+    }
     fn bytes(&self) -> Vec<u8> {
         let mut b = b"GGUF".to_vec();
         b.extend(3u32.to_le_bytes());
-        b.extend(0u64.to_le_bytes()); // tenseurs
+        b.extend((self.tensors.len() as u64).to_le_bytes());
         b.extend(self.n.to_le_bytes());
         b.extend(&self.kv);
+        for t in &self.tensors {
+            b.extend((t.len() as u64).to_le_bytes());
+            b.extend(t.as_bytes());
+            b.extend(2u32.to_le_bytes()); // dimensions
+            b.extend(4096u64.to_le_bytes());
+            b.extend(4096u64.to_le_bytes());
+            b.extend(8u32.to_le_bytes()); // type
+            b.extend(0u64.to_le_bytes()); // décalage
+        }
         b.extend([0u8; 64]); // table des tenseurs, poids : jamais lus
         b
     }
@@ -119,6 +137,31 @@ fn missing_keys_are_none() {
     let m = parse(&Gguf::new().str("general.architecture", "llama").bytes()[..]).unwrap();
     assert_eq!((m.block_count, m.vocab_size), (None, None));
     assert!(!m.has_chat_template);
+    assert_eq!((m.expert_count, m.nextn_predict_layers), (None, None));
+}
+
+#[test]
+fn moe_and_mtp_keys() {
+    // Clés lues par llama.cpp b12464 : `%s.expert_count`, `%s.expert_used_count`,
+    // `%s.nextn_predict_layers`.
+    let g = Gguf::new()
+        .str("general.architecture", "qwen35moe")
+        .u32("qwen35moe.expert_count", 256)
+        .u32("qwen35moe.expert_used_count", 8)
+        .u32("qwen35moe.nextn_predict_layers", 1);
+    let m = parse(&g.bytes()[..]).unwrap();
+    assert_eq!(
+        (m.expert_count, m.expert_used_count, m.nextn_predict_layers),
+        (Some(256), Some(8), Some(1))
+    );
+    // 0 = pas de MTP (modèle converti sans).
+    let g = Gguf::new()
+        .str("general.architecture", "qwen35")
+        .u32("qwen35.nextn_predict_layers", 0);
+    assert_eq!(parse(&g.bytes()[..]).unwrap().nextn_predict_layers, None);
+    // Ancien JSON stocké en base, sans ces champs.
+    let old: enginex_hub::gguf::GgufMeta = serde_json::from_str(r#"{"arch":"llama","name":null,"size_label":null,"file_type":null,"context_length":null,"block_count":null,"embedding_length":null,"head_count":null,"head_count_kv":null,"key_length":null,"value_length":null,"sliding_window":null,"vocab_size":null,"has_chat_template":false,"split_count":null,"sampling":{}}"#).unwrap();
+    assert_eq!(old.nextn_predict_layers, None);
 }
 
 #[test]
@@ -155,4 +198,46 @@ fn mmproj_and_file() {
     assert!(is_mmproj(&m, "x.gguf"));
     let q = parse(&qwen().bytes()[..]).unwrap();
     assert!(is_mmproj(&q, "unsloth/mmproj-F16.gguf"));
+}
+
+#[test]
+fn mtp_needs_the_last_block_tensor() {
+    let base = || {
+        Gguf::new()
+            .str("general.architecture", "qwen35")
+            .u32("qwen35.block_count", 4)
+            .u32("qwen35.nextn_predict_layers", 1)
+            .tensor("blk.0.attn_q.weight")
+    };
+    // Clé sans les poids MTP (GGUF converti sans) : pas de MTP.
+    let m = parse(&base().bytes()[..]).unwrap();
+    assert_eq!(
+        (m.nextn_predict_layers, m.mtp_block, m.has_mtp()),
+        (Some(1), None, false)
+    );
+    // Tenseur d'un autre bloc que le dernier : pas de MTP non plus.
+    let m = parse(&base().tensor("blk.2.nextn.eh_proj.weight").bytes()[..]).unwrap();
+    assert!(!m.has_mtp());
+    let m = parse(&base().tensor("blk.3.nextn.eh_proj.weight").bytes()[..]).unwrap();
+    assert!(m.has_mtp());
+    // En-tête coupé dans la table des tenseurs : métadonnées lues quand même.
+    let full = base().tensor("blk.3.nextn.eh_proj.weight").bytes();
+    let cut = &full[..full.len() - 120];
+    let m = parse(cut).unwrap();
+    assert_eq!((m.block_count, m.has_mtp()), (Some(4), false));
+    // Fragments : le tenseur MTP est dans le second fichier.
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("m-00001-of-00002.gguf");
+    let b = dir.path().join("m-00002-of-00002.gguf");
+    std::fs::write(&a, base().bytes()).unwrap();
+    std::fs::write(
+        &b,
+        Gguf::new()
+            .u32("split.no", 1)
+            .tensor("blk.3.nextn.eh_proj.weight")
+            .bytes(),
+    )
+    .unwrap();
+    assert!(!read_file(&a).unwrap().has_mtp());
+    assert!(read_shards(&[a, b]).unwrap().has_mtp());
 }

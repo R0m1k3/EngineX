@@ -95,7 +95,7 @@
       </div>
     </div>
     {#if open === p.id}
-      <PresetEditor preset={p} model={modelOf(p)} saved={load} />
+      <PresetEditor preset={p} model={modelOf(p)} models={mods} saved={load} />
     {/if}
   </article>
 {/each}

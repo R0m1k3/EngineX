@@ -28,6 +28,7 @@ use crate::{
     vault,
     workspace::TopicInfo,
 };
+use enginex_engine::supervisor::EngineState;
 
 /// Sandbox vivante : ce qu'elle a reçu (masquage) et son preset.
 pub struct Live {
@@ -262,7 +263,22 @@ pub(crate) async fn start(
     //    Écrit sans suivre un lien laissé dans CODEX_HOME (monté en écriture).
     let api_url = &state.config().sandbox.api_url;
     let mcp_url = mcp_url(api_url);
-    let toml = crate::codex_config::render(&active.name, active.settings.ctx, api_url, Some(&mcp_url));
+    //    Contexte réellement chargé : si le moteur charge ce preset, on
+    //    attend sa sonde (`--fit` peut avoir réduit le contexte).
+    let loading =
+        matches!(state.supervisor().state(), EngineState::Starting { preset_id, .. } if preset_id == active.id);
+    if loading && crate::engine_api::wait_loaded(state).await {
+        // La sonde suit `ready` de quelques millisecondes.
+        for _ in 0..30 {
+            let probed = state.0.probe.lock().expect("sonde").as_ref().map(|p| p.preset_id);
+            if probed == Some(active.id) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+    let ctx = crate::engine_api::effective_ctx(state, active.id, active.settings.ctx);
+    let toml = crate::codex_config::render(&active.name, ctx, api_url, Some(&mcp_url));
     write_private(&mounts.codex_home.join("config.toml"), toml.as_bytes())?;
     //    Skills actives, copiées sans suivre de lien.
     if let Err(e) = crate::skills::install_into(state, &mounts.codex_home).await {

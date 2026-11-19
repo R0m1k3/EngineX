@@ -108,10 +108,18 @@ export interface GgufMeta {
   name: string | null;
   context_length: number | null;
   block_count: number | null;
+  expert_count?: number | null;
+  expert_used_count?: number | null;
+  nextn_predict_layers?: number | null;
+  mtp_block?: number | null;
   [k: string]: unknown;
 }
 
-export type Verdict = 'fits' | 'tight' | 'no_fit' | 'unknown';
+/** MTP utilisable : clé `nextn_predict_layers` et tenseur du dernier bloc. */
+export const hasMtp = (m: GgufMeta | undefined) =>
+  !!m?.nextn_predict_layers && m.block_count != null && m.block_count > 0 && m.mtp_block === m.block_count - 1;
+
+export type Verdict = 'fits' | 'tight' | 'offload' | 'no_fit' | 'unknown';
 
 export interface FitReport {
   cards: { need_mib: number; avail_mib: number }[];
@@ -164,6 +172,15 @@ export interface PresetSettings {
   reasoning: 'on' | 'off';
   sampling: Sampling;
   mmproj: boolean;
+  spec: {
+    draft: 'none' | 'mtp' | 'model';
+    draft_model_id: number | null;
+    draft_max: number;
+    ngram: boolean;
+  };
+  moe: { mode: 'auto' | 'all_cpu' | 'layers'; cpu_layers: number; cache_mib: number };
+  batch: number | null;
+  ubatch: number | null;
   extra_args: string[];
 }
 
@@ -217,6 +234,16 @@ export interface EngineInfo {
   pending: { tag: string; build: string; since: number } | null;
   auto_last: { at: number; tag: string; ok: boolean; message: string } | null;
   skipped: string[];
+  caps: { fit: boolean; spec: boolean; moe: boolean } | null;
+  last_gen: {
+    at: number;
+    preset: string;
+    tokens_per_s: number | null;
+    predicted: number | null;
+    draft_n: number | null;
+    draft_accepted: number | null;
+  } | null;
+  spec_fallback: { preset_id: number; why: string } | null;
 }
 
 export interface TestResult {
@@ -333,6 +360,7 @@ export function size(bytes: number): string {
 export const VERDICT: Record<Verdict, string> = {
   fits: 'tient',
   tight: 'juste',
+  offload: 'experts en partie en RAM',
   no_fit: 'ne tient pas',
   unknown: 'inconnu',
 };

@@ -3,7 +3,7 @@
 //! garde les logs, rend la cause d'un échec, arrête proprement.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
@@ -44,6 +44,11 @@ pub struct LaunchSpec {
     pub argv: Vec<String>,
     pub model_bytes: u64,
     pub preset_id: i64,
+    /// Variables d'environnement en plus (`CUDA_SCALE_LAUNCH_QUEUES`…).
+    pub env: Vec<(String, String)>,
+    /// Même lancement sans décodage spéculatif : tenté une fois si llama-server
+    /// s'arrête pendant le chargement (contexte MTP ou brouillon refusé, VRAM).
+    pub fallback_argv: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -93,6 +98,23 @@ pub fn failure_cause(lines: &[String]) -> String {
     }
 }
 
+/// Ligne de log d'un échec propre au décodage spéculatif (motifs de
+/// llama.cpp b12464, repris de Loki).
+pub fn spec_failure(lines: &[String]) -> Option<String> {
+    const PATTERNS: [&str; 4] = [
+        "failed to create mtp context",
+        "failed to load draft model",
+        "failed to initialize speculative decoding context",
+        "failed to create draft context",
+    ];
+    // Depuis le motif : sans l'horodatage ni le niveau de llama.cpp.
+    lines.iter().find_map(|l| {
+        let low = l.to_ascii_lowercase();
+        let at = PATTERNS.iter().filter_map(|p| low.find(p)).min()?;
+        Some(l[at..].trim().chars().take(200).collect())
+    })
+}
+
 struct Running {
     pid: u32,
     child: tokio::process::Child,
@@ -106,6 +128,11 @@ struct Inner {
     /// Numéro du lancement en cours : les tâches d'un ancien lancement s'arrêtent.
     generation: AtomicU64,
     http: reqwest::Client,
+    /// Lancements (binaire + argv) qui n'ont chargé que sans brouillon : lancés
+    /// directement sans, jusqu'au redémarrage d'EngineX.
+    no_spec: Mutex<HashMap<Vec<String>, String>>,
+    /// Dernier repli : preset et ligne de log de l'échec.
+    fell_back: Mutex<Option<(i64, String)>>,
 }
 
 #[derive(Clone)]
@@ -119,6 +146,8 @@ impl Supervisor {
             running: tokio::sync::Mutex::new(None),
             logs: Mutex::new(VecDeque::with_capacity(LOG_LINES)),
             generation: AtomicU64::new(0),
+            no_spec: Mutex::new(HashMap::new()),
+            fell_back: Mutex::new(None),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
                 .no_proxy()
@@ -144,14 +173,18 @@ impl Supervisor {
         self.0.cfg.port
     }
 
-    /// Lance llama-server (après avoir arrêté le précédent). Rend la main dès
-    /// que le processus tourne ; l'état passe ensuite seul à `Ready` ou `Failed`.
-    pub async fn start(&self, spec: LaunchSpec) -> Result<(), String> {
-        if self.0.running.lock().await.is_some() {
-            self.stop(true).await;
-        }
-        let generation = self.0.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.0.logs.lock().expect("logs").clear();
+    /// Preset relancé sans décodage spéculatif, et pourquoi.
+    pub fn fell_back(&self) -> Option<(i64, String)> {
+        self.0.fell_back.lock().expect("repli").clone()
+    }
+
+    fn key(spec: &LaunchSpec) -> Vec<String> {
+        std::iter::once(spec.bin.display().to_string())
+            .chain(spec.argv.iter().cloned())
+            .collect()
+    }
+
+    fn spawn_child(&self, spec: &LaunchSpec) -> Result<Running, String> {
         let mut cmd = tokio::process::Command::new(&spec.bin);
         cmd.args(&spec.argv)
             .stdin(Stdio::null())
@@ -159,6 +192,9 @@ impl Supervisor {
             .stderr(Stdio::piped())
             .process_group(0)
             .kill_on_drop(true);
+        for (k, v) in &spec.env {
+            cmd.env(k, v);
+        }
         if let Some(dir) = probe::lib_dir(&spec.bin) {
             cmd.env("LD_LIBRARY_PATH", dir);
         }
@@ -166,14 +202,40 @@ impl Supervisor {
             .spawn()
             .map_err(|e| format!("lancement de {} : {e}", spec.bin.display()))?;
         let pid = child.id().ok_or("pid introuvable")?;
-        self.log_line(format!("[enginex] {} {}", spec.bin.display(), spec.argv.join(" ")));
+        let env: String = spec.env.iter().map(|(k, v)| format!("{k}={v} ")).collect();
+        self.log_line(format!("[enginex] {env}{} {}", spec.bin.display(), spec.argv.join(" ")));
         if let Some(out) = child.stdout.take() {
             self.pump(out);
         }
         if let Some(err) = child.stderr.take() {
             self.pump(err);
         }
-        *self.0.running.lock().await = Some(Running { pid, child });
+        Ok(Running { pid, child })
+    }
+
+    /// Lance llama-server (après avoir arrêté le précédent). Rend la main dès
+    /// que le processus tourne ; l'état passe ensuite seul à `Ready` ou `Failed`.
+    pub async fn start(&self, mut spec: LaunchSpec) -> Result<(), String> {
+        if self.0.running.lock().await.is_some() {
+            self.stop(true).await;
+        }
+        let generation = self.0.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.0.logs.lock().expect("logs").clear();
+        let known = self.0.no_spec.lock().expect("repli").get(&Self::key(&spec)).cloned();
+        let mut fell_back = None;
+        if let Some(why) = known
+            && let Some(fb) = spec.fallback_argv.take()
+        {
+            self.log_line(format!(
+                "[enginex] lancé sans décodage spéculatif (échec précédent : {why})"
+            ));
+            spec.argv = fb;
+            fell_back = Some((spec.preset_id, why));
+        }
+        *self.0.fell_back.lock().expect("repli") = fell_back;
+        let r = self.spawn_child(&spec)?;
+        let pid = r.pid;
+        *self.0.running.lock().await = Some(r);
         self.0.state.send_replace(EngineState::Starting {
             preset_id: spec.preset_id,
             progress: 0,
@@ -226,8 +288,10 @@ impl Supervisor {
         self.0.generation.load(Ordering::SeqCst) == generation
     }
 
-    async fn watch(&self, generation: u64, pid: u32, spec: LaunchSpec) {
-        let started = Instant::now();
+    async fn watch(&self, generation: u64, mut pid: u32, mut spec: LaunchSpec) {
+        let mut started = Instant::now();
+        // Argv d'origine, à retenir si seul le repli charge.
+        let mut retried: Option<(Vec<String>, String)> = None;
         let health = format!("http://127.0.0.1:{}/health", self.0.cfg.port);
         let mut ready = false;
         loop {
@@ -250,6 +314,24 @@ impl Supervisor {
                 }
                 self.0.running.lock().await.take();
                 let last_lines = self.logs(20);
+                if let Some(fb) = spec.fallback_argv.take() {
+                    let why = spec_failure(&self.logs(200)).unwrap_or_else(|| failure_cause(&last_lines));
+                    self.log_line(format!(
+                        "[enginex] échec avec décodage spéculatif ({why}) : relance sans"
+                    ));
+                    retried = Some((Self::key(&spec), why.clone()));
+                    spec.argv = fb;
+                    *self.0.fell_back.lock().expect("repli") = Some((spec.preset_id, why));
+                    match self.spawn_child(&spec) {
+                        Ok(r) => {
+                            pid = r.pid;
+                            *self.0.running.lock().await = Some(r);
+                            started = Instant::now();
+                            continue;
+                        }
+                        Err(e) => self.log_line(format!("[enginex] {e}")),
+                    }
+                }
                 self.0.state.send_replace(EngineState::Failed {
                     preset_id: spec.preset_id,
                     cause: failure_cause(&last_lines),
@@ -269,6 +351,16 @@ impl Supervisor {
                 .is_ok_and(|r| r.status().is_success());
             if ok {
                 ready = true;
+                if let Some((k, why)) = retried.take() {
+                    self.0.no_spec.lock().expect("repli").insert(k, why);
+                }
+                // llama-server peut aussi démarrer en ignorant un brouillon
+                // refusé (vocabulaire différent…) : le signaler pareil.
+                if spec.argv.iter().any(|x| x == "--spec-type")
+                    && let Some(why) = spec_failure(&self.logs(LOG_LINES))
+                {
+                    *self.0.fell_back.lock().expect("repli") = Some((spec.preset_id, why));
+                }
                 self.log_line("[enginex] prêt".into());
                 self.0.state.send_replace(EngineState::Ready {
                     preset_id: spec.preset_id,
@@ -374,6 +466,13 @@ mod tests {
     #[test]
     fn causes() {
         let l = |s: &str| vec![s.to_string()];
+        assert_eq!(
+            spec_failure(&l(
+                "0.08.110.306 E srv    load_model: failed to initialize speculative decoding context: vocab"
+            )),
+            Some("failed to initialize speculative decoding context: vocab".into())
+        );
+        assert_eq!(spec_failure(&l("srv load_model: loaded")), None);
         assert_eq!(
             failure_cause(&l("x: cudaMalloc failed: out of memory")),
             "VRAM insuffisante"

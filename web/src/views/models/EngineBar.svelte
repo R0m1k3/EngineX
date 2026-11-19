@@ -45,7 +45,13 @@
     image: 'moteur de l’image',
     secours: 'moteur de secours',
   };
-  let presetName = $derived(list.find((p) => p.id === info?.preset_id)?.name ?? null);
+  let preset = $derived(list.find((p) => p.id === info?.preset_id) ?? null);
+  let presetName = $derived(preset?.name ?? null);
+  // `--fit` a réduit le contexte faute de VRAM : Codex reçoit ce contexte-là.
+  let ctxCut = $derived(
+    info?.state.state === 'ready' && info.n_ctx != null && preset != null && info.n_ctx < preset.settings.ctx,
+  );
+  let gen = $derived(info?.last_gen ?? null);
   // Tâche en cours, ou dernière tâche ratée sur le preset (activation, arrêt).
   let shownJob = $derived(
     job && (!job.finished || (job.step === 'failed' && ['activate', 'stop', 'delete'].includes(job.kind))) ? job : null,
@@ -68,6 +74,13 @@
           <span class="muted small">
             · contexte {info.n_ctx ?? '?'} · outils
             {#if info.tools_ok === true}OK{:else if info.tools_ok === false}<span class="error">KO</span>{:else}?{/if}
+            {#if gen?.tokens_per_s != null}
+              · dernière réponse {gen.tokens_per_s.toFixed(1)} jetons/s
+              {#if gen.draft_n}
+                · brouillon accepté {gen.draft_accepted ?? 0}/{gen.draft_n}
+                ({Math.round(((gen.draft_accepted ?? 0) / gen.draft_n) * 100)} %)
+              {/if}
+            {/if}
           </span>
         {/if}
       </div>
@@ -80,6 +93,15 @@
     </div>
     {#if info.state.state === 'starting'}
       <div class="bar"><span style:width="{info.state.progress}%"></span></div>
+    {/if}
+    {#if ctxCut && preset}
+      <p class="small error">
+        Contexte réduit par --fit : {info.n_ctx} jetons chargés au lieu de {preset.settings.ctx} (VRAM courte).
+        Codex reçoit {info.n_ctx}. Baisser le contexte, passer le KV en q4_0 ou mettre des experts en RAM.
+      </p>
+    {/if}
+    {#if info.spec_fallback && info.spec_fallback.preset_id === info.preset_id && info.state.state === 'ready'}
+      <p class="small error">Chargé sans décodage spéculatif : le brouillon a fait échouer le chargement ({info.spec_fallback.why}).</p>
     {/if}
     {#if info.state.state === 'failed'}
       <p class="error">{info.state.cause}</p>

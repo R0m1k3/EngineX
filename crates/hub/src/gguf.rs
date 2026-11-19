@@ -58,6 +58,19 @@ pub struct GgufMeta {
     pub vocab_size: Option<u64>,
     pub has_chat_template: bool,
     pub split_count: Option<u64>,
+    /// MoE : nombre d'experts et experts actifs par jeton (`None` : modèle dense).
+    #[serde(default)]
+    pub expert_count: Option<u64>,
+    #[serde(default)]
+    pub expert_used_count: Option<u64>,
+    /// Couches MTP (NextN) intégrées au GGUF : `draft-mtp` possible si > 0.
+    #[serde(default)]
+    pub nextn_predict_layers: Option<u64>,
+    /// Plus haut bloc portant le tenseur `blk.N.nextn.eh_proj.weight` (lu dans
+    /// la table des tenseurs, tous fragments confondus) : la clé seule ne suffit
+    /// pas, certains GGUF la gardent sans les poids MTP.
+    #[serde(default)]
+    pub mtp_block: Option<u64>,
     /// Clés `general.sampling.*` (suffixe → valeur).
     pub sampling: BTreeMap<String, f64>,
 }
@@ -205,7 +218,7 @@ pub fn parse(r: impl Read) -> Result<GgufMeta, GgufError> {
     if !(2..=3).contains(&version) {
         return Err(GgufError::Io(format!("version GGUF {version} non prise en charge")));
     }
-    let _tensors = rd.u64()?;
+    let tensors = rd.u64()?;
     let kv_count = rd.u64()?;
     if kv_count > MAX_KV {
         return Err(GgufError::TooLarge("nombre de clés"));
@@ -222,7 +235,52 @@ pub fn parse(r: impl Read) -> Result<GgufMeta, GgufError> {
         };
         kv.insert(key, v);
     }
-    Ok(meta_from(&kv))
+    let mut meta = meta_from(&kv);
+    // Table des tenseurs : seuls les noms comptent. Un flux coupé ici (en-tête
+    // partiel lu sur HF) laisse simplement `mtp_block` inconnu.
+    meta.mtp_block = mtp_block(&mut rd, tensors).unwrap_or(None);
+    Ok(meta)
+}
+
+fn mtp_block<R: Read>(rd: &mut Reader<R>, tensors: u64) -> Result<Option<u64>, GgufError> {
+    let mut best = None;
+    for _ in 0..tensors.min(MAX_KV) {
+        let name = rd.string()?;
+        let dims = rd.u32()?;
+        if dims > 8 {
+            return Err(GgufError::TooLarge("dimensions de tenseur"));
+        }
+        rd.skip(u64::from(dims) * 8 + 4 + 8)?;
+        let n = name
+            .strip_prefix("blk.")
+            .and_then(|r| r.strip_suffix(".nextn.eh_proj.weight"))
+            .and_then(|n| n.parse::<u64>().ok());
+        if let Some(n) = n {
+            best = best.max(Some(n));
+        }
+    }
+    Ok(best)
+}
+
+impl GgufMeta {
+    /// MTP utilisable : la clé `nextn_predict_layers` ET le tenseur du dernier
+    /// bloc (même règle que Loki).
+    pub fn has_mtp(&self) -> bool {
+        self.nextn_predict_layers.is_some() && self.block_count.is_some_and(|b| b > 0 && self.mtp_block == Some(b - 1))
+    }
+}
+
+/// Métadonnées d'un modèle en plusieurs fragments : celles du premier, la
+/// table des tenseurs de tous.
+pub fn read_shards(paths: &[std::path::PathBuf]) -> Result<GgufMeta, GgufError> {
+    let first = paths.first().ok_or_else(|| GgufError::Io("aucun fichier".into()))?;
+    let mut meta = read_file(first)?;
+    for p in &paths[1..] {
+        if let Ok(m) = read_file(p) {
+            meta.mtp_block = meta.mtp_block.max(m.mtp_block);
+        }
+    }
+    Ok(meta)
 }
 
 /// Lit les métadonnées d'un fichier local.
@@ -260,6 +318,10 @@ fn meta_from(kv: &HashMap<String, Value>) -> GgufMeta {
         },
         has_chat_template: matches!(kv.get("tokenizer.chat_template"), Some(Value::Bool(true))),
         split_count: kv.get("split.count").and_then(Value::as_u64),
+        expert_count: a("expert_count").filter(|n| *n > 0),
+        expert_used_count: a("expert_used_count").filter(|n| *n > 0),
+        nextn_predict_layers: a("nextn_predict_layers").filter(|n| *n > 0),
+        mtp_block: None,
         sampling,
         arch,
     }

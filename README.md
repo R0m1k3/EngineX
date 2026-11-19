@@ -65,6 +65,22 @@ modèle de base, puis dans `generation_config.json`, puis dans le GGUF. La fiche
 valeur (avec l'extrait de la page) et propose un choix quand la page en donne plusieurs. L'échantillonnage s'applique
 à chaque requête sans recharger le modèle ; changer le contexte, le KV ou le placement recharge le modèle.
 
+La section **Accélération** du preset règle le décodage spéculatif et les MoE :
+- *Brouillon* : aucun, **MTP** du modèle (proposé et actif d'office quand le GGUF contient les couches NextN, vérifié
+  sur le tenseur `blk.N.nextn.eh_proj.weight` du dernier bloc et pas seulement sur la clé), ou un petit modèle local de
+  la même architecture (`-md`, sa taille est ajoutée à la marge de `--fit`). *Jetons proposés* = `--spec-draft-n-max`.
+- *Brouillon ngram* : propose la suite à partir des répétitions du contexte, sans VRAM. Retiré au lancement quand des
+  experts sont en RAM (la vérification passerait par le CPU).
+- *Experts MoE* : automatique (`--fit` envoie en RAM les experts qui ne tiennent pas), tous en RAM (`--cpu-moe`) ou
+  les N premières couches (`--n-cpu-moe`), avec un cache GPU optionnel. Un placement manuel coupe `--fit`.
+- *Lots* `-b` / `-ub` : vides = défauts de llama.cpp ; un MoE plus gros que la VRAM est créé avec 4096 / 2048.
+
+Si llama-server s'arrête pendant le chargement avec un brouillon (contexte MTP refusé, VRAM), EngineX relance une
+fois sans décodage spéculatif, le signale dans le bandeau et lance directement sans pour cette même ligne de commande
+jusqu'au redémarrage. Avec deux GPU en découpe par couches, `CUDA_SCALE_LAUNCH_QUEUES=4x` est posé. Le bandeau donne
+le débit de la dernière réponse et la part du brouillon acceptée, et prévient quand `--fit` a réduit le contexte :
+Codex reçoit alors le contexte réellement chargé, pas celui du preset.
+
 **Activer** lance llama-server (un seul à la fois, sur `127.0.0.1:8081` dans le conteneur). Le bandeau du haut donne
 l'état, la progression du chargement, la VRAM par carte et les logs.
 

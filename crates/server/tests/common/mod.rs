@@ -33,6 +33,8 @@ pub const REPO: &str = "unsloth/Qwen3-0.6B-GGUF";
 pub const BASE: &str = "Qwen/Qwen3-0.6B";
 /// Dépôt de test avec un projecteur de vision.
 pub const VISION: &str = "test/vision";
+/// Dépôt d'un MoE avec couches MTP (`nextn_predict_layers`).
+pub const MTP: &str = "test/mtp-moe";
 
 pub fn fake_bin() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
@@ -56,6 +58,16 @@ pub fn sha_hex(b: &[u8]) -> String {
 
 /// GGUF v3 minimal d'un petit modèle qwen3.
 pub fn fake_gguf() -> Vec<u8> {
+    fake_gguf_with(&[])
+}
+
+/// Le même, avec des clés `qwen3.*` entières en plus.
+pub fn fake_gguf_with(extra: &[(&str, u32)]) -> Vec<u8> {
+    fake_gguf_tensors(extra, &[])
+}
+
+/// Le même, avec une table de tenseurs (noms seuls, poids factices).
+pub fn fake_gguf_tensors(extra: &[(&str, u32)], tensors: &[&str]) -> Vec<u8> {
     let mut kv: Vec<u8> = Vec::new();
     let mut n = 0u64;
     let mut key = |kv: &mut Vec<u8>, k: &str, t: u32| {
@@ -75,18 +87,29 @@ pub fn fake_gguf() -> Vec<u8> {
         ("qwen3.attention.head_count_kv", 8),
         ("qwen3.attention.key_length", 128),
         ("qwen3.attention.value_length", 128),
-    ] {
+    ]
+    .into_iter()
+    .chain(extra.iter().copied())
+    {
         key(&mut kv, k, 4);
         kv.extend(v.to_le_bytes());
     }
     key(&mut kv, "tokenizer.chat_template", 8);
-    kv.extend(4u64.to_le_bytes());
+    kv.extend(5u64.to_le_bytes());
     kv.extend(b"{{x}}");
     let mut b = b"GGUF".to_vec();
     b.extend(3u32.to_le_bytes());
-    b.extend(0u64.to_le_bytes());
+    b.extend((tensors.len() as u64).to_le_bytes());
     b.extend(n.to_le_bytes());
     b.extend(kv);
+    for t in tensors {
+        b.extend((t.len() as u64).to_le_bytes());
+        b.extend(t.as_bytes());
+        b.extend(1u32.to_le_bytes());
+        b.extend(16u64.to_le_bytes());
+        b.extend(0u32.to_le_bytes());
+        b.extend(0u64.to_le_bytes());
+    }
     b.extend([7u8; 4096]);
     b
 }
@@ -112,6 +135,18 @@ pub async fn serve_hf() -> String {
         {"type": "file", "path": "mmproj-test.gguf", "size": gguf.len(),
          "lfs": {"oid": sha_hex(&gguf), "size": gguf.len()}},
     ]);
+    let mtp_gguf = Arc::new(fake_gguf_tensors(
+        &[
+            ("qwen3.expert_count", 8),
+            ("qwen3.expert_used_count", 2),
+            ("qwen3.nextn_predict_layers", 1),
+        ],
+        &["blk.0.attn_q.weight", "blk.27.nextn.eh_proj.weight"],
+    ));
+    let mtp_tree = json!([
+        {"type": "file", "path": "mtp-moe-Q8_0.gguf", "size": mtp_gguf.len(),
+         "lfs": {"oid": sha_hex(&mtp_gguf), "size": mtp_gguf.len()}},
+    ]);
     let g = gguf.clone();
     let app = Router::new()
         .route(
@@ -127,6 +162,7 @@ pub async fn serve_hf() -> String {
                     REPO => Json(json!({"id": REPO, "gated": false, "cardData": {"base_model": BASE}})).into_response(),
                     BASE => Json(json!({"id": BASE, "gated": false, "cardData": {}})).into_response(),
                     VISION => Json(json!({"id": VISION, "gated": false, "cardData": {}})).into_response(),
+                    MTP => Json(json!({"id": MTP, "gated": false, "cardData": {}})).into_response(),
                     _ => StatusCode::NOT_FOUND.into_response(),
                 }
             }),
@@ -134,17 +170,21 @@ pub async fn serve_hf() -> String {
         .route(
             "/api/models/{owner}/{repo}/tree/main",
             get(move |UrlPath((o, r)): UrlPath<(String, String)>| async move {
-                if format!("{o}/{r}") == VISION {
-                    Json(vision_tree.clone())
-                } else {
-                    Json(tree.clone())
+                match format!("{o}/{r}").as_str() {
+                    VISION => Json(vision_tree.clone()),
+                    MTP => Json(mtp_tree.clone()),
+                    _ => Json(tree.clone()),
                 }
             }),
         )
         .route(
             "/{owner}/{repo}/resolve/main/{*file}",
-            get(move || {
-                let g = g.clone();
+            get(move |UrlPath((o, r, _f)): UrlPath<(String, String, String)>| {
+                let g = if format!("{o}/{r}") == MTP {
+                    mtp_gguf.clone()
+                } else {
+                    g.clone()
+                };
                 async move { (*g).clone() }
             }),
         )

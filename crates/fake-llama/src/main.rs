@@ -3,6 +3,10 @@
 //! - `FAKE_BUILD` (défaut 12464) : numéro écrit par `--version` ;
 //! - `FAKE_GPUS` (défaut 2) : cartes listées par `--list-devices` ;
 //! - `FAKE_NO_FIT=1` : `--help` sans `--fit` ;
+//! - `FAKE_NO_ACCEL=1` : `--help` sans les options MTP / MoE ;
+//! - `FAKE_SPEC_FAIL=1` : s'arrête au chargement si `--spec-type` est passé ;
+//!   `soft` : le signale et continue sans (brouillon refusé) ;
+//! - `FAKE_FIT_CTX=N` : avec `--fit on`, contexte ramené à N (VRAM courte) ;
 //! - `FAKE_LOAD_MS` (défaut 300) : `/health` répond 503 pendant ce temps ;
 //! - `FAKE_CRASH_MS` : sort avec le code 1 après ce délai ;
 //! - `FAKE_OOM=1` : écrit une erreur cudaMalloc et sort ;
@@ -83,6 +87,12 @@ async fn main() {
         }
         Some("--help") => {
             println!("-m, --model FNAME\n-c, --ctx-size N\n-ngl N\n-ts, --tensor-split N0,N1");
+            if std::env::var("FAKE_NO_ACCEL").as_deref() != Ok("1") {
+                println!(
+                    "-cmoe, --cpu-moe   keep all MoE weights in the CPU\n-ncmoe, --n-cpu-moe N\n\
+                     --spec-type none,draft-simple,draft-mtp,ngram-mod\n--spec-draft-n-max N"
+                );
+            }
             if std::env::var("FAKE_NO_FIT").as_deref() != Ok("1") {
                 println!("-fit, --fit [on|off]   whether to adjust unset arguments\n-fitt, --fit-target MiB0,MiB1,...");
             }
@@ -94,6 +104,21 @@ async fn main() {
         _ => {}
     }
     eprintln!("main: argv = {}", args.join(" "));
+    let _ = SPEC.set(args.iter().any(|a| a == "--spec-type"));
+    if *SPEC.get().unwrap_or(&false) && std::env::var("FAKE_SPEC_FAIL").as_deref() == Ok("1") {
+        eprintln!("common_speculative_init: failed to create mtp context");
+        eprintln!("srv load_model: failed to initialize speculative decoding context");
+        std::process::exit(1);
+    }
+    if *SPEC.get().unwrap_or(&false) && std::env::var("FAKE_SPEC_FAIL").as_deref() == Ok("soft") {
+        // Comme b12464 avec un brouillon au vocabulaire différent : continue sans.
+        eprintln!(
+            "srv load_model: failed to initialize speculative decoding context: draft model vocab type must match"
+        );
+    }
+    if let Ok(v) = std::env::var("CUDA_SCALE_LAUNCH_QUEUES") {
+        eprintln!("env: CUDA_SCALE_LAUNCH_QUEUES={v}");
+    }
     if std::env::var("FAKE_OOM").as_deref() == Ok("1") {
         eprintln!(
             "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 9000.00 MiB on device 0: cudaMalloc failed: out of memory"
@@ -102,9 +127,18 @@ async fn main() {
         std::process::exit(1);
     }
     let port: u16 = arg(&args, &["--port"]).and_then(|p| p.parse().ok()).unwrap_or(8080);
-    let n_ctx: u64 = arg(&args, &["-c", "--ctx-size"])
+    let mut n_ctx: u64 = arg(&args, &["-c", "--ctx-size"])
         .and_then(|p| p.parse().ok())
         .unwrap_or(4096);
+    // `--fit on` qui réduit le contexte faute de VRAM.
+    if let (Some("on"), Ok(max)) = (
+        arg(&args, &["--fit"]),
+        std::env::var("FAKE_FIT_CTX").map(|v| v.parse::<u64>().unwrap_or(u64::MAX)),
+    ) && max < n_ctx
+    {
+        eprintln!("llama_params_fit_impl: context size reduced from {n_ctx} to {max}");
+        n_ctx = max;
+    }
     if let Ok(ms) = std::env::var("FAKE_CRASH_MS").map(|v| v.parse::<u64>().unwrap_or(0)) {
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(ms)).await;
@@ -289,6 +323,20 @@ fn call_id(i: usize, tc: &ToolCall) -> String {
     tc.id.clone().unwrap_or_else(|| format!("call_fake{i}"))
 }
 
+/// `--spec-type` reçu : les `timings` portent alors `draft_n*`.
+static SPEC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// `timings` de llama-server (dernier morceau du flux).
+fn timings_json() -> Value {
+    let mut t = json!({"prompt_n": 60, "prompt_ms": 120.0, "prompt_per_second": 500.0,
+        "predicted_n": 20, "predicted_ms": 400.0, "predicted_per_second": 50.0});
+    if SPEC.get().copied().unwrap_or(false) {
+        t["draft_n"] = json!(16);
+        t["draft_n_accepted"] = json!(12);
+    }
+    t
+}
+
 fn usage_json() -> Value {
     json!({"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
         "prompt_tokens_details": {"cached_tokens": 40}})
@@ -356,7 +404,7 @@ fn stream_chunks(turn: &Turn, model: &str, usage: bool) -> Vec<String> {
     out.push(chunk(json!({}), json!(finish_of(turn))));
     if usage {
         let v = json!({"id": "chatcmpl-fake", "object": "chat.completion.chunk", "created": 0,
-            "model": model, "choices": [], "usage": usage_json()});
+            "model": model, "choices": [], "usage": usage_json(), "timings": timings_json()});
         out.push(format!("data: {v}\n\n"));
     }
     out.push("data: [DONE]\n\n".into());

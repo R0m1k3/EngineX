@@ -60,6 +60,8 @@ pub struct Translator {
     open: Option<Open>,
     calls: BTreeMap<u64, Call>,
     usage: Option<Value>,
+    /// `timings` de llama-server (débit, jetons de brouillon acceptés).
+    timings: Option<Value>,
     finish_reason: Option<String>,
     closed: bool,
 }
@@ -78,6 +80,7 @@ impl Translator {
             open: None,
             calls: BTreeMap::new(),
             usage: None,
+            timings: None,
             finish_reason: None,
             closed: false,
         }
@@ -94,6 +97,10 @@ impl Translator {
 
     pub fn usage(&self) -> Option<&Value> {
         self.usage.as_ref()
+    }
+
+    pub fn timings(&self) -> Option<&Value> {
+        self.timings.as_ref()
     }
 
     pub fn is_closed(&self) -> bool {
@@ -319,6 +326,9 @@ impl Translator {
         }
         if let Some(u) = chunk.get("usage").filter(|u| u.is_object()) {
             self.usage = Some(u.clone());
+        }
+        if let Some(t) = chunk.get("timings").filter(|t| t.is_object()) {
+            self.timings = Some(t.clone());
         }
         let Some(choice) = chunk.get("choices").and_then(Value::as_array).and_then(|c| c.first()) else {
             return out;
