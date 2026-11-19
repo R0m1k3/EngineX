@@ -44,12 +44,25 @@ pub fn fake_bin() -> PathBuf {
         .unwrap_or_else(|| panic!("faux llama-server absent : lancer `cargo build -p enginex-fake-llama`"))
 }
 
+/// Port libre hors de la plage éphémère de Linux (32768-60999) : un port
+/// rendu par `bind(:0)` puis relâché pouvait être redonné par le système à une
+/// autre connexion du test avant que llama-server ne l'ouvre (AddrInUse en CI).
+/// Jamais deux fois le même dans un processus.
 pub fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    use std::sync::{Mutex, OnceLock};
+    static GIVEN: OnceLock<Mutex<std::collections::HashSet<u16>>> = OnceLock::new();
+    let mut given = GIVEN.get_or_init(Default::default).lock().unwrap();
+    for _ in 0..1000 {
+        let p = 20000 + (rand::random::<u16>() % 12000);
+        if given.contains(&p) {
+            continue;
+        }
+        if std::net::TcpListener::bind(("127.0.0.1", p)).is_ok() {
+            given.insert(p);
+            return p;
+        }
+    }
+    panic!("aucun port libre entre 20000 et 32000");
 }
 
 pub fn sha_hex(b: &[u8]) -> String {
