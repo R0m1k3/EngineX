@@ -14,8 +14,49 @@
   import Changes from './Changes.svelte';
   import Verify from './Verify.svelte';
   import Revert from './Revert.svelte';
+  import ChevronLeft from '@lucide/svelte/icons/chevron-left';
+  import Ellipsis from '@lucide/svelte/icons/ellipsis';
+  import PanelRight from '@lucide/svelte/icons/panel-right';
+  import GitBranch from '@lucide/svelte/icons/git-branch';
+  import GitMerge from '@lucide/svelte/icons/git-merge';
+  import Box from '@lucide/svelte/icons/box';
+  import Folder from '@lucide/svelte/icons/folder';
+  import SquareTerminal from '@lucide/svelte/icons/square-terminal';
+  import Eye from '@lucide/svelte/icons/eye';
+  import Globe from '@lucide/svelte/icons/globe';
+  import Pencil from '@lucide/svelte/icons/pencil';
+  import Settings2 from '@lucide/svelte/icons/settings-2';
+  import Undo2 from '@lucide/svelte/icons/undo-2';
+  import Hourglass from '@lucide/svelte/icons/hourglass';
+  import WifiOff from '@lucide/svelte/icons/wifi-off';
+  import Info from '@lucide/svelte/icons/info';
+  import CircleX from '@lucide/svelte/icons/circle-x';
+  import LoaderCircle from '@lucide/svelte/icons/loader-circle';
+  import MessageSquare from '@lucide/svelte/icons/message-square';
+  import ChevronRight from '@lucide/svelte/icons/chevron-right';
+  import Badge from '../../lib/ui/Badge.svelte';
+  import Button from '../../lib/ui/Button.svelte';
+  import IconButton from '../../lib/ui/IconButton.svelte';
+  import Icon from '../../lib/ui/Icon.svelte';
+  import Segmented from '../../lib/ui/Segmented.svelte';
+  import Select from '../../lib/ui/Select.svelte';
+  import Sheet from '../../lib/ui/Sheet.svelte';
+  import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import EmptyState from '../../lib/ui/EmptyState.svelte';
+  import { tooltip } from '../../lib/ui/tooltip';
+  import { confirmDialog } from '../../lib/ui/dialog.svelte';
+  import { toast } from '../../lib/ui/toast.svelte';
+  import PopMenu from './PopMenu.svelte';
+  import { ask } from './ask.svelte';
+  import { screen } from './phone.svelte';
 
-  let { id, changed, panel }: { id: string; changed: () => void; panel: (tab: SideTab) => void } = $props();
+  let { id, changed, panel, togglePanel, sideOpen }: {
+    id: string;
+    changed: () => void;
+    panel: (tab: SideTab) => void;
+    togglePanel: () => void;
+    sideOpen: boolean;
+  } = $props();
 
   interface Live {
     id: string | null;
@@ -47,6 +88,7 @@
   let reverting = $state<string | null>(null);
   // « Rétablir » vient d'être fait : le bouton défait le rétablissement.
   let redone = $state(false);
+  let loading = $state(true);
 
   async function loadHistory() {
     try {
@@ -58,6 +100,8 @@
       green = d.green_turn;
     } catch (e) {
       error = message(e);
+    } finally {
+      loading = false;
     }
   }
 
@@ -355,7 +399,13 @@
   }
 
   async function toGreen() {
-    if (!confirm('Remettre les fichiers dans l’état du dernier tour vérifié ?')) return;
+    if (
+      !(await confirmDialog('Les fichiers reprennent l’état du dernier tour dont la vérification a réussi.', {
+        title: 'Revenir au dernier état vert ?',
+        confirm: 'Revenir',
+      }))
+    )
+      return;
     error = '';
     try {
       await restoreGreen(id);
@@ -375,17 +425,18 @@
   }
 
   let bringing = $state(false);
-  let brought = $state('');
   async function bring() {
     bringing = true;
     error = '';
-    brought = '';
     try {
       const r = await bringBack(id);
-      brought =
-        r.result === 'merged'
-          ? `Branche ${r.branch} fusionnée dans le topic.`
-          : `La branche ${r.branch} est dans le dépôt du topic, sans fusion : ${r.reason === 'topic_dirty' ? 'le topic a des modifications non commitées' : 'la fusion a des conflits'}. Fusionnez-la depuis une session du topic.`;
+      if (r.result === 'merged') toast(`Branche ${r.branch} fusionnée dans le topic.`, 'ok');
+      else
+        toast(
+          `La branche ${r.branch} est dans le dépôt du topic, sans fusion : ${r.reason === 'topic_dirty' ? 'le topic a des modifications non commitées' : 'la fusion a des conflits'}. Fusionnez-la depuis une session du topic.`,
+          'warn',
+          0,
+        );
     } catch (e) {
       error = message(e);
     } finally {
@@ -402,156 +453,373 @@
   };
 
   async function rename() {
-    const t = prompt('Titre de la session', session?.title ?? '');
-    if (!t?.trim()) return;
+    const t = await ask({ title: 'Renommer la session', label: 'Titre', value: session?.title ?? '', confirm: 'Renommer' });
+    if (!t) return;
     try {
-      await patchSession(id, { title: t.trim() });
-      if (session) session.title = t.trim();
+      await patchSession(id, { title: t });
+      if (session) session.title = t;
       changed();
     } catch (e) {
       error = message(e);
     }
   }
+
+  // En-tête : état de la sandbox, réglages, menus.
+  const sandboxTone = $derived(sandbox.state === 'ready' ? 'ok' : sandbox.state === 'error' ? 'danger' : 'neutral');
+  const busySandbox = $derived(['creating', 'pulling', 'starting', 'restarting'].includes(sandbox.state));
+  const EFFORTS: { value: Effort; label: string }[] = [
+    { value: 'none', label: 'none' },
+    { value: 'low', label: 'low' },
+    { value: 'medium', label: 'medium' },
+    { value: 'high', label: 'high' },
+  ];
+  const EFFORT_HINT: Record<Effort, string> = {
+    none: 'Aucune réflexion : réponses les plus rapides',
+    low: 'Réflexion courte',
+    medium: 'Réflexion normale (budget du preset)',
+    high: 'Réflexion longue',
+  };
+  const modelOptions = $derived([
+    { value: '', label: `Par défaut${defaultName ? ` (${defaultName})` : ''}` },
+    ...presetList.map((p) => ({ value: String(p.id), label: `${p.name}${p.active ? ' · chargé' : ''}` })),
+  ]);
+  const modeOptions: { value: Mode; label: string }[] = [
+    { value: 'auto', label: 'Automatique' },
+    { value: 'prudent', label: 'Prudent (demande avant d’agir)' },
+  ];
+  const modelLabel = $derived(session?.preset_id == null ? defaultName || 'Modèle par défaut' : presetName(session.preset_id));
+
+  // Téléphone : menu ⋯ et feuille des réglages.
+  let moreBtn = $state<HTMLElement>();
+  let moreOpen = $state(false);
+  let settings = $state(false);
+  const moreItems = $derived([
+    { label: 'Fichiers', icon: Folder, onclick: () => panel('files') },
+    { label: 'Terminal', icon: SquareTerminal, onclick: () => panel('terminal') },
+    { label: 'Git', icon: GitBranch, onclick: () => panel('git') },
+    { label: 'Aperçu', icon: Eye, onclick: () => panel('preview') },
+    { label: 'Navigateur', icon: Globe, onclick: () => panel('browser') },
+    { label: 'Réglages de la session', icon: Settings2, onclick: () => (settings = true) },
+    { label: 'Renommer', icon: Pencil, onclick: rename },
+    ...(session?.copy_branch
+      ? [{ label: bringing ? 'Fusion…' : 'Ramener dans le topic', icon: GitMerge, onclick: bring, disabled: bringing || !!live }]
+      : []),
+  ]);
 </script>
 
-<section class="thread">
-  <header class="row head">
-    <button class="link title" title="Renommer" onclick={rename}>{session?.title ?? '…'}</button>
-    <div class="actions small">
-      {#if session?.copy_branch}
-        <span class="muted" title="Copie séparée">⎇ {session.copy_branch}</span>
-        <button class="link" onclick={bring} disabled={bringing || !!live}>{bringing ? 'Fusion…' : 'Ramener dans le topic'}</button>
-      {/if}
-      <button class="link" onclick={() => panel('files')}>Fichiers</button>
-      <button class="link" onclick={() => panel('terminal')}>Terminal</button>
-      <button class="link" onclick={() => panel('git')}>Git</button>
-      <button class="link" onclick={() => panel('preview')}>Aperçu</button>
-      <button class="link" onclick={() => panel('browser')}>Navigateur</button>
-      <span class="pill state-{sandbox.state}" title={sandbox.detail ?? ''}>{SANDBOX[sandbox.state] ?? sandbox.state}{pull}</span>
-      <label class="mode" title="Modèle de la session : changé, il est chargé au prochain message (la sandbox redémarre)">
-        Modèle
-        <select value={session?.preset_id == null ? '' : String(session.preset_id)} onchange={(e) => setPreset((e.currentTarget as HTMLSelectElement).value)}>
-          <option value="">Par défaut{defaultName ? ` (${defaultName})` : ''}</option>
-          {#each presetList as p (p.id)}
-            <option value={String(p.id)}>{p.name}{p.active ? ' · chargé' : ''}</option>
-          {/each}
-        </select>
-      </label>
-      <label class="mode" title="Jetons de réflexion avant de répondre : moins = réponses plus rapides">
-        Réflexion
-        <select value={session?.effort ?? 'medium'} onchange={(e) => setEffort((e.currentTarget as HTMLSelectElement).value as Effort)}>
-          <option value="none">Aucune (rapide)</option>
-          <option value="low">Courte</option>
-          <option value="medium">Normale</option>
-          <option value="high">Longue</option>
-        </select>
-      </label>
-      <label class="mode">
-        Approbation
-        <select value={session?.approval ?? 'auto'} onchange={(e) => setMode((e.currentTarget as HTMLSelectElement).value as Mode)}>
-          <option value="auto">Automatique</option>
-          <option value="prudent">Prudent (demande avant d’agir)</option>
-        </select>
-      </label>
-    </div>
-  </header>
+{#snippet sandboxBadge()}
+  <span class="sb" class:busy={busySandbox}>
+    <Badge tone={sandboxTone} dot title={sandbox.detail ?? undefined}>{SANDBOX[sandbox.state] ?? sandbox.state}{pull}</Badge>
+  </span>
+{/snippet}
 
-  {#if !connected}<p class="banner">Connexion au serveur perdue, reconnexion…</p>{/if}
-  {#if sandbox.detail && (sandbox.state === 'error' || sandbox.state === 'stopped' || sandbox.state === 'ready')}
-    <p class="banner" class:bad={sandbox.state === 'error'}>{sandbox.detail}</p>
-  {/if}
+{#snippet controls(big: boolean)}
+  <div class="ctl" class:big>
+    <Select label={big ? 'Modèle' : undefined} aria-label="Modèle de la session" size={big ? 'lg' : 'md'}
+      title="Modèle de la session : changé, il est chargé au prochain message (la sandbox redémarre)"
+      value={session?.preset_id == null ? '' : String(session.preset_id)} options={modelOptions}
+      onchange={(e) => setPreset((e.currentTarget as HTMLSelectElement).value)} />
+    {#if big}<p class="hint">Changé, il est chargé au prochain message (la sandbox redémarre).</p>{/if}
+  </div>
+  <div class="ctl" class:big use:tooltip={big ? null : EFFORT_HINT[session?.effort ?? 'medium']}>
+    <span class="lbl">Réflexion</span>
+    <Segmented label="Réflexion" size={big ? 'lg' : 'md'} value={session?.effort ?? 'medium'} options={EFFORTS} onchange={(v) => setEffort(v)} />
+    {#if big}<p class="hint">{EFFORT_HINT[session?.effort ?? 'medium']}. Moins = réponses plus rapides.</p>{/if}
+  </div>
+  <div class="ctl" class:big>
+    {#if !big}<span class="lbl">Approbation</span>{/if}
+    <Select label={big ? 'Approbation' : undefined} aria-label="Approbation" size={big ? 'lg' : 'md'}
+      value={session?.approval ?? 'auto'} options={modeOptions}
+      onchange={(e) => setMode((e.currentTarget as HTMLSelectElement).value as Mode)} />
+  </div>
+{/snippet}
 
-  {#if wait}
-    <p class="banner small row">
-      <span>
-        {#if wait.swapping}Chargement du modèle « {presetName(wait.swapping)} »…
-        {:else if wait.running.length}En file d’attente{wait.position > 1 ? ` (${wait.position}e)` : ''} : le modèle sert
-          {#each wait.running as r, i (i)}{i ? ', ' : ''}« {r.label} » {ago(r.since)}{/each}{wait.needs_swap ? ', puis changement de modèle' : ''}.
-        {:else}En file d’attente{wait.position > 1 ? ` (${wait.position}e)` : ''}…{/if}
+<section class="thread" class:phone={screen.phone}>
+  {#if screen.phone}
+    <header class="ph-head">
+      <IconButton icon={ChevronLeft} label="Retour aux sessions" size="lg" href="#sessions" tip="bottom" />
+      <h1 class="ell">{session?.title ?? '…'}</h1>
+      <span bind:this={moreBtn} class="anchor">
+        <IconButton icon={Ellipsis} label="Outils et réglages de la session" size="lg" tip="bottom" onclick={() => (moreOpen = !moreOpen)} />
       </span>
-      {#each wait.running.filter((r) => r.session_id && r.priority > 0) as r (r.session_id)}
-        <button class="link" onclick={() => interruptOther(r.session_id!)}>Interrompre « {r.label} »</button>
-      {/each}
-    </p>
+    </header>
+    <div class="chips">
+      {@render sandboxBadge()}
+      <button class="chip" onclick={() => (settings = true)}><Icon icon={Box} size={14} />{modelLabel}</button>
+      <button class="chip" onclick={() => (settings = true)}>Réflexion {session?.effort ?? 'medium'}</button>
+      <button class="chip" onclick={() => (settings = true)}>{session?.approval === 'prudent' ? 'Prudent' : 'Automatique'}</button>
+      {#if session?.copy_branch}<span class="chip static"><Icon icon={GitBranch} size={14} />{session.copy_branch}</span>{/if}
+    </div>
+    <PopMenu bind:open={moreOpen} anchor={moreBtn} items={moreItems} label="Outils et réglages de la session" />
+    <Sheet bind:open={settings} title="Réglages de la session">
+      <div class="settings">{@render controls(true)}</div>
+    </Sheet>
+  {:else}
+    <header class="head">
+      <div class="r1">
+        <button class="title" onclick={rename} use:tooltip={'Renommer'}><h1 class="ell">{session?.title ?? '…'}</h1></button>
+        {#if session?.copy_branch}
+          <span use:tooltip={'Copie séparée'}><Badge><Icon icon={GitBranch} size={14} />{session.copy_branch}</Badge></span>
+          <Button size="sm" variant="ghost" icon={GitMerge} busy={bringing} disabled={bringing || !!live} onclick={bring}>
+            {bringing ? 'Fusion…' : 'Ramener dans le topic'}
+          </Button>
+        {/if}
+        {@render sandboxBadge()}
+        <IconButton icon={PanelRight} label={sideOpen ? 'Fermer le panneau' : 'Fichiers, terminal, Git, aperçu, navigateur'} pressed={sideOpen} tip="left" onclick={togglePanel} />
+      </div>
+      <div class="r2">{@render controls(false)}</div>
+    </header>
   {/if}
-  {#if brought}<p class="banner small">{brought}</p>{/if}
-  {#if session?.undo}
-    <p class="banner small row">
-      <span>{redone ? 'Fichiers rétablis.' : 'Fichiers remis dans un état antérieur.'}</span>
-      <button class="link" onclick={redo}>{redone ? 'Annuler le rétablissement' : 'Rétablir'}</button>
-    </p>
-  {/if}
-  {#if session?.pending_note}<p class="banner small">Une note sur ce retour arrière sera jointe à votre prochain message pour Codex.</p>{/if}
-  {#if session?.pending_revert}<p class="banner small">Retour de conversation en attente : il sera appliqué à Codex au prochain message.</p>{/if}
 
-  <div class="scroll" bind:this={scroller}>
-    {#if more}<button class="link small" onclick={older}>Messages plus anciens</button>{/if}
-    {#if !history.length && !live}
-      <p class="muted empty">Écrivez une demande ci-dessous. La sandbox démarre au premier message ; elle s’arrête seule après un moment sans activité.</p>
+  {#snippet strip(icon: any, tone: string, body: any)}
+    <div class="strip {tone}" role="status"><Icon {icon} size={16} /><div class="grow">{@render body()}</div></div>
+  {/snippet}
+
+  <div class="strips">
+    {#if !connected}
+      {#snippet lost()}Connexion au serveur perdue, reconnexion…{/snippet}
+      {@render strip(WifiOff, 'warn', lost)}
     {/if}
-    {#each rows as { it, end } (it.item_id)}
-      {#if it.kind === 'userMessage' && AUTO_LABEL[autoOrigin(it) ?? '']}
-        <details class="fix">
-          <summary class="small">{AUTO_LABEL[autoOrigin(it) ?? '']}</summary>
-          <div class="pre small">{it.data.text}</div>
-        </details>
-      {:else}
-        <Item item={it.data} sessionId={id} />
-      {/if}
-      {#if it.kind === 'userMessage' && it.turn_id && (autoOrigin(it) ?? 'user') === 'user' && !live}
-        {@const t = turns[it.turn_id]}
-        <div class="msg-actions small">
-          <button class="link" disabled={!t?.has_snapshot} title={t?.has_snapshot ? '' : 'Instantané absent : retour arrière indisponible pour ce message'}
-            onclick={() => (reverting = it.turn_id)}>Revenir avant ce message</button>
-        </div>
-      {/if}
-      {#if end}
-        {#if end.changes?.files.length}
-          <Changes sessionId={id} turnId={end.id} changes={end.changes} canUndo={!!end.has_snapshot && !!end.has_post && !live} />
-        {/if}
-        {#if end.verifications?.length}
-          <Verify checks={end.verifications} green={green === end.id}
-            rerun={live ? null : rerun} toGreen={green && green !== end.id && !live ? toGreen : null} />
-        {/if}
-        {#if end.status === 'failed'}<p class="banner bad small">Tour en échec : {end.error ?? 'erreur inconnue'}
-          {#if end.error?.includes('max_output_tokens')}<br />Le modèle a écrit jusqu’à la limite (souvent une réflexion qui tourne en rond).
-            Réglages du preset : « Réflexion max par réponse » et « Sortie max par réponse » (Modèles → Presets).{/if}</p>
-        {:else if end.status === 'interrupted'}<p class="muted small">Tour interrompu.</p>{/if}
-        {#if tokens(end.usage)}<p class="muted tiny">{tokens(end.usage)}</p>{/if}
-      {/if}
-    {/each}
-    {#each liveItems as it (it.id)}
-      <Item item={it} sessionId={id} />
-    {/each}
-    {#if live}<p class="muted small working">Codex travaille…{tokens(live.usage) ? ` ${tokens(live.usage)}` : ''}</p>{/if}
-    {#each requests as r (r.rid)}
-      <Approval req={r} sessionId={id} />
-    {/each}
-    {#if notice}<p class="banner small">{notice}</p>{/if}
+    {#if sandbox.detail && (sandbox.state === 'error' || sandbox.state === 'stopped' || sandbox.state === 'ready')}
+      {#snippet detail()}<span class="pre">{sandbox.detail}</span>{/snippet}
+      {@render strip(sandbox.state === 'error' ? CircleX : Info, sandbox.state === 'error' ? 'danger' : '', detail)}
+    {/if}
+    {#if wait}
+      {#snippet waiting()}
+        <span>
+          {#if wait!.swapping}Chargement du modèle « {presetName(wait!.swapping)} »…
+          {:else if wait!.running.length}En file d’attente{wait!.position > 1 ? ` (${wait!.position}e)` : ''} : le modèle sert
+            {#each wait!.running as r, i (i)}{i ? ', ' : ''}« {r.label} » {ago(r.since)}{/each}{wait!.needs_swap ? ', puis changement de modèle' : ''}.
+          {:else}En file d’attente{wait!.position > 1 ? ` (${wait!.position}e)` : ''}…{/if}
+        </span>
+        {#each wait!.running.filter((r) => r.session_id && r.priority > 0) as r (r.session_id)}
+          <Button size="sm" variant="ghost" onclick={() => interruptOther(r.session_id!)}>Interrompre « {r.label} »</Button>
+        {/each}
+      {/snippet}
+      {@render strip(Hourglass, '', waiting)}
+    {/if}
+    {#if session?.undo}
+      {#snippet undo()}
+        <span>{redone ? 'Fichiers rétablis.' : 'Fichiers remis dans un état antérieur.'}</span>
+        <Button size="sm" variant="ghost" onclick={redo}>{redone ? 'Annuler le rétablissement' : 'Rétablir'}</Button>
+      {/snippet}
+      {@render strip(Undo2, '', undo)}
+    {/if}
+    {#if session?.pending_note}
+      {#snippet note()}Une note sur ce retour arrière sera jointe à votre prochain message pour Codex.{/snippet}
+      {@render strip(Info, '', note)}
+    {/if}
+    {#if session?.pending_revert}
+      {#snippet rev()}Retour de conversation en attente : il sera appliqué à Codex au prochain message.{/snippet}
+      {@render strip(Info, '', rev)}
+    {/if}
   </div>
 
-  {#if error}<p class="error small">{error}</p>{/if}
+  <div class="scroll" bind:this={scroller}>
+    <div class="in">
+      {#if more}<div class="older"><Button size="sm" variant="ghost" onclick={older}>Messages plus anciens</Button></div>{/if}
+      {#if loading && !history.length && !live}
+        <div class="sk"><Skeleton height="56px" width="60%" /><Skeleton lines={3} /><Skeleton height="40px" /><Skeleton lines={2} /></div>
+      {:else if !history.length && !live}
+        <div class="empty">
+          <EmptyState icon={MessageSquare} title="Écrivez votre première demande"
+            text="La sandbox démarre au premier message ; elle s’arrête seule après un moment sans activité." />
+        </div>
+      {/if}
+      {#each rows as { it, end } (it.item_id)}
+        {#if it.kind === 'userMessage' && AUTO_LABEL[autoOrigin(it) ?? '']}
+          <details class="auto">
+            <summary><Icon icon={ChevronRight} size={16} class="chev" />{AUTO_LABEL[autoOrigin(it) ?? '']}</summary>
+            <div class="pre">{it.data.text}</div>
+          </details>
+        {:else}
+          <Item item={it.data} sessionId={id} />
+        {/if}
+        {#if it.kind === 'userMessage' && it.turn_id && (autoOrigin(it) ?? 'user') === 'user' && !live}
+          {@const t = turns[it.turn_id]}
+          <div class="msg-actions">
+            <span use:tooltip={t?.has_snapshot ? null : 'Instantané absent : retour arrière indisponible pour ce message'}>
+              <Button size="sm" variant="ghost" icon={Undo2} disabled={!t?.has_snapshot} onclick={() => (reverting = it.turn_id)}>Revenir avant ce message</Button>
+            </span>
+          </div>
+        {/if}
+        {#if end}
+          {#if end.changes?.files.length}
+            <Changes sessionId={id} turnId={end.id} changes={end.changes} canUndo={!!end.has_snapshot && !!end.has_post && !live} />
+          {/if}
+          {#if end.verifications?.length}
+            <Verify checks={end.verifications} green={green === end.id}
+              rerun={live ? null : rerun} toGreen={green && green !== end.id && !live ? toGreen : null} />
+          {/if}
+          {#if end.status === 'failed'}
+            <div class="failed" role="alert">
+              <div class="fh"><Icon icon={CircleX} size={18} />Tour en échec</div>
+              <p class="pre">{end.error ?? 'erreur inconnue'}</p>
+              {#if end.error?.includes('max_output_tokens')}
+                <p class="muted">Le modèle a écrit jusqu’à la limite (souvent une réflexion qui tourne en rond).
+                  Réglages du preset : « Réflexion max par réponse » et « Sortie max par réponse » (<a href="#models/presets">Modèles → Presets</a>).</p>
+              {/if}
+            </div>
+          {/if}
+          {#if end.status === 'interrupted' || tokens(end.usage)}
+            <p class="foot num">
+              {#if end.status === 'interrupted'}<span>Tour interrompu.</span>{/if}
+              {#if tokens(end.usage)}<span>{tokens(end.usage)}</span>{/if}
+            </p>
+          {/if}
+        {/if}
+      {/each}
+      {#each liveItems as it (it.id)}
+        <Item item={it} sessionId={id} />
+      {/each}
+      {#if live}
+        <p class="working num"><Icon icon={LoaderCircle} size={16} class="spin" />Codex travaille…{tokens(live.usage) ? ` ${tokens(live.usage)}` : ''}</p>
+      {/if}
+      {#each requests as r (r.rid)}
+        <Approval req={r} sessionId={id} />
+      {/each}
+      {#if notice}<div class="notice-l" role="status"><Icon icon={Info} size={16} /><span class="pre">{notice}</span></div>{/if}
+    </div>
+  </div>
+
+  {#if error}<p class="err" role="alert"><Icon icon={CircleX} size={16} />{error}</p>{/if}
   <Composer sessionId={id} running={!!live} disabled={session?.archived ?? false} {send} {interrupt} bind:text={draft} />
   {#if reverting}<Revert close={() => (reverting = null)} choose={revert} />{/if}
 </section>
 
 <style>
-  .thread { display: flex; flex-direction: column; gap: var(--s3); min-height: 0; flex: 1; }
-  .head { gap: var(--s3); flex-wrap: wrap; }
-  .title { font-size: 17px; font-weight: 600; color: var(--text); }
-  .scroll { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: var(--s3); padding-right: var(--s2); min-height: 0; }
-  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 0 var(--s2); }
-  .pill.state-ready { border-color: var(--accent); color: var(--accent); }
-  .pill.state-error { border-color: var(--error); color: var(--error); }
-  .mode { flex-direction: row; align-items: center; gap: var(--s2); }
-  .banner { border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2) var(--s3); margin: 0; white-space: pre-wrap; }
-  .banner.bad { border-color: var(--error); color: var(--error); }
-  .tiny { font-size: var(--fs-sm); margin: 0; }
-  .empty { margin-top: var(--s6); text-align: center; }
-  .working { margin: 0; }
-  .msg-actions { align-self: flex-end; margin-top: calc(-1 * var(--s2)); }
-  .fix { border-left: 2px solid var(--warn); padding-left: var(--s3); }
-  .fix summary { cursor: pointer; }
-  .fix .pre { white-space: pre-wrap; margin-top: var(--s1); max-height: 320px; overflow: auto; }
-  .banner.row { justify-content: space-between; gap: var(--s3); }
+  .thread { display: flex; flex-direction: column; min-height: 0; flex: 1; background: var(--bg); }
+
+  /* En-tête bureau */
+  .head { padding: var(--s2) var(--s3) var(--s2) var(--s5); border-bottom: 1px solid var(--line); flex: none; display: flex; flex-direction: column; gap: var(--s2); }
+  .r1 { display: flex; align-items: center; gap: var(--s3); min-height: 36px; }
+  .r2 { display: flex; align-items: center; gap: var(--s2) var(--s5); flex-wrap: wrap; }
+  .title {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    justify-content: flex-start;
+    height: 32px;
+    min-height: 0;
+    align-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: text;
+    filter: none;
+  }
+  .title:hover h1 { text-decoration: underline dotted var(--faint); text-underline-offset: 4px; }
+  h1 { font-size: var(--fs-md); font-weight: 600; margin: 0; }
+  .ctl { display: flex; align-items: center; gap: var(--s2); font-size: var(--fs-sm); color: var(--muted); }
+  .ctl :global(select) { max-width: 240px; }
+  .lbl { white-space: nowrap; }
+  .sb { display: inline-flex; }
+  .sb.busy :global(.badge-ui) { animation: breathe 1.6s ease-in-out infinite; }
+  @keyframes breathe { 50% { opacity: 0.6; } }
+
+  /* Bandeaux sous l'en-tête */
+  .strips { flex: none; }
+  .strip {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    padding: var(--s1) var(--s5);
+    min-height: 36px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    font-size: var(--fs-sm);
+    color: var(--text);
+  }
+  .strip > :global(.ui-icon) { color: var(--faint); flex: none; }
+  .strip .grow { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; justify-content: space-between; }
+  .strip.warn { background: var(--warn-soft); }
+  .strip.warn > :global(.ui-icon) { color: var(--warn); }
+  .strip.danger { background: var(--danger-soft); }
+  .strip.danger > :global(.ui-icon) { color: var(--danger); }
+  .pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  /* Fil */
+  .scroll { flex: 1; min-height: 0; overflow: auto; padding: var(--s6) var(--s6) var(--s4); overscroll-behavior: contain; }
+  .in { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--s4); }
+  /* Appels d'outils consécutifs : une seule pile à filets. */
+  .in :global(.toolrow + .toolrow) { margin-top: calc(-1 * var(--s4) - 1px); border-top-left-radius: 0; border-top-right-radius: 0; }
+  .in :global(.toolrow:has(+ .toolrow)) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+  .older { display: flex; justify-content: center; }
+  .sk { display: flex; flex-direction: column; gap: var(--s4); }
+  .sk > :global(:first-child) { align-self: flex-end; }
+  .empty { display: grid; place-items: center; padding: var(--s8) 0; }
+  .msg-actions { align-self: flex-end; margin-top: calc(-1 * var(--s3)); opacity: 0; transition: opacity 0.12s; }
+  :global(.user:hover) + .msg-actions, .msg-actions:hover, .msg-actions:focus-within { opacity: 1; }
+  .auto { border-left: 2px solid var(--warn); padding-left: var(--s3); font-size: var(--fs-sm); color: var(--muted); }
+  .auto summary { list-style: none; display: flex; align-items: center; gap: var(--s2); min-height: 30px; cursor: pointer; }
+  .auto summary::-webkit-details-marker { display: none; }
+  .auto summary:hover { color: var(--text); }
+  .auto :global(.chev) { color: var(--faint); transition: transform 0.12s; flex: none; }
+  .auto[open] :global(.chev) { transform: rotate(90deg); }
+  .auto .pre { max-height: 320px; overflow: auto; padding: var(--s1) 0 var(--s2) var(--s6); }
+  .failed { border: 1px solid var(--danger); background: var(--danger-soft); border-radius: var(--r); padding: var(--s3) var(--s4); display: flex; flex-direction: column; gap: var(--s2); font-size: var(--fs-sm); }
+  .failed p { margin: 0; }
+  .fh { display: flex; align-items: center; gap: var(--s2); font-weight: 600; font-size: var(--fs-md); }
+  .fh :global(.ui-icon) { color: var(--danger); }
+  .foot { display: flex; gap: var(--s3); flex-wrap: wrap; margin: calc(-1 * var(--s2)) 0 0; font-size: var(--fs-xs); color: var(--faint); }
+  .working { display: flex; align-items: center; gap: var(--s2); margin: 0; font-size: var(--fs-sm); color: var(--muted); }
+  .working :global(.spin) { color: var(--accent); animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .notice-l { display: flex; gap: var(--s2); align-items: flex-start; border: 1px solid var(--line-strong); border-radius: var(--r); padding: var(--s2) var(--s3); font-size: var(--fs-sm); background: var(--panel); }
+  .notice-l :global(.ui-icon) { color: var(--faint); flex: none; margin-top: 2px; }
+  .err { display: flex; align-items: center; gap: var(--s2); margin: 0 auto; padding: var(--s2) var(--s6) 0; width: 100%; max-width: calc(760px + 2 * var(--s6)); color: var(--danger); font-size: var(--fs-sm); }
+  .err :global(.ui-icon) { flex: none; }
+
+  /* Téléphone */
+  .ph-head {
+    display: flex;
+    align-items: center;
+    gap: var(--s1);
+    min-height: 56px;
+    padding: var(--safe-top) calc(var(--s1) + var(--safe-right)) 0 calc(var(--s1) + var(--safe-left));
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    flex: none;
+  }
+  .ph-head h1 { flex: 1; min-width: 0; font-size: var(--fs-md); }
+  .anchor { display: inline-flex; }
+  .chips { display: flex; gap: var(--s2); overflow-x: auto; scrollbar-width: none; padding: var(--s2) var(--s4); border-bottom: 1px solid var(--line); flex: none; align-items: center; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    min-height: 0;
+    padding: 0 var(--s3);
+    border: 0;
+    border-radius: var(--r);
+    background: var(--raised);
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--fs-sm);
+    font-weight: 400;
+    white-space: nowrap;
+    flex: none;
+    filter: none;
+    cursor: pointer;
+  }
+  .chip.static { cursor: default; }
+  .chips .sb :global(.badge-ui) { height: 32px; font-size: var(--fs-sm); }
+  .settings { display: flex; flex-direction: column; gap: var(--s5); padding: var(--s4) calc(var(--s4) + var(--safe-right)) var(--s6) calc(var(--s4) + var(--safe-left)); }
+  .ctl.big { flex-direction: column; align-items: stretch; gap: var(--s2); color: var(--muted); }
+  .ctl.big :global(select) { max-width: none; width: 100%; }
+  .ctl.big :global(.seg) { display: flex; }
+  .ctl.big :global(.seg button) { flex: 1; }
+  .ctl.big .hint { margin: 0; color: var(--faint); font-size: var(--fs-xs); }
+  .phone .scroll { padding: var(--s4) calc(var(--s4) + var(--safe-right)) var(--s4) calc(var(--s4) + var(--safe-left)); }
+  .phone .msg-actions { opacity: 1; }
+  .phone .err { padding: var(--s2) var(--s4) 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .working :global(.spin), .sb.busy :global(.badge-ui) { animation: none; }
+  }
 </style>

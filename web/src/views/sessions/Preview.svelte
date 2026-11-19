@@ -1,5 +1,14 @@
 <script lang="ts">
   import { message, previewOpen, previewStatus, type PreviewStatus } from '../../lib/api';
+  import RotateCw from '@lucide/svelte/icons/rotate-cw';
+  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import ExternalLink from '@lucide/svelte/icons/external-link';
+  import AppWindow from '@lucide/svelte/icons/app-window';
+  import IconButton from '../../lib/ui/IconButton.svelte';
+  import Icon from '../../lib/ui/Icon.svelte';
+  import { tooltip } from '../../lib/ui/tooltip';
+  import EmptyState from '../../lib/ui/EmptyState.svelte';
+  import Skeleton from '../../lib/ui/Skeleton.svelte';
 
   let { sessionId }: { sessionId: string } = $props();
 
@@ -43,42 +52,53 @@
 </script>
 
 <div class="preview">
-  <div class="row small top">
+  <div class="tb">
     {#if st?.running && st.ports.length}
-      <span class="muted">Port</span>
-      {#each st.ports as p (p)}
-        <button class="link" class:on={p === port} onclick={() => show(p)}>{p}</button>
-      {/each}
+      <span class="faint">Port</span>
+      <div class="ports" role="group" aria-label="Port de l’app">
+        {#each st.ports as p (p)}
+          <button class="port num" aria-pressed={p === port} onclick={() => show(p)}>{p}</button>
+        {/each}
+      </div>
     {/if}
-    <span class="grow"></span>
+    <span class="grow url ell" title={url}>{url}</span>
     {#if url}
-      <button class="link" onclick={() => show(port!)} title="Recharger l'app">Recharger</button>
-      <a class="link" href={url} target="_blank" rel="noopener">Nouvel onglet ↗</a>
+      <IconButton icon={RotateCw} label="Recharger l’app" size="sm" onclick={() => show(port!)} />
+      <a class="ext" href={url} target="_blank" rel="noopener" aria-label="Ouvrir dans un nouvel onglet" use:tooltip={'Ouvrir dans un nouvel onglet'}><Icon icon={ExternalLink} size={16} /></a>
     {/if}
-    <button class="link" onclick={load}>Actualiser</button>
+    <IconButton icon={RefreshCw} label="Relire les ports" size="sm" tip="left" onclick={load} />
   </div>
-  {#if error}<p class="error small">{error}</p>{/if}
-  {#if st && !st.enabled}
-    <p class="muted small">Aperçu désactivé sur ce serveur (ENGINEX_PREVIEW_BIND=off).</p>
+  {#if error}<p class="error small pad">{error}</p>{/if}
+  {#if !st && !error}<div class="pad"><Skeleton lines={3} /></div>
+  {:else if st && !st.enabled}
+    <div class="pad"><EmptyState icon={AppWindow} title="Aperçu désactivé" text="L’aperçu est désactivé sur ce serveur (ENGINEX_PREVIEW_BIND=off)." /></div>
   {:else if st && !st.running}
-    <p class="muted small">La sandbox est arrêtée. Lancez l’app dans la session (par exemple « lance le serveur de dev »), elle apparaîtra ici.</p>
+    <div class="pad"><EmptyState icon={AppWindow} title="Sandbox arrêtée" text="Lancez l’app dans la session (par exemple « lance le serveur de dev ») : elle apparaîtra ici." /></div>
   {:else if st && !st.ports.length}
-    <p class="muted small">Aucune app n’écoute dans la sandbox pour l’instant. Demandez à l’IA de démarrer le serveur de dev, ou lancez-le dans le Terminal.</p>
+    <div class="pad"><EmptyState icon={AppWindow} title="Aucune app ne tourne" text="Aucune app n’écoute dans la sandbox pour l’instant. Demandez à l’IA de démarrer le serveur de dev, ou lancez-le dans le Terminal." /></div>
   {:else if st?.error}
-    <p class="error small">{st.error}</p>
+    <p class="error small pad">{st.error}</p>
   {/if}
   {#if url}
     {#key frame}
       <iframe title="Aperçu de l'app" src={url}></iframe>
     {/key}
-    <p class="muted small">Servie sur une adresse à part : l’app n’a pas accès à EngineX. Un aperçu à la fois par navigateur.</p>
+    <p class="note">Servie sur une adresse à part : l’app n’a pas accès à EngineX. Un aperçu à la fois par navigateur.</p>
   {/if}
 </div>
 
 <style>
-  .preview { display: flex; flex-direction: column; gap: var(--s2); height: 100%; min-height: 0; }
-  .top { gap: var(--s2); flex-wrap: wrap; align-items: center; }
-  .grow { flex: 1; }
-  .on { font-weight: 600; text-decoration: underline; }
-  iframe { flex: 1; min-height: 240px; width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  .preview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .tb { display: flex; align-items: center; gap: var(--s2); min-height: 36px; padding: 0 var(--s1) 0 var(--s3); border-bottom: 1px solid var(--line); font-size: var(--fs-sm); flex: none; }
+  .ports { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--r); overflow: hidden; }
+  .port { height: 26px; min-height: 0; padding: 0 var(--s2); border: 0; border-radius: 0; background: none; color: var(--muted); font: inherit; font-size: var(--fs-sm); font-weight: 400; filter: none; cursor: pointer; }
+  .port + .port { border-left: 1px solid var(--line-strong); }
+  .port[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .ext { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r); color: var(--muted); }
+  .ext:hover { background: var(--raised); color: var(--text); }
+  .url { color: var(--faint); font-family: var(--mono); font-size: var(--fs-xs); }
+  .pad { margin: 0; padding: var(--s3) var(--s4); }
+  iframe { flex: 1; min-height: 240px; width: 100%; border: 0; background: #fff; }
+  .note { margin: 0; padding: var(--s2) var(--s3); border-top: 1px solid var(--line); font-size: var(--fs-xs); color: var(--faint); flex: none; }
+  @media (max-width: 767px) { .port { height: 40px; padding: 0 var(--s3); } }
 </style>

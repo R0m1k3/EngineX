@@ -4,6 +4,9 @@
   import { FitAddon } from '@xterm/addon-fit';
   import '@xterm/xterm/css/xterm.css';
   import { onThemeChange, token, isDark } from '../../lib/ui/theme.svelte';
+  import RotateCw from '@lucide/svelte/icons/rotate-cw';
+  import Button from '../../lib/ui/Button.svelte';
+  import StatusDot from '../../lib/ui/StatusDot.svelte';
 
   let { sessionId }: { sessionId: string } = $props();
 
@@ -126,18 +129,20 @@
 </script>
 
 <div class="terminal">
-  <div class="row small">
-    <span class="muted">
-      {phase === 'ready' ? 'Shell dans la sandbox de la session' : phase === 'closed' ? 'Terminal fermé' : 'Connexion…'}
+  <div class="tb">
+    <StatusDot kind={phase === 'ready' ? 'ok' : phase === 'closed' ? 'off' : 'warn'} />
+    <span class="grow">
+      {phase === 'ready' ? 'Shell dans la sandbox de la session' : phase === 'closed' ? 'Terminal fermé' : phase === 'starting' ? 'Démarrage de la sandbox…' : 'Connexion…'}
     </span>
-    {#if phase === 'closed'}<button class="link" onclick={connect}>Rouvrir</button>{/if}
+    {#if phase === 'closed'}<Button size="sm" icon={RotateCw} onclick={connect}>Rouvrir</Button>{/if}
   </div>
   <div class="xterm-host" bind:this={host}></div>
-  <p class="tiny muted">Un seul terminal par session : en ouvrir un autre ferme celui-ci. Les secrets affichés sont masqués.</p>
+  <p class="note">Un seul terminal par session : en ouvrir un autre ferme celui-ci. Les secrets affichés sont masqués.</p>
 </div>
 
 <style>
-  .terminal { display: flex; flex-direction: column; gap: var(--s2); height: 100%; min-height: 0; }
-  .xterm-host { flex: 1; min-height: 240px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s1); }
-  .tiny { font-size: var(--fs-sm); margin: 0; }
+  .terminal { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
+  .tb { display: flex; align-items: center; gap: var(--s2); min-height: 36px; padding: 0 var(--s2) 0 var(--s3); border-bottom: 1px solid var(--line); background: var(--panel); font-size: var(--fs-sm); color: var(--muted); flex: none; }
+  .xterm-host { flex: 1; min-height: 240px; background: var(--bg); padding: var(--s2) 0 0 var(--s3); }
+  .note { margin: 0; padding: var(--s2) var(--s3); border-top: 1px solid var(--line); background: var(--panel); font-size: var(--fs-xs); color: var(--faint); flex: none; }
 </style>

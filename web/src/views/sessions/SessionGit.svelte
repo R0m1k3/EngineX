@@ -1,5 +1,17 @@
 <script lang="ts">
   import { message, sessionCommit, sessionGit, sessionPullRequest, sessionPush, type SessionGit } from '../../lib/api';
+  import GitBranch from '@lucide/svelte/icons/git-branch';
+  import GitCommit from '@lucide/svelte/icons/git-commit-horizontal';
+  import Upload from '@lucide/svelte/icons/upload';
+  import GitPullRequest from '@lucide/svelte/icons/git-pull-request';
+  import Button from '../../lib/ui/Button.svelte';
+  import Input from '../../lib/ui/Input.svelte';
+  import Textarea from '../../lib/ui/Textarea.svelte';
+  import Badge from '../../lib/ui/Badge.svelte';
+  import Icon from '../../lib/ui/Icon.svelte';
+  import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import EmptyState from '../../lib/ui/EmptyState.svelte';
+  import { toast } from '../../lib/ui/toast.svelte';
 
   let { sessionId }: { sessionId: string } = $props();
 
@@ -25,6 +37,7 @@
     notice = '';
     try {
       notice = await f();
+      toast(notice, 'ok');
     } catch (e) {
       error = message(e);
     } finally {
@@ -54,42 +67,59 @@
 </script>
 
 <div class="git">
-  {#if !st}<p class="muted small">Chargement…</p>
+  {#if !st}<div class="sec"><Skeleton lines={4} /></div>
   {:else if !st.git}
-    <p class="muted small">Le dossier de cette session n’est pas un dépôt git (lancez <code>git init</code> dans le terminal, ou demandez-le à Codex).</p>
+    <div class="sec">
+      <EmptyState icon={GitBranch} title="Pas de dépôt git"
+        text="Le dossier de cette session n’est pas un dépôt git : lancez « git init » dans le terminal, ou demandez-le à Codex." />
+    </div>
   {:else}
-    <p class="small">
-      Branche <code>{st.branch ?? 'HEAD détachée'}</code>
-      {#if st.ahead}<span class="muted"> · {st.ahead} commit(s) à pousser</span>{/if}
-    </p>
-    <p class="muted small">{st.origin ? `origin : ${st.origin}` : 'Pas de remote origin.'}</p>
+    <div class="sec head">
+      <div class="br"><Icon icon={GitBranch} size={16} /><code>{st.branch ?? 'HEAD détachée'}</code>
+        {#if st.ahead}<Badge tone="warn">{st.ahead} commit{st.ahead > 1 ? 's' : ''} à pousser</Badge>{/if}
+      </div>
+      <p class="faint ell" title={st.origin ?? undefined}>{st.origin ? `origin : ${st.origin}` : 'Pas de remote origin.'}</p>
+    </div>
 
-    <label>Message du commit (tout le dossier)
-      <textarea rows="3" bind:value={msg} placeholder="Ce qui a changé"></textarea>
-    </label>
-    <button onclick={commit} disabled={!msg.trim() || !!busy}>{busy === 'commit' ? 'Validation…' : 'Valider (commit)'}</button>
-
-    {#if st.origin}
-      <button class="secondary" onclick={push} disabled={!!busy || !st.branch}>{busy === 'push' ? 'Push…' : 'Pousser'}</button>
-    {/if}
+    <div class="sec">
+      <Textarea label="Message du commit (tout le dossier)" rows={3} bind:value={msg} placeholder="Ce qui a changé" />
+      <div class="acts">
+        <Button variant="primary" icon={GitCommit} onclick={commit} disabled={!msg.trim() || !!busy} busy={busy === 'commit'}>
+          {busy === 'commit' ? 'Validation…' : 'Valider (commit)'}
+        </Button>
+        {#if st.origin}
+          <Button icon={Upload} onclick={push} disabled={!!busy || !st.branch} busy={busy === 'push'}>{busy === 'push' ? 'Push…' : 'Pousser'}</Button>
+        {/if}
+      </div>
+    </div>
 
     {#if st.forge}
-      <h3>Pull request ({st.forge === 'github' ? 'GitHub' : 'Gitea'})</h3>
-      <p class="muted small">Pousse la branche puis ouvre la pull request vers la branche par défaut du dépôt.</p>
-      <label>Titre <input bind:value={title} /></label>
-      <label>Description <textarea rows="4" bind:value={body}></textarea></label>
-      <button onclick={pr} disabled={!title.trim() || !!busy}>{busy === 'pr' ? 'Création…' : 'Créer la pull request'}</button>
+      <div class="sec">
+        <h3><Icon icon={GitPullRequest} size={16} />Pull request ({st.forge === 'github' ? 'GitHub' : 'Gitea'})</h3>
+        <p class="muted">Pousse la branche puis ouvre la pull request vers la branche par défaut du dépôt.</p>
+        <Input label="Titre" bind:value={title} />
+        <Textarea label="Description" rows={4} bind:value={body} />
+        <div class="acts">
+          <Button icon={GitPullRequest} onclick={pr} disabled={!title.trim() || !!busy} busy={busy === 'pr'}>{busy === 'pr' ? 'Création…' : 'Créer la pull request'}</Button>
+        </div>
+      </div>
     {/if}
   {/if}
-  {#if error}<p class="error small pre">{error}</p>{/if}
-  {#if notice}<p class="small pre">{notice}</p>{/if}
+  {#if error}<p class="error pre sec" role="alert">{error}</p>{/if}
+  {#if notice.includes('://')}<p class="pre sec ok-note">{notice}</p>{/if}
 </div>
 
 <style>
-  .git { display: flex; flex-direction: column; gap: var(--s2); overflow: auto; height: 100%; }
-  .git > button { align-self: flex-start; }
-  h3 { margin: var(--s3) 0 0; }
-  textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s2); font: inherit; }
-  .pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .git { display: flex; flex-direction: column; overflow: auto; height: 100%; font-size: var(--fs-sm); }
+  .sec { display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); border-bottom: 1px solid var(--line); margin: 0; }
+  .head { gap: var(--s1); }
+  .br { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; color: var(--text); }
+  .br :global(.ui-icon) { color: var(--faint); }
+  .acts { display: flex; gap: var(--s2); flex-wrap: wrap; }
+  h3 { display: flex; align-items: center; gap: var(--s2); margin: 0; font-size: var(--fs-md); }
+  h3 :global(.ui-icon) { color: var(--faint); }
   p { margin: 0; }
+  .pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ok-note { color: var(--muted); }
+  .error { border-bottom: 0; }
 </style>
