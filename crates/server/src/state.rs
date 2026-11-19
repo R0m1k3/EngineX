@@ -90,6 +90,7 @@ pub(crate) struct Inner {
     pub board_lock: tokio::sync::Mutex<()>,
     /// Crons en cours d'exécution.
     pub crons: crate::crons::Running,
+    pub agents: crate::agents::Agents,
     /// Laissez-passer de l'aperçu des apps.
     pub previews: crate::preview::Grants,
     /// Onglets des sessions sur le navigateur de la stack.
@@ -144,6 +145,7 @@ impl AppState {
             memory_lock: tokio::sync::Mutex::new(()),
             board_lock: tokio::sync::Mutex::new(()),
             crons: Default::default(),
+            agents: Default::default(),
             previews: Default::default(),
             browser,
         }))
@@ -212,6 +214,7 @@ impl AppState {
         crate::engine_api::boot(self).await?;
         crate::models::boot(self).await?;
         crate::crons::spawn(self);
+        crate::agents::spawn(self);
         crate::feed::spawn(self);
         if self.config().timings.auto_loop {
             tokio::spawn(crate::autoupdate::run(self.clone()));

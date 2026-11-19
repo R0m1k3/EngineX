@@ -56,6 +56,9 @@ pub struct Note {
     pub link: Option<String>,
     /// Part en push en mode « important ».
     pub important: bool,
+    /// Agent qui l'a produite et profondeur de sa chaîne : il ne se relance
+    /// pas lui-même par le fil, et les chaînes restent bornées.
+    pub agent: Option<(i64, i64)>,
 }
 
 impl Note {
@@ -67,6 +70,7 @@ impl Note {
             body: String::new(),
             link: None,
             important: level == "error",
+            agent: None,
         }
     }
     pub fn body(mut self, b: impl Into<String>) -> Self {
@@ -79,6 +83,10 @@ impl Note {
     }
     pub fn important(mut self, on: bool) -> Self {
         self.important = on;
+        self
+    }
+    pub fn from_agent(mut self, id: i64, depth: i64) -> Self {
+        self.agent = Some((id, depth));
         self
     }
 }
@@ -147,6 +155,8 @@ pub async fn post(state: &AppState, note: Note) -> Result<i64, sqlx::Error> {
         let payload = json!({"title": title, "body": body, "link": note.link, "level": note.level, "id": id});
         tokio::spawn(async move { send_push(&s, &payload).await });
     }
+    let s = state.clone();
+    tokio::spawn(async move { crate::agents::on_note(&s, &note, &title, &body).await });
     Ok(id)
 }
 
@@ -515,6 +525,9 @@ pub struct HookBody {
     level: String,
     #[serde(default)]
     push: bool,
+    /// Agent lancé à chaque appel.
+    #[serde(default)]
+    agent_id: Option<i64>,
 }
 
 fn info() -> String {
@@ -529,12 +542,12 @@ fn check_hook(b: &HookBody) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// id, nom, niveau, push, actif, créé, dernier appel, appels.
-type HookRow = (i64, String, String, bool, bool, i64, Option<i64>, i64);
+/// id, nom, niveau, push, actif, créé, dernier appel, appels, agent.
+type HookRow = (i64, String, String, bool, bool, i64, Option<i64>, i64, Option<i64>);
 
 pub async fn hooks_list(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let rows: Vec<HookRow> = sqlx::query_as(
-        "SELECT id, name, level, push, enabled, created_at, last_at, count FROM webhooks ORDER BY name COLLATE NOCASE",
+        "SELECT id, name, level, push, enabled, created_at, last_at, count, agent_id FROM webhooks ORDER BY name COLLATE NOCASE",
     )
     .fetch_all(state.db())
     .await?;
@@ -542,7 +555,7 @@ pub async fn hooks_list(State(state): State<AppState>) -> Result<Json<Value>, Ap
         rows.into_iter()
             .map(|r| {
                 json!({"id": r.0, "name": r.1, "level": r.2, "push": r.3, "enabled": r.4,
-                "created_at": r.5, "last_at": r.6, "count": r.7})
+                "created_at": r.5, "last_at": r.6, "count": r.7, "agent_id": r.8})
             })
             .collect(),
     )))
@@ -554,15 +567,17 @@ pub async fn hooks_create(
     ApiJson(b): ApiJson<HookBody>,
 ) -> Result<Json<Value>, ApiError> {
     check_hook(&b)?;
+    check_agent(&state, b.agent_id).await?;
     let token = auth::random_token();
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO webhooks (name, hash, level, push, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO webhooks (name, hash, level, push, created_at, agent_id) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(b.name.trim())
     .bind(auth::sha256(token.as_bytes()))
     .bind(&b.level)
     .bind(b.push)
     .bind(now())
+    .bind(b.agent_id)
     .fetch_one(state.db())
     .await?;
     Ok(Json(json!({"id": id, "path": format!("/hooks/{token}")})))
@@ -574,6 +589,22 @@ pub struct HookPatch {
     level: Option<String>,
     push: Option<bool>,
     enabled: Option<bool>,
+    #[serde(default, deserialize_with = "crate::sessions::some")]
+    agent_id: Option<Option<i64>>,
+}
+
+/// Agent existant (ou aucun), sinon `bad_request`.
+async fn check_agent(state: &AppState, id: Option<i64>) -> Result<(), ApiError> {
+    if let Some(id) = id {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents WHERE id = ?")
+            .bind(id)
+            .fetch_one(state.db())
+            .await?;
+        if n == 0 {
+            return Err(ApiError::BadRequest);
+        }
+    }
+    Ok(())
 }
 
 pub async fn hooks_patch(
@@ -581,23 +612,26 @@ pub async fn hooks_patch(
     UrlPath(id): UrlPath<i64>,
     ApiJson(b): ApiJson<HookPatch>,
 ) -> Result<Json<Value>, ApiError> {
-    let cur: Option<(String, String, bool, bool)> =
-        sqlx::query_as("SELECT name, level, push, enabled FROM webhooks WHERE id = ?")
+    let cur: Option<(String, String, bool, bool, Option<i64>)> =
+        sqlx::query_as("SELECT name, level, push, enabled, agent_id FROM webhooks WHERE id = ?")
             .bind(id)
             .fetch_optional(state.db())
             .await?;
-    let (name, level, push, enabled) = cur.ok_or(ApiError::NotFound)?;
+    let (name, level, push, enabled, agent) = cur.ok_or(ApiError::NotFound)?;
     let n = HookBody {
         name: b.name.unwrap_or(name),
         level: b.level.unwrap_or(level),
         push: b.push.unwrap_or(push),
+        agent_id: b.agent_id.unwrap_or(agent),
     };
     check_hook(&n)?;
-    sqlx::query("UPDATE webhooks SET name = ?, level = ?, push = ?, enabled = ? WHERE id = ?")
+    check_agent(&state, n.agent_id).await?;
+    sqlx::query("UPDATE webhooks SET name = ?, level = ?, push = ?, enabled = ?, agent_id = ? WHERE id = ?")
         .bind(n.name.trim())
         .bind(&n.level)
         .bind(n.push)
         .bind(b.enabled.unwrap_or(enabled))
+        .bind(n.agent_id)
         .bind(id)
         .execute(state.db())
         .await?;
@@ -626,8 +660,8 @@ pub async fn hook_in(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let hook: Option<(i64, String, String, bool, bool)> =
-        match sqlx::query_as("SELECT id, name, level, push, enabled FROM webhooks WHERE hash = ?")
+    let hook: Option<(i64, String, String, bool, bool, Option<i64>)> =
+        match sqlx::query_as("SELECT id, name, level, push, enabled, agent_id FROM webhooks WHERE hash = ?")
             .bind(auth::sha256(token.as_bytes()))
             .fetch_optional(state.db())
             .await
@@ -638,7 +672,7 @@ pub async fn hook_in(
                 return hook_error(StatusCode::INTERNAL_SERVER_ERROR, "erreur interne");
             }
         };
-    let Some((id, name, level, push, enabled)) = hook else {
+    let Some((id, name, level, push, enabled, agent)) = hook else {
         return hook_error(StatusCode::NOT_FOUND, "webhook inconnu");
     };
     if !enabled {
@@ -657,9 +691,15 @@ pub async fn hook_in(
     }
     let (title, text) = summarize(&headers, &body);
     let level = LEVELS.iter().find(|l| **l == level).copied().unwrap_or("info");
-    let note = Note::new("webhook", level, format!("{name} : {title}"))
-        .body(text)
+    let mut note = Note::new("webhook", level, format!("{name} : {title}"))
+        .body(text.clone())
         .important(push);
+    if let Some(a) = agent {
+        // L'agent lié part directement ; le fil ne le relance pas une 2e fois.
+        note = note.from_agent(a, 0);
+        let (s, name) = (state.clone(), name.clone());
+        tokio::spawn(async move { crate::agents::on_webhook(&s, a, &name, &title, &text).await });
+    }
     let _ = sqlx::query("UPDATE webhooks SET last_at = ?, count = count + 1 WHERE id = ?")
         .bind(now())
         .bind(id)
@@ -806,12 +846,12 @@ pub async fn check_disk(state: &AppState) {
 
 // ---- Émetteurs ----
 
-/// Un tour vient de finir. Les crons postent leur propre résultat ; les
+/// Un tour vient de finir. Les crons et les agents postent leur propre résultat ; les
 /// tours de mémoire ne disent rien ; les tours de Michael seulement s'ils ont
 /// duré (il n'est sans doute plus devant l'écran).
 pub fn turn_done(state: &AppState, sid: &str, origin: &str, status: &str, started: i64, error: Option<&str>) {
     const LONG: i64 = 120;
-    if matches!(origin, "cron" | "memory") || status == "interrupted" {
+    if matches!(origin, "cron" | "memory" | "agent") || status == "interrupted" {
         return;
     }
     if matches!(origin, "user" | "verify") && now() - started < LONG {
@@ -852,9 +892,19 @@ pub fn waiting_answer(state: &AppState, sid: &str, method: &str) {
             .await
             .map(|r| r.title)
             .unwrap_or_else(|_| "session".into());
-        let note = Note::new("approval", "warning", format!("« {title} » {what}"))
+        let mut note = Note::new("approval", "warning", format!("« {title} » {what}"))
             .link(format!("#sessions/{sid}"))
             .important(true);
+        let run: Option<(i64, i64)> =
+            sqlx::query_as("SELECT agent_id, depth FROM agent_runs WHERE session_id = ? AND status = 'running'")
+                .bind(&sid)
+                .fetch_optional(s.db())
+                .await
+                .ok()
+                .flatten();
+        if let Some((a, d)) = run {
+            note = note.from_agent(a, d);
+        }
         if let Err(e) = post(&s, note).await {
             tracing::warn!("fil : {e}");
         }

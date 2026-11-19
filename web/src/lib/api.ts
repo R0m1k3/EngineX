@@ -936,6 +936,68 @@ export const cronRuns = (id: number) => request<CronRun[]>('GET', `/api/crons/${
 export const cronPreview = (schedule: string, tz?: string) =>
   request<{ next: number[] }>('POST', '/api/crons/preview', { schedule, tz });
 
+// ---- Agents ----
+
+export type AgentTrigger = 'schedule' | 'manual' | 'webhook' | 'feed' | 'agent' | 'session';
+
+export interface FeedFilter {
+  /** Vide = toutes les sources. */
+  sources: string[];
+  min_level: FeedLevel;
+  contains: string;
+}
+
+export interface AgentBody {
+  name: string;
+  topic_id: number;
+  preset_id: number | null;
+  role: string;
+  /** `null` = pas d'horaire. */
+  schedule: string | null;
+  tz: string;
+  /** `null` = pas de départ par le fil. */
+  feed_filter: FeedFilter | null;
+  approval: 'auto' | 'prudent';
+  timeout_s: number;
+  budget_tokens: number;
+  budget_gpu_min: number;
+  notify: boolean;
+  enabled: boolean;
+}
+
+export interface Agent extends AgentBody {
+  id: number;
+  topic: string | null;
+  next_run: number | null;
+  running: boolean;
+  today: { tokens: number; gpu_s: number };
+  webhooks: { id: number; name: string }[];
+  last: { status: CronRunStatus; trigger: AgentTrigger; started_at: number; ended_at: number | null; session_id: string | null } | null;
+}
+
+export interface AgentRun {
+  id: number;
+  trigger: AgentTrigger;
+  context: string;
+  status: CronRunStatus;
+  started_at: number;
+  ended_at: number | null;
+  output: string;
+  session_id: string | null;
+  tokens: number;
+  gpu_s: number;
+  depth: number;
+}
+
+export const agents = () => request<Agent[]>('GET', '/api/agents');
+export const createAgent = (b: AgentBody) => request<{ id: number }>('POST', '/api/agents', b);
+export const updateAgent = (id: number, b: AgentBody) => request('PUT', `/api/agents/${id}`, b);
+export const deleteAgent = (id: number) => request('DELETE', `/api/agents/${id}`);
+export const runAgent = (id: number, context = '') =>
+  request<{ run_id: number }>('POST', `/api/agents/${id}/run`, { context });
+export const stopAgent = (id: number) => request('POST', `/api/agents/${id}/stop`, {});
+export const agentRuns = (id: number) => request<AgentRun[]>('GET', `/api/agents/${id}/runs`);
+
 // ---- Page Fichiers (workspace) ----
 
 export interface WsEntry extends TreeEntry {
@@ -1153,10 +1215,12 @@ export interface Webhook {
   created_at: number;
   last_at: number | null;
   count: number;
+  /** Agent lancé à chaque appel. */
+  agent_id: number | null;
 }
 export const webhooks = () => request<Webhook[]>('GET', '/api/webhooks');
-export const createWebhook = (b: { name: string; level: FeedLevel; push: boolean }) =>
+export const createWebhook = (b: { name: string; level: FeedLevel; push: boolean; agent_id?: number | null }) =>
   request<{ id: number; path: string }>('POST', '/api/webhooks', b);
-export const patchWebhook = (id: number, b: Partial<Pick<Webhook, 'name' | 'level' | 'push' | 'enabled'>>) =>
+export const patchWebhook = (id: number, b: Partial<Pick<Webhook, 'name' | 'level' | 'push' | 'enabled' | 'agent_id'>>) =>
   request('PATCH', `/api/webhooks/${id}`, b);
 export const deleteWebhook = (id: number) => request('DELETE', `/api/webhooks/${id}`);

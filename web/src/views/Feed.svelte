@@ -2,8 +2,8 @@
   import { onDestroy } from 'svelte';
   import {
     feed, feedRead, feedDelete, feedClear, pushStatus, pushSubscribe, pushUnsubscribe, pushMode, pushTest,
-    webhooks, createWebhook, patchWebhook, deleteWebhook, message,
-    type FeedItem, type FeedLevel, type PushStatus, type PushMode, type Webhook,
+    webhooks, createWebhook, patchWebhook, deleteWebhook, agents, message,
+    type FeedItem, type FeedLevel, type PushStatus, type PushMode, type Webhook, type Agent,
   } from '../lib/api';
   import { openEvents } from '../lib/sse';
 
@@ -137,6 +137,7 @@
 
   // ---- Webhooks ----
   let hooks = $state<Webhook[] | null>(null);
+  let agentList = $state<Agent[]>([]);
   let hookMsg = $state('');
   let fresh = $state<{ name: string; url: string } | null>(null);
   let form = $state({ name: '', level: 'info' as FeedLevel, push: false });
@@ -144,6 +145,7 @@
   async function loadHooks() {
     try {
       hooks = await webhooks();
+      agentList = await agents().catch(() => agentList);
     } catch (e) {
       hookMsg = message(e);
     }
@@ -255,7 +257,8 @@
       <p class="muted small">
         Une adresse par service (GitHub, Gitea, un script, une alarme…) : chaque appel POST écrit une ligne dans le fil.
         GitHub et Gitea sont résumés (push, PR, issue, workflow) ; sinon <code>title</code> et <code>message</code> du JSON,
-        ou le texte brut. L’adresse est le secret : elle n’est montrée qu’une fois.
+        ou le texte brut. L’adresse est le secret : elle n’est montrée qu’une fois. Un webhook peut aussi lancer un agent,
+        avec l’appel reçu comme contexte.
       </p>
       <form class="row add" onsubmit={addHook}>
         <input placeholder="Nom (ex. GitHub app)" bind:value={form.name} maxlength="80" required />
@@ -274,7 +277,7 @@
       {#if hookMsg}<p class="error small">{hookMsg}</p>{/if}
       {#if hooks?.length}
         <table class="hooks">
-          <thead><tr><th>Nom</th><th>Niveau</th><th>Appels</th><th>Dernier</th><th></th></tr></thead>
+          <thead><tr><th>Nom</th><th>Niveau</th><th>Appels</th><th>Dernier</th><th>Lance l’agent</th><th></th></tr></thead>
           <tbody>
             {#each hooks as h (h.id)}
               <tr class:off={!h.enabled}>
@@ -282,6 +285,15 @@
                 <td>{LEVEL[h.level]}</td>
                 <td>{h.count}</td>
                 <td class="muted">{h.last_at ? date(h.last_at) : 'jamais'}</td>
+                <td>
+                  <select value={h.agent_id} onchange={(e) => {
+                    const v = (e.currentTarget as HTMLSelectElement).value;
+                    hookAct(() => patchWebhook(h.id, { agent_id: v === '' ? null : Number(v) }));
+                  }}>
+                    <option value="">—</option>
+                    {#each agentList as a (a.id)}<option value={a.id}>{a.name}</option>{/each}
+                  </select>
+                </td>
                 <td class="actions">
                   <button class="link" onclick={() => hookAct(() => patchWebhook(h.id, { push: !h.push }))}>{h.push ? 'Sans push' : 'Avec push'}</button>
                   <button class="link" onclick={() => hookAct(() => patchWebhook(h.id, { enabled: !h.enabled }))}>{h.enabled ? 'Désactiver' : 'Activer'}</button>

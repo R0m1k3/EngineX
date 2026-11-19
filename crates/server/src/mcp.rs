@@ -283,6 +283,21 @@ pub fn tools() -> Vec<Value> {
             }),
             &["id"],
         ),
+        tool(
+            "agent_list",
+            "Liste les agents d'EngineX (nom, rôle en une ligne, coupé ou en cours).",
+            json!({}),
+            &[],
+        ),
+        tool(
+            "agent_send",
+            "Confie un travail à un autre agent (nom donné par agent_list) : il part dans sa propre session, son résultat arrive dans le fil de Michael. N'attend pas la réponse.",
+            json!({
+                "name": {"type": "string"},
+                "message": {"type": "string", "description": "le travail demandé, avec le contexte utile (8000 caractères au plus)"},
+            }),
+            &["name", "message"],
+        ),
     ]
 }
 
@@ -668,6 +683,14 @@ async fn call(state: &AppState, who: &Caller, name: &str, args: &Value) -> Resul
             .await
             .map_err(board::Refusal::message)?;
             Ok(format!("Tâche modifiée : {t}"))
+        }
+        "agent_list" => crate::agents::list_text(state).await,
+        "agent_send" => {
+            let message = args["message"].as_str().unwrap_or("").trim();
+            if message.is_empty() || message.chars().count() > 8000 {
+                return Err("message vide ou trop long (8000 caractères)".into());
+            }
+            crate::agents::send_from_session(state, &who.session_id, args["name"].as_str().unwrap_or(""), message).await
         }
         _ => Err(format!("outil inconnu : {name}")),
     }

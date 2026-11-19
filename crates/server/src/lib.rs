@@ -1,5 +1,6 @@
 //! EngineX : serveur de l'API et de l'UI embarquée.
 
+pub mod agents;
 pub mod api_keys;
 pub mod attachments;
 pub mod auth;
@@ -135,6 +136,11 @@ pub fn app(state: AppState) -> Router {
         .route("/api/crons/{id}", put(crons::update).delete(crons::delete))
         .route("/api/crons/{id}/run", post(crons::run_now))
         .route("/api/crons/{id}/runs", get(crons::runs))
+        .route("/api/agents", get(agents::list).post(agents::create))
+        .route("/api/agents/{id}", put(agents::update).delete(agents::delete))
+        .route("/api/agents/{id}/run", post(agents::run_now))
+        .route("/api/agents/{id}/stop", post(agents::stop))
+        .route("/api/agents/{id}/runs", get(agents::runs))
         .route("/api/skills", get(skills::list))
         .route("/api/skills/{name}", get(skills::get).put(skills::put))
         .route("/api/skills/{name}/enabled", put(skills::put_enabled))

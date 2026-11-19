@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import {
-    engine, presets, queueState, board, crons, feed, sessions, interruptTurn, message,
-    type EngineInfo, type Preset, type QueueState, type Task, type Cron, type FeedItem, type Session,
+    engine, presets, queueState, board, crons, agents, feed, sessions, interruptTurn, message,
+    type EngineInfo, type Preset, type QueueState, type Task, type Cron, type Agent, type FeedItem, type Session,
   } from '../lib/api';
   import { openEvents } from '../lib/sse';
 
@@ -13,6 +13,7 @@
   let next = $state<Cron[]>([]);
   let notes = $state<FeedItem[]>([]);
   let recent = $state<Session[]>([]);
+  let bots = $state<Agent[]>([]);
   let error = $state('');
 
   const name = (id: number | null | undefined) => presetList.find((p) => p.id === id)?.name ?? (id == null ? '—' : `preset ${id}`);
@@ -31,8 +32,8 @@
   };
 
   async function load() {
-    const r = await Promise.allSettled([engine(), queueState(), presets(), board(), crons(), feed({ limit: 6 }), sessions({})]);
-    const [e, q, p, b, c, f, s] = r;
+    const r = await Promise.allSettled([engine(), queueState(), presets(), board(), crons(), feed({ limit: 6 }), sessions({}), agents()]);
+    const [e, q, p, b, c, f, s, a] = r;
     if (e.status === 'fulfilled') eng = e.value;
     if (q.status === 'fulfilled') queue = q.value;
     if (p.status === 'fulfilled') presetList = p.value;
@@ -46,6 +47,8 @@
     if (c.status === 'fulfilled')
       next = c.value.filter((x) => x.enabled && x.next_run).sort((a, z) => a.next_run! - z.next_run!).slice(0, 5);
     if (f.status === 'fulfilled') notes = f.value.items;
+    if (a.status === 'fulfilled')
+      bots = [...a.value].sort((x, y) => Number(y.running) - Number(x.running) || (y.last?.started_at ?? 0) - (x.last?.started_at ?? 0)).slice(0, 6);
     if (s.status === 'fulfilled') recent = [...s.value].sort((a, z) => z.updated_at - a.updated_at).slice(0, 5);
     const bad = r.find((x) => x.status === 'rejected') as PromiseRejectedResult | undefined;
     error = bad ? message(bad.reason) : '';
@@ -148,6 +151,21 @@
     </div>
 
     <div class="card">
+      <h2><a href="#agents">Agents</a></h2>
+      {#each bots as b (b.id)}
+        <p class="small line" class:muted={!b.enabled}>
+          <a href="#agents/{b.id}">{b.running ? '▶ ' : ''}{b.name}</a>
+          <span class="muted">
+            {#if b.running}en cours{:else if b.last}<span class:lvl-error={b.last.status === 'failed'}>{b.last.status === 'ok' ? 'réussi' : b.last.status === 'failed' ? 'échec' : b.last.status}</span> · {ago(b.last.started_at)}{:else}jamais{/if}
+            {#if b.budget_tokens}· {Math.round((100 * b.today.tokens) / b.budget_tokens)} % du budget{/if}
+          </span>
+        </p>
+      {:else}
+        <p class="small muted">Aucun agent.</p>
+      {/each}
+    </div>
+
+    <div class="card">
       <h2><a href="#sessions">Sessions récentes</a></h2>
       {#each recent as s (s.id)}
         <p class="small line"><a href="#sessions/{s.id}">{s.running ? '▶ ' : ''}{s.title}</a><span class="muted">{ago(s.updated_at)}</span></p>
@@ -178,5 +196,6 @@
   .line > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .line > :last-child { white-space: nowrap; }
   .lvl-error a, .lvl-error span:first-child { color: var(--error); }
+  span.lvl-error { color: var(--error); }
   .unread { font-weight: 600; }
 </style>

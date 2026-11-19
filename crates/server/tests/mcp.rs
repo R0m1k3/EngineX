@@ -152,7 +152,9 @@ async fn keys_and_protocol() {
             "web_read",
             "tasks_list",
             "tasks_add",
-            "tasks_update"
+            "tasks_update",
+            "agent_list",
+            "agent_send"
         ]
     );
     assert_eq!(rpc(&e, &key, "ping", json!({})).await["result"], json!({}));

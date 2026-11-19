@@ -225,8 +225,8 @@ Docker attend des chemins de l'hôte. EngineX lit donc le montage de son propre 
 ## Tableau de bord et notifications
 
 Le **Tableau de bord** (page d'accueil) montre le moteur (preset chargé, débit du dernier tour, VRAM et température
-de chaque carte), la file d'attente, les notifications récentes, les tâches du jour, les prochains crons et les
-sessions récentes.
+de chaque carte), la file d'attente, les notifications récentes, les tâches du jour, les prochains crons, les agents
+et les sessions récentes.
 
 La page **Notifications** garde les 500 derniers événements : cron fini ou en échec, réponse d'un tour de plus de
 2 minutes, vérification encore rouge après les corrections automatiques, approbation ou question en attente,
@@ -241,7 +241,38 @@ chiffré pour le navigateur (VAPID, clé dans `/data/vapid.key`) et transite par
 **Webhooks entrants** : chaque webhook a une adresse `https://<enginex>/hooks/<jeton>`, montrée une seule fois.
 Tout `POST` dessus écrit une ligne dans le fil, sans session ni clé : l'adresse est le secret, supprimez le webhook
 s'il a fuité. Les appels de GitHub et Gitea sont résumés (push, PR, issue, workflow, release). Sinon EngineX prend
-`title` et `message` du JSON, ou le texte brut. Limites : 64 Kio par appel, 30 appels par minute.
+`title` et `message` du JSON, ou le texte brut. Limites : 64 Kio par appel, 30 appels par minute. Un webhook peut
+aussi lancer un agent (colonne « Lance l'agent »).
+
+## Agents
+
+Un agent est un rôle durable dans un topic : un nom, une consigne de rôle, un modèle (ou celui par défaut) et ses
+déclencheurs. Il part :
+
+- sur un **horaire** (même syntaxe que les crons, avec fuseau) ;
+- sur une **notification du fil** qui passe son filtre (sources, niveau minimal, texte cherché) ;
+- sur un appel d'un **webhook** qui lui est lié ;
+- **à la main** depuis la page Agents (avec un contexte en plus si besoin) ;
+- à la demande d'une session ou d'un autre agent, par l'outil MCP `agent_send` (`agent_list` donne les noms).
+
+Chaque départ ouvre une session neuve « Agent : nom » dans le topic. Son premier message contient le rôle et le
+contexte du déclencheur (la notification, l'appel reçu, le travail confié). Les 20 dernières sessions restent visibles,
+les plus anciennes sont archivées. Ce qui doit servir d'un départ à l'autre passe par la mémoire du topic. Les tours
+d'agent passent par la file commune après ceux de Michael.
+
+Approbation **auto** : l'agent agit seul dans sa sandbox. **Prudent** : les commandes et fichiers sensibles attendent
+votre accord, demandé dans le fil (et en push) ; sans réponse en 1 h, le tour est interrompu. Le délai maximal d'un
+départ ne compte ni l'attente dans la file ni l'attente d'un accord.
+
+Budget quotidien, remis à zéro à minuit dans le fuseau de l'agent : jetons (compteur de Codex, relectures du cache
+comprises) et minutes de GPU (durée du départ hors file et hors attente d'un accord). Une fois atteint, plus aucun
+départ jusqu'à minuit, et une seule notification. Garde-fous : un départ à la fois par agent, un agent ne part jamais
+sur ses propres notifications, une minute au moins entre deux départs par le fil, et une chaîne d'agents (fil ou
+`agent_send`) s'arrête à 3 niveaux.
+
+Chaque fin de départ écrit son compte rendu dans le fil. Les échecs partent en push ; les réussites seulement si
+l'option « Pousser le résultat » est cochée. L'historique garde les 50 derniers départs de chaque agent, avec le
+déclencheur, le contexte, la sortie, les jetons et le temps de GPU.
 
 ## Fichiers et Git
 

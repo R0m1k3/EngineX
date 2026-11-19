@@ -496,7 +496,7 @@ async fn session_for(state: &AppState, c: &CronRow) -> Result<String, ApiError> 
 }
 
 /// Raison lisible d'un refus.
-fn reason(e: &ApiError) -> String {
+pub(crate) fn reason(e: &ApiError) -> String {
     match e {
         ApiError::EngineNotReady => "moteur non prêt (modèle en chargement ou arrêté)".into(),
         ApiError::NoActivePreset => "aucun preset actif".into(),
@@ -608,7 +608,7 @@ async fn run_shell(state: &AppState, sid: &str, cmd: &str, timeout: Duration) ->
 }
 
 /// Fin de la sortie (16 Kio), coupée sur un caractère.
-fn tail(s: &str) -> String {
+pub(crate) fn tail(s: &str) -> String {
     if s.len() <= OUTPUT_MAX {
         return s.trim_end().to_string();
     }

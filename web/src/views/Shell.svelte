@@ -3,6 +3,7 @@
   import { onDestroy } from 'svelte';
   import Memory from './Memory.svelte';
   import Crons from './Crons.svelte';
+  import Agents from './Agents.svelte';
   import Dashboard from './Dashboard.svelte';
   import Feed from './Feed.svelte';
   import { openEvents } from '../lib/sse';
@@ -29,6 +30,7 @@
     { id: 'sessions', label: 'Sessions' },
     { id: 'tasks', label: 'Tâches' },
     { id: 'crons', label: 'Crons' },
+    { id: 'agents', label: 'Agents' },
     { id: 'files', label: 'Fichiers' },
     { id: 'git', label: 'Git' },
     { id: 'memory', label: 'Mémoire' },
@@ -102,6 +104,8 @@
       <Tasks />
     {:else if page === 'crons'}
       <Crons />
+    {:else if page === 'agents'}
+      <Agents {sub} />
     {:else if page === 'files'}
       <Files />
     {:else if page === 'git'}
