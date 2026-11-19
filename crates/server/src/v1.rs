@@ -200,6 +200,14 @@ async fn queue_slot(state: &AppState, caller: Option<&Caller>) -> Result<Option<
 
 // ---- Preset actif ----
 
+/// Réflexion du preset pour la traduction (budget réglé ensuite par requête).
+fn think(s: &PresetSettings) -> enginex_oai::Think {
+    enginex_oai::Think {
+        on: s.reasoning == enginex_engine::args::Reasoning::On,
+        budget: s.reasoning_budget,
+    }
+}
+
 pub(crate) struct Active {
     pub id: i64,
     pub name: String,
@@ -482,6 +490,7 @@ pub async fn responses(
         sampling: p.as_ref().map(|p| p.settings.sampling.clone()).unwrap_or_default(),
         // Sans preset la requête finit en 503 : ne pas refuser ses images avant.
         vision: p.as_ref().is_none_or(|p| p.vision),
+        think: p.as_ref().map(|p| think(&p.settings)).unwrap_or_default(),
     };
     let translated = match enginex_oai::parse_and_translate(&body, &ctx(&preset)) {
         Ok(t) => t,
@@ -574,6 +583,7 @@ async fn relay_responses(
                 model_name: p.name.clone(),
                 sampling: p.settings.sampling.clone(),
                 vision: p.vision,
+                think: think(&p.settings),
             };
             match enginex_oai::parse_and_translate(raw, &ctx) {
                 Ok(t) => t.body,

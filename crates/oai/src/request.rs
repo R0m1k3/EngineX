@@ -9,7 +9,7 @@
 //! - `function_call_output` → message `tool` (images dans un `user` après) ;
 //! - outils `namespace` aplatis (`names.rs`) ; le reste ignoré et compté.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use enginex_hub::sampling::Sampling;
 use serde_json::{Map, Value, json};
@@ -23,6 +23,83 @@ pub struct Ctx {
     pub model_name: String,
     pub sampling: Sampling,
     pub vision: bool,
+    pub think: Think,
+}
+
+/// Réflexion du preset, réglée ensuite requête par requête selon l'effort
+/// demandé par Codex (`reasoning.effort`).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Think {
+    /// Réflexion permise par le preset (sinon rien n'est envoyé).
+    pub on: bool,
+    /// Budget du preset (`--reasoning-budget`) ; `None` = illimité.
+    pub budget: Option<u64>,
+}
+
+/// Début de la consigne de compactage de Codex (la sienne et celle d'EngineX).
+pub const COMPACTION_MARK: &str = "You are performing a CONTEXT CHECKPOINT COMPACTION";
+
+/// Budget de réflexion d'un effort, par rapport à celui du preset `b` :
+/// `none`/`minimal` = sans réflexion (`Some(0)`), `low` = b/4 (4096 si le
+/// preset est illimité), `medium` = b, `high` et plus = 2b ; effort absent ou
+/// inconnu, ou preset illimité = `None` (réglage du preset).
+pub fn effort_budget(effort: Option<&str>, b: Option<u64>) -> Option<u64> {
+    match (effort?, b) {
+        ("none" | "minimal", _) => Some(0),
+        ("low", Some(b)) => Some((b / 4).max(1024)),
+        ("low", None) => Some(4096),
+        ("medium", Some(b)) => Some(b),
+        ("high" | "xhigh" | "max" | "ultra", Some(b)) => Some(b.saturating_mul(2)),
+        _ => None,
+    }
+}
+
+/// Texte du dernier message utilisateur de la requête.
+fn last_user_text(input: &Input) -> Option<String> {
+    match input {
+        Input::Text(t) => Some(t.clone()),
+        Input::Items(items) => items
+            .iter()
+            .rev()
+            .find(|it| str_field(it, "role") == Some("user") && matches!(str_field(it, "type"), None | Some("message")))
+            .map(|it| match it.get("content") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Array(parts)) => parts
+                    .iter()
+                    .filter_map(|p| p.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => String::new(),
+            }),
+    }
+}
+
+/// Réflexion de la requête : coupée pour un compactage (un résumé n'en a pas
+/// besoin) et pour l'effort `none`/`minimal`, budget par requête sinon.
+fn apply_think(body: &mut Map<String, Value>, req: &ResponsesRequest, think: Think) {
+    if !think.on {
+        return;
+    }
+    let compaction = last_user_text(&req.input).is_some_and(|t| t.trim_start().starts_with(COMPACTION_MARK));
+    let effort = req
+        .extra
+        .get("reasoning")
+        .and_then(|r| r.get("effort"))
+        .and_then(Value::as_str);
+    let budget = if compaction {
+        Some(0)
+    } else {
+        effort_budget(effort, think.budget)
+    };
+    match budget {
+        Some(0) => {
+            body.insert("reasoning_effort".into(), json!("none"));
+        }
+        Some(n) => {
+            body.insert("reasoning_budget_tokens".into(), json!(n));
+        }
+        None => {}
+    }
 }
 
 #[derive(Debug)]
@@ -75,7 +152,8 @@ struct Builder<'a> {
     reasoning: Option<String>,
     tool_images: Vec<Part>,
     /// Message `user` qui ouvre le tour en cours (notes de `history`).
-    turn_start: usize,
+    /// Début de chaque tour (index du message utilisateur).
+    turn_starts: Vec<usize>,
 }
 
 enum Msg {
@@ -114,7 +192,7 @@ impl<'a> Builder<'a> {
             msgs: Vec::new(),
             reasoning: None,
             tool_images: Vec::new(),
-            turn_start: 0,
+            turn_starts: Vec::new(),
         }
     }
 
@@ -296,34 +374,47 @@ impl<'a> Builder<'a> {
                 // Un raisonnement non suivi d'une réponse est perdu.
                 self.reasoning = None;
                 self.push_user(parts);
-                self.turn_start = self.msgs.len().saturating_sub(1);
+                self.turn_starts.push(self.msgs.len().saturating_sub(1));
             }
         }
         Ok(())
     }
 
-    /// Allège l'historique (`history`) : écritures passées résumées, notes du
-    /// tour en cours. La dernière étape (dernier message à appels) reste entière.
+    /// Allège l'historique (`history`) : écritures passées résumées, notes de
+    /// chaque tour. La dernière étape (dernier message à appels) reste entière.
+    /// Les notes sont calculées tour par tour et restent dans les tours passés :
+    /// un tour fini rend le même texte qu'en cours de tour, le cache de prompt
+    /// de llama.cpp reste valable au tour suivant.
     fn lighten(&mut self) {
         let last = self
             .msgs
             .iter()
             .rposition(|m| matches!(m, Msg::Assistant { calls, .. } if !calls.is_empty()));
-        let start = self.turn_start.min(self.msgs.len());
-        let turn_calls: Vec<(String, String)> = self.msgs[start..]
-            .iter()
-            .filter_map(|m| match m {
-                Msg::Assistant { calls, .. } => Some(calls),
-                _ => None,
-            })
-            .flatten()
-            .map(|c| {
-                let id = c.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-                let args = c.pointer("/function/arguments").and_then(Value::as_str).unwrap_or("");
-                (id, args.to_string())
-            })
+        let mut bounds: Vec<usize> = std::iter::once(0)
+            .chain(self.turn_starts.iter().copied())
+            .map(|i| i.min(self.msgs.len()))
             .collect();
-        let notes = history::turn_notes(turn_calls.iter().map(|(a, b)| (a.as_str(), b.as_str())));
+        bounds.dedup();
+        bounds.push(self.msgs.len());
+        let mut notes: HashMap<String, String> = HashMap::new();
+        for w in bounds.windows(2) {
+            let turn_calls: Vec<(String, String)> = self.msgs[w[0]..w[1]]
+                .iter()
+                .filter_map(|m| match m {
+                    Msg::Assistant { calls, .. } => Some(calls),
+                    _ => None,
+                })
+                .flatten()
+                .map(|c| {
+                    let id = c.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+                    let args = c.pointer("/function/arguments").and_then(Value::as_str).unwrap_or("");
+                    (id, args.to_string())
+                })
+                .collect();
+            notes.extend(history::turn_notes(
+                turn_calls.iter().map(|(a, b)| (a.as_str(), b.as_str())),
+            ));
+        }
         for (i, m) in self.msgs.iter_mut().enumerate() {
             match m {
                 Msg::Assistant { calls, .. } if Some(i) != last => {
@@ -337,7 +428,7 @@ impl<'a> Builder<'a> {
                         }
                     }
                 }
-                Msg::Tool { call_id, content } if i >= start => {
+                Msg::Tool { call_id, content } => {
                     if let Some(n) = notes.get(call_id.as_str()).filter(|_| !call_id.is_empty()) {
                         content.push_str("\n\n");
                         content.push_str(n);
@@ -504,6 +595,7 @@ pub fn to_chat(req: &ResponsesRequest, ctx: &Ctx) -> Result<Translated, Translat
     if let Some(n) = req.max_output_tokens {
         body.insert("max_tokens".into(), json!(n));
     }
+    apply_think(&mut body, req, ctx.think);
     if let Some(fmt) = req.text.as_ref().and_then(|t| t.get("format")) {
         match str_field(fmt, "type") {
             Some("json_schema") => {

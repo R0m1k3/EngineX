@@ -708,8 +708,17 @@ impl Hub {
         if let Some((_, sha)) = &refresh {
             let _ = sessions::set_session_field(&state, &self.id, "memory_seen", Some(sha)).await;
         }
+        // Effort repris à chaque tour (Codex le garde d'un tour à l'autre) ; le
+        // tour de mémoire réfléchit peu.
+        let effort = if self.turn_origin() == Some("memory") {
+            "low".to_string()
+        } else {
+            row.as_ref()
+                .and_then(|r| r.effort.clone())
+                .unwrap_or_else(|| "medium".into())
+        };
         match client
-            .request("turn/start", types::turn_start(&thread_id, input, policy))
+            .request("turn/start", types::turn_start(&thread_id, input, policy, &effort))
             .await
         {
             Ok(r) => {
@@ -1461,6 +1470,6 @@ pub fn session_json(r: &SessionRow, running: bool) -> Value {
         "created_at": r.created_at, "updated_at": r.updated_at, "running": running,
         "copy_branch": r.copy_branch, "pending_note": r.pending_note,
         "pending_revert": r.pending_revert.is_some(), "undo": r.undo_snap.is_some(),
-        "preset_id": r.preset_id,
+        "preset_id": r.preset_id, "effort": r.effort,
     })
 }

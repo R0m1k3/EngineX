@@ -1,19 +1,27 @@
 <script lang="ts">
   import { changePassword, logout, message } from '../lib/api';
   import { onDestroy } from 'svelte';
-  import Memory from './Memory.svelte';
-  import Crons from './Crons.svelte';
-  import Agents from './Agents.svelte';
+  import type { Component } from 'svelte';
   import Dashboard from './Dashboard.svelte';
-  import Feed from './Feed.svelte';
   import { openEvents } from '../lib/sse';
-  import Files from './Files.svelte';
-  import Git from './Git.svelte';
-  import Models from './Models.svelte';
   import Sessions from './Sessions.svelte';
-  import Settings from './Settings.svelte';
-  import System from './System.svelte';
-  import Tasks from './Tasks.svelte';
+
+  // Pages moins courantes chargées à la demande (premier affichage plus léger).
+  type Loader = () => Promise<{ default: Component<any> }>;
+  const LAZY: Record<string, Loader> = {
+    feed: () => import('./Feed.svelte'),
+    system: () => import('./System.svelte'),
+    settings: () => import('./Settings.svelte'),
+    tasks: () => import('./Tasks.svelte'),
+    crons: () => import('./Crons.svelte'),
+    agents: () => import('./Agents.svelte'),
+    files: () => import('./Files.svelte'),
+    git: () => import('./Git.svelte'),
+    memory: () => import('./Memory.svelte'),
+    models: () => import('./Models.svelte'),
+  };
+  const loaded: Record<string, Promise<Component<any>>> = {};
+  const view = (id: string) => (loaded[id] ??= LAZY[id]().then((m) => m.default));
 
   let { loggedOut }: { loggedOut: () => void } = $props();
 
@@ -94,26 +102,12 @@
     {/if}
     {#if page === 'dashboard'}
       <Dashboard />
-    {:else if page === 'feed'}
-      <Feed {sub} />
-    {:else if page === 'system'}
-      <System />
-    {:else if page === 'settings'}
-      <Settings {sub} />
-    {:else if page === 'tasks'}
-      <Tasks />
-    {:else if page === 'crons'}
-      <Crons />
-    {:else if page === 'agents'}
-      <Agents {sub} />
-    {:else if page === 'files'}
-      <Files />
-    {:else if page === 'git'}
-      <Git sub={route.split('/').slice(1).join('/')} />
-    {:else if page === 'memory'}
-      <Memory />
-    {:else if page === 'models'}
-      <Models {sub} />
+    {:else if LAZY[page]}
+      {#await view(page) then View}
+        <View sub={page === 'git' ? route.split('/').slice(1).join('/') : sub} />
+      {:catch e}
+        <p class="error">Page impossible à charger : {message(e)}</p>
+      {/await}
     {:else}
       <Sessions {sub} />
     {/if}

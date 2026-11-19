@@ -26,6 +26,8 @@ const LOG_LINES: usize = 2000;
 /// Taille du fichier de log avant rotation.
 const LOG_MAX: u64 = 20 << 20;
 const POLL: Duration = Duration::from_millis(500);
+/// Sondage de `/health` pendant le chargement : le modèle sert dès qu'il est prêt.
+const LOAD_POLL: Duration = Duration::from_millis(100);
 const TERM_GRACE: Duration = Duration::from_secs(5);
 const EXIT_WAIT: Duration = Duration::from_secs(10);
 const VRAM_WAIT: Duration = Duration::from_secs(15);
@@ -295,7 +297,7 @@ impl Supervisor {
         let health = format!("http://127.0.0.1:{}/health", self.0.cfg.port);
         let mut ready = false;
         loop {
-            tokio::time::sleep(POLL).await;
+            tokio::time::sleep(if ready { POLL } else { LOAD_POLL }).await;
             if !self.current(generation) {
                 return;
             }

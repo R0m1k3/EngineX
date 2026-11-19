@@ -174,12 +174,31 @@ pub async fn create_auto(state: &AppState, model_id: i64) -> anyhow::Result<i64>
     {
         s.ctx = (s.ctx / 2).max(16384);
     }
-    // MoE plus gros que la VRAM (experts en RAM) : lots plus grands, comme Loki.
-    if let Ok(r) = models::local_fit(state, &m, &s).await
-        && r.verdict == Verdict::Offload
-    {
-        s.batch = Some(4096);
-        s.ubatch = Some(2048);
+    match models::local_fit(state, &m, &s).await.map(|r| r.verdict) {
+        // MoE plus gros que la VRAM (experts en RAM) : lots plus grands, comme Loki.
+        Ok(Verdict::Offload) => {
+            s.batch = Some(4096);
+            s.ubatch = Some(2048);
+        }
+        // Dense qui déborde encore à 16k : des couches sur le processeur, où le
+        // brouillon ralentit au lieu d'accélérer (Loki, `cpu_weights`) ; sa
+        // VRAM revient au modèle.
+        Ok(Verdict::NoFit) => s.spec.draft = DraftKind::None,
+        // Dense qui tient avec de la marge : lot physique de 1024 (lecture du
+        // prompt plus rapide que les 512 de llama.cpp), gardé seulement s'il
+        // tient encore.
+        Ok(Verdict::Fits) => {
+            s.batch = Some(2048);
+            s.ubatch = Some(1024);
+            if !matches!(
+                models::local_fit(state, &m, &s).await.map(|r| r.verdict),
+                Ok(Verdict::Fits)
+            ) {
+                s.batch = None;
+                s.ubatch = None;
+            }
+        }
+        _ => {}
     }
     let quant = enginex_hub::hf::quant_of(&m.file);
     let short = m.repo.rsplit('/').next().unwrap_or(&m.repo).trim_end_matches("-GGUF");

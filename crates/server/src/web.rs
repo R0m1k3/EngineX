@@ -66,16 +66,36 @@ pub fn serve(method: &Method, path: &str, headers: &HeaderMap) -> Option<Respons
     if rel.split('/').any(|seg| seg.is_empty() || seg == "." || seg == "..") || rel.contains('\\') {
         return None;
     }
-    let (data, mime, etag) = match Dist::get(rel) {
+    let (data, mime, etag, encoding) = match Dist::get(rel) {
         Some(file) => {
-            let hash = file.metadata.sha256_hash();
-            let etag = format!("\"{}\"", hex(&hash[..16]));
-            (file.data, file.metadata.mimetype().to_string(), etag)
+            let mime = file.metadata.mimetype().to_string();
+            // Version compressée au build (`.br`, `.gz`) si le client l'accepte.
+            let accept = headers
+                .get(header::ACCEPT_ENCODING)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            let packed = [("br", "br"), ("gzip", "gz")]
+                .into_iter()
+                .filter(|(enc, _)| accepts(accept, enc))
+                .find_map(|(enc, ext)| Dist::get(&format!("{rel}.{ext}")).map(|f| (enc, f)));
+            match packed {
+                Some((enc, f)) => {
+                    let hash = f.metadata.sha256_hash();
+                    let etag = format!("\"{}-{enc}\"", hex(&hash[..16]));
+                    (f.data, mime, etag, Some(enc))
+                }
+                None => {
+                    let hash = file.metadata.sha256_hash();
+                    let etag = format!("\"{}\"", hex(&hash[..16]));
+                    (file.data, mime, etag, None)
+                }
+            }
         }
         None if rel == "index.html" => (
             PLACEHOLDER.as_bytes().into(),
             "text/html".to_string(),
             "\"placeholder\"".to_string(),
+            None,
         ),
         None => return None,
     };
@@ -92,9 +112,27 @@ pub fn serve(method: &Method, path: &str, headers: &HeaderMap) -> Option<Respons
         res
     };
     let h = res.headers_mut();
+    if let Some(enc) = encoding {
+        h.insert(header::CONTENT_ENCODING, HeaderValue::from_static(enc));
+    }
+    h.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
     h.insert(header::ETAG, HeaderValue::from_str(&etag).expect("hex etag"));
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache_control(rel)));
     Some(res)
+}
+
+/// `Accept-Encoding` contient `enc` sans `q=0`.
+fn accepts(accept: &str, enc: &str) -> bool {
+    accept.split(',').any(|t| {
+        let mut it = t.split(';');
+        it.next().is_some_and(|n| n.trim().eq_ignore_ascii_case(enc))
+            && !it.any(|p| {
+                p.trim()
+                    .strip_prefix("q=")
+                    .and_then(|q| q.parse::<f32>().ok())
+                    .is_some_and(|q| q == 0.0)
+            })
+    })
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -117,6 +155,10 @@ mod tests {
         assert_eq!(content_type("text/css"), "text/css; charset=utf-8");
         assert_eq!(content_type("font/woff2"), "font/woff2");
         assert!(matches(b"\"a\"", "\"a\""));
+        assert!(accepts("gzip, deflate, br, zstd", "br"));
+        assert!(accepts("gzip;q=0.5", "gzip"));
+        assert!(!accepts("br;q=0, gzip", "br"));
+        assert!(!accepts("identity", "gzip"));
         assert!(matches(b"W/\"a\"", "\"a\""));
         assert!(matches(b"\"b\", W/\"a\"", "\"a\""));
         assert!(matches(b"*", "\"a\""));

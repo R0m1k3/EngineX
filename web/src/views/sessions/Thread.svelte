@@ -4,7 +4,7 @@
   import {
     sessionDetail, postTurn, interruptTurn, patchSession, presets, message,
     revertTurn, restoreUndo, restoreGreen, runVerify, bringBack,
-    type Session, type StoredItem, type TurnInfo, type ItemData, type PendingRequest, type Usage, type Approval as Mode,
+    type Session, type Effort, type StoredItem, type TurnInfo, type ItemData, type PendingRequest, type Usage, type Approval as Mode,
     type Verification, type Preset, type QueueWait,
   } from '../../lib/api';
   import { openEvents } from '../../lib/sse';
@@ -79,18 +79,45 @@
     'item/commandExecution/outputDelta': 'output',
   };
 
+  // Textes en flux groupés : un rendu au plus toutes les 50 ms au lieu d'un
+  // par jeton (sorties de commandes très bavardes, Markdown re-rendu en entier).
+  let buffered: Record<string, Record<string, string>> = {};
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function flushDeltas() {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    const b = buffered;
+    buffered = {};
+    if (!live) return;
+    let any = false;
+    for (const [iid, fields] of Object.entries(b)) {
+      const p = (live.partial[iid] ??= {});
+      for (const [f, v] of Object.entries(fields)) p[f] = (p[f] ?? '') + v;
+      any = true;
+    }
+    if (any) follow();
+  }
+
   function onCodex({ method, params }: { method: string; params: any }) {
+    const field = FIELD[method];
+    if (field && live) {
+      const p = (buffered[params.itemId] ??= {});
+      p[field] = (p[field] ?? '') + (params.delta ?? '');
+      flushTimer ??= setTimeout(flushDeltas, 50);
+      return;
+    }
+    // Tout autre événement passe après les textes déjà reçus.
+    flushDeltas();
     if (method === 'error') {
       notice = params?.error?.message ?? 'Erreur de Codex';
       if (params?.willRetry) notice += ' (nouvel essai en cours)';
       return;
     }
     if (!live) return;
-    const field = FIELD[method];
-    if (field) {
-      const p = (live.partial[params.itemId] ??= {});
-      p[field] = (p[field] ?? '') + (params.delta ?? '');
-    } else if (method === 'item/started' || method === 'item/completed') {
+    if (method === 'item/started' || method === 'item/completed') {
       const item = params.item;
       if (!item || item.type === 'userMessage') return;
       const i = live.items.findIndex((x) => x.id === item.id);
@@ -115,6 +142,8 @@
         sandbox = s.sandbox ?? { state: 'stopped' };
         requests = s.requests ?? [];
         wait = s.queue ?? null;
+        // L'instantané contient déjà les textes reçus jusque-là.
+        buffered = {};
         live = s.turn
           ? { id: s.turn.id, items: s.turn.items ?? [], partial: s.turn.partial ?? {}, usage: null }
           : null;
@@ -124,6 +153,7 @@
       queue: (d) => (wait = d.wait ?? null),
       user_message: (d) => {
         notice = '';
+        buffered = {};
         live = { id: null, items: [d.item], partial: {}, usage: null };
         follow(true);
       },
@@ -168,7 +198,10 @@
     },
     (open) => (connected = open),
   );
-  onDestroy(close);
+  onDestroy(() => {
+    close();
+    if (flushTimer) clearTimeout(flushTimer);
+  });
 
   presets()
     .then((ps) => (presetList = ps))
@@ -272,6 +305,15 @@
   async function interruptOther(sid: string) {
     try {
       await interruptTurn(sid);
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
+  async function setEffort(effort: Effort) {
+    try {
+      await patchSession(id, { effort });
+      if (session) session.effort = effort;
     } catch (e) {
       error = message(e);
     }
@@ -393,6 +435,15 @@
           {#each presetList as p (p.id)}
             <option value={String(p.id)}>{p.name}{p.active ? ' · chargé' : ''}</option>
           {/each}
+        </select>
+      </label>
+      <label class="mode" title="Jetons de réflexion avant de répondre : moins = réponses plus rapides">
+        Réflexion
+        <select value={session?.effort ?? 'medium'} onchange={(e) => setEffort((e.currentTarget as HTMLSelectElement).value as Effort)}>
+          <option value="none">Aucune (rapide)</option>
+          <option value="low">Courte</option>
+          <option value="medium">Normale</option>
+          <option value="high">Longue</option>
         </select>
       </label>
       <label class="mode">

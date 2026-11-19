@@ -544,8 +544,12 @@ export interface Project {
 
 export type Approval = 'auto' | 'prudent';
 
+/** Réflexion du modèle : `medium` = budget du preset. */
+export type Effort = 'none' | 'low' | 'medium' | 'high';
+
 export interface Session {
   id: string;
+  effort: Effort | null;
   topic_id: number;
   title: string;
   thread_id: string | null;
@@ -735,7 +739,7 @@ export const sessionDetail = (id: string, before?: number) =>
   request<SessionDetail>('GET', `/api/sessions/${id}${before === undefined ? '' : `?before=${before}`}`);
 export const patchSession = (
   id: string,
-  patch: { title?: string; approval?: Approval; archived?: boolean; preset_id?: number | null },
+  patch: { title?: string; approval?: Approval; archived?: boolean; preset_id?: number | null; effort?: Effort | null },
 ) =>
   request('PATCH', `/api/sessions/${id}`, patch);
 export const deleteSession = (id: string) => request('DELETE', `/api/sessions/${id}`);

@@ -107,8 +107,8 @@ pub fn local_image(path: &str) -> Value {
     json!({"type": "localImage", "path": path})
 }
 
-pub fn turn_start(thread_id: &str, input: Vec<Value>, approval: &str) -> Value {
-    json!({"threadId": thread_id, "input": input, "approvalPolicy": approval})
+pub fn turn_start(thread_id: &str, input: Vec<Value>, approval: &str, effort: &str) -> Value {
+    json!({"threadId": thread_id, "input": input, "approvalPolicy": approval, "effort": effort})
 }
 
 /// `result.thread.id` de `thread/start` et `thread/resume`.

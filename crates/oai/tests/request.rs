@@ -2,7 +2,7 @@ mod common;
 
 use common::{fixture, golden};
 use enginex_hub::sampling::Sampling;
-use enginex_oai::{Ctx, NameMap, ResponsesRequest, TranslateError, to_chat};
+use enginex_oai::{Ctx, NameMap, ResponsesRequest, Think, TranslateError, to_chat};
 use serde_json::{Value, json};
 
 fn ctx() -> Ctx {
@@ -14,6 +14,10 @@ fn ctx() -> Ctx {
             ..Sampling::default()
         },
         vision: false,
+        think: Think {
+            on: true,
+            budget: Some(16384),
+        },
     }
 }
 
@@ -367,4 +371,69 @@ fn notes_only_count_the_current_turn() {
             .filter(|x| x["role"] == "tool")
             .all(|x| !x["content"].as_str().unwrap().contains("[EngineX]"))
     );
+}
+
+#[test]
+fn past_turn_notes_stay_for_the_prompt_cache() {
+    let turn1 = vec![
+        json!({"type": "message", "role": "user", "content": "un"}),
+        write_call("a1", "x.js", 2),
+        out("a1"),
+        write_call("a2", "x.js", 2),
+        out("a2"),
+        write_call("a3", "x.js", 2),
+        out("a3"),
+    ];
+    let m1 = msgs(base(Value::Array(turn1.clone())), &ctx());
+    assert!(m1.last().unwrap()["content"].as_str().unwrap().contains("[EngineX]"));
+    let mut turn2 = turn1;
+    turn2.push(json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "fini"}]}));
+    turn2.push(json!({"type": "message", "role": "user", "content": "deux"}));
+    let m2 = msgs(base(Value::Array(turn2)), &ctx());
+    // Même texte pour le tour fini (la dernière étape, a3, est résumée ensuite :
+    // le préfixe commun va jusqu'à elle).
+    let n = m1.len() - 2;
+    assert_eq!(m1[..n], m2[..n]);
+    assert_eq!(
+        m1.last().unwrap()["content"],
+        m2[n + 1]["content"],
+        "note du tour fini gardée"
+    );
+}
+
+fn think_body(extra: Value, user: &str) -> Value {
+    let mut v = json!({"stream": true, "input": [{"type": "message", "role": "user", "content": user}]});
+    v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    to_chat(&req(v), &ctx()).unwrap().body
+}
+
+#[test]
+fn effort_sets_the_think_budget_per_request() {
+    let b = think_body(json!({}), "salut");
+    assert!(b.get("reasoning_budget_tokens").is_none() && b.get("reasoning_effort").is_none());
+    let b = think_body(json!({"reasoning": {"effort": "low"}}), "salut");
+    assert_eq!(b["reasoning_budget_tokens"], 4096);
+    let b = think_body(json!({"reasoning": {"effort": "high"}}), "salut");
+    assert_eq!(b["reasoning_budget_tokens"], 32768);
+    let b = think_body(json!({"reasoning": {"effort": "none"}}), "salut");
+    assert_eq!(b["reasoning_effort"], "none");
+    assert!(b.get("reasoning_budget_tokens").is_none());
+}
+
+#[test]
+fn compaction_runs_without_thinking() {
+    let b = think_body(
+        json!({"reasoning": {"effort": "high"}}),
+        "You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary",
+    );
+    assert_eq!(b["reasoning_effort"], "none");
+}
+
+#[test]
+fn preset_without_thinking_sends_nothing() {
+    let mut c = ctx();
+    c.think.on = false;
+    let v = json!({"stream": true, "reasoning": {"effort": "none"}, "input": "x"});
+    let b = to_chat(&req(v), &c).unwrap().body;
+    assert!(b.get("reasoning_effort").is_none());
 }

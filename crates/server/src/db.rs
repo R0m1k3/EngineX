@@ -2,13 +2,16 @@
 
 use std::{path::Path, str::FromStr, time::Duration};
 
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 
 pub async fn open(data_dir: &Path) -> anyhow::Result<SqlitePool> {
     let url = format!("sqlite://{}", data_dir.join("enginex.db").display());
     let opts = SqliteConnectOptions::from_str(&url)?
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
+        // Sûr en WAL (une coupure de courant perd au pire les dernières
+        // écritures, jamais la base) ; un fsync de moins par écriture.
+        .synchronous(SqliteSynchronous::Normal)
         .busy_timeout(Duration::from_secs(5))
         .foreign_keys(true);
     let pool = SqlitePoolOptions::new().max_connections(8).connect_with(opts).await?;

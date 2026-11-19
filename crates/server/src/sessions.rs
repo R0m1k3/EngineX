@@ -41,10 +41,15 @@ pub struct SessionRow {
     pub memory_seen: Option<String>,
     /// Preset de la session ; `None` = preset par défaut.
     pub preset_id: Option<i64>,
+    /// Effort de réflexion ; `None` = `medium` (budget du preset).
+    pub effort: Option<String>,
 }
 
+/// Efforts proposés pour une session.
+pub const EFFORTS: [&str; 4] = ["none", "low", "medium", "high"];
+
 const COLS: &str = "id, topic_id, title, thread_id, approval, archived, created_at, updated_at, copy_branch, \
-                    pending_note, pending_revert, undo_snap, memory_seen, preset_id";
+                    pending_note, pending_revert, undo_snap, memory_seen, preset_id, effort";
 /// id, statut, erreur, usage, début, fin, origine, pre, post, modifications.
 type TurnRow = (
     String,
@@ -445,6 +450,9 @@ pub struct PatchBody {
     /// `null` = preset par défaut.
     #[serde(default, deserialize_with = "some")]
     preset_id: Option<Option<i64>>,
+    /// `null` = `medium`.
+    #[serde(default, deserialize_with = "some")]
+    effort: Option<Option<String>>,
 }
 
 /// Champ présent (même `null`) → `Some`.
@@ -494,6 +502,16 @@ pub async fn patch(
         check_preset(&state, p).await?;
         sqlx::query("UPDATE chat_sessions SET preset_id = ? WHERE id = ?")
             .bind(p)
+            .bind(&id)
+            .execute(state.db())
+            .await?;
+    }
+    if let Some(e) = &b.effort {
+        if e.as_deref().is_some_and(|e| !EFFORTS.contains(&e)) {
+            return Err(ApiError::BadRequest);
+        }
+        sqlx::query("UPDATE chat_sessions SET effort = ? WHERE id = ?")
+            .bind(e)
             .bind(&id)
             .execute(state.db())
             .await?;

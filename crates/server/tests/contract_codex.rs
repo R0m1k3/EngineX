@@ -322,7 +322,7 @@ async fn start_thread(c: &Client, cwd: &str, policy: &str) -> String {
 
 async fn start_turn(c: &Client, thread: &str, input: Vec<Value>, policy: &str) -> String {
     let r = c
-        .request("turn/start", types::turn_start(thread, input, policy))
+        .request("turn/start", types::turn_start(thread, input, policy, "medium"))
         .await
         .unwrap();
     types::turn_id(&r).unwrap().to_string()

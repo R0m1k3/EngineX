@@ -406,7 +406,7 @@ pub async fn hold_session(
         let mut lease = Some(lease);
         let mut idle = 0;
         loop {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
             if !hub.busy() {
                 idle += 1;
                 if idle >= 2 {

@@ -13,6 +13,6 @@ pub mod stream;
 pub mod types;
 
 pub use names::NameMap;
-pub use request::{Ctx, TranslateError, Translated, parse_and_translate, to_chat};
+pub use request::{COMPACTION_MARK, Ctx, Think, TranslateError, Translated, parse_and_translate, to_chat};
 pub use stream::{Event, Translator, random_id};
 pub use types::{Input, ResponsesRequest};

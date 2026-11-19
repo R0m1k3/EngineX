@@ -35,15 +35,18 @@ async fn fit_follows_edited_settings() {
     );
     assert_eq!(r.body["cards"].as_array().unwrap().len(), 2);
 
-    // Sans flash attention : 16 têtes × 512 × contexte × 4 octets par carte.
+    // Sans flash attention : 16 têtes × lot physique × contexte × 4 octets
+    // par carte (preset auto qui tient : lot de 1024).
     s["flash_attn"] = json!(false);
     let ctx = s["ctx"].as_u64().unwrap();
+    let ub = s["ubatch"].as_u64().unwrap_or(512);
+    assert_eq!(ub, 1024, "{s}");
     let r = e
         .send("POST", &format!("/api/presets/{id}/fit"), json!({"settings": s}))
         .await;
     assert_eq!(
         r.body["no_fa_mib"].as_u64(),
-        Some((16 * 512 * ctx * 4).div_ceil(1 << 20)),
+        Some((16 * ub * ctx * 4).div_ceil(1 << 20)),
         "{}",
         r.body
     );
