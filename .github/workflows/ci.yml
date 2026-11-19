@@ -21,6 +21,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+      # Stack valide pour un Docker Compose récent (configs.content de SearXNG).
+      - run: docker compose -f docker-compose.yml config -q
       - run: cargo fmt --check
       # Traduction déterministe : clés triées, jamais la feature preserve_order.
       - run: "! cargo tree -e features -i serde_json | grep -q preserve_order"

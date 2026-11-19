@@ -147,7 +147,12 @@ async fn keys_and_protocol() {
             "mem_replace",
             "mem_write",
             "recall",
-            "session_read"
+            "session_read",
+            "web_search",
+            "web_read",
+            "tasks_list",
+            "tasks_add",
+            "tasks_update"
         ]
     );
     assert_eq!(rpc(&e, &key, "ping", json!({})).await["result"], json!({}));

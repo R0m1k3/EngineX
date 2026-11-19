@@ -217,9 +217,13 @@ fn dir_empty(dir: &std::path::Path) -> bool {
 
 /// Topic vide : aucune session (archivées comprises) et dossier vide.
 async fn topic_empty(state: &AppState, t: &TopicInfo) -> Result<bool, ApiError> {
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat_sessions WHERE topic_id = ?")
-        .bind(t.id)
-        .fetch_one(state.db())
+    // Sessions et crons du topic.
+    let n: i64 = sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM chat_sessions WHERE topic_id = ?) + (SELECT COUNT(*) FROM crons WHERE topic_id = ?)",
+    )
+    .bind(t.id)
+    .bind(t.id)
+    .fetch_one(state.db())
         .await?;
     Ok(n == 0 && dir_empty(&t.dir))
 }

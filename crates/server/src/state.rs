@@ -82,6 +82,10 @@ pub(crate) struct Inner {
     pub folder_locks: crate::snapshots::FolderLocks,
     /// Toute écriture de la mémoire passe par ce verrou (`memory::update`).
     pub memory_lock: tokio::sync::Mutex<()>,
+    /// Lecture-écriture de `workspace/tasks.json` (`board::update`).
+    pub board_lock: tokio::sync::Mutex<()>,
+    /// Crons en cours d'exécution.
+    pub crons: crate::crons::Running,
 }
 
 impl AppState {
@@ -127,6 +131,8 @@ impl AppState {
             hubs: Mutex::new(HashMap::new()),
             folder_locks: Default::default(),
             memory_lock: tokio::sync::Mutex::new(()),
+            board_lock: tokio::sync::Mutex::new(()),
+            crons: Default::default(),
         }))
     }
 
@@ -183,6 +189,7 @@ impl AppState {
         crate::engine_api::measure_vram_others(self).await;
         crate::engine_api::boot(self).await?;
         crate::models::boot(self).await?;
+        crate::crons::spawn(self);
         if self.config().timings.auto_loop {
             tokio::spawn(crate::autoupdate::run(self.clone()));
         }

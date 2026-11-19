@@ -23,6 +23,8 @@ pub struct Timings {
     pub auto_loop: bool,
     pub auto: AutoUpdateTimings,
     pub sandbox: SandboxTimings,
+    /// Période du planificateur des crons.
+    pub cron_tick: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -125,6 +127,7 @@ impl Default for Timings {
                 tick: Duration::from_secs(60),
             },
             sandbox: SandboxTimings::default(),
+            cron_tick: Duration::from_secs(20),
         }
     }
 }
@@ -147,6 +150,26 @@ pub struct Config {
     pub hf_base: String,
     pub timings: Timings,
     pub sandbox: SandboxConfig,
+    pub web: WebConfig,
+}
+
+/// Outils web de Codex (`ENGINEX_SEARXNG_URL`).
+#[derive(Clone, Debug)]
+pub struct WebConfig {
+    /// SearXNG de la stack, format JSON activé.
+    pub searxng_url: String,
+    /// `web_read` vers des adresses privées ou locales : tests seulement
+    /// (le modèle atteindrait sinon docker-socket-proxy ou le réseau local).
+    pub allow_private: bool,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            searxng_url: "http://searxng:8080".into(),
+            allow_private: false,
+        }
+    }
 }
 
 impl Config {
@@ -174,6 +197,10 @@ impl Config {
             hf_base: var("ENGINEX_HF_BASE", "https://huggingface.co"),
             timings: Timings::default(),
             sandbox: sandbox_from_env()?,
+            web: WebConfig {
+                searxng_url: var("ENGINEX_SEARXNG_URL", "http://searxng:8080"),
+                allow_private: false,
+            },
         })
     }
 

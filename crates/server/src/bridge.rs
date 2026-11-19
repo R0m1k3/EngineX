@@ -417,7 +417,7 @@ impl Hub {
         if st.turn.is_some() {
             return Err(ApiError::TurnInProgress);
         }
-        if origin == "user" {
+        if origin == "user" || origin == "cron" {
             st.fixes_done = 0;
         }
         st.turn = Some(TurnState {

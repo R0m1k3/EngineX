@@ -100,6 +100,9 @@ pub enum ApiError {
     TooLarge,
     #[error("invalid_skill")]
     InvalidSkill,
+    /// Valeur refusée, avec la raison pour l'UI (en `detail`).
+    #[error("invalid")]
+    Invalid(String),
     #[error("internal")]
     Internal(#[from] anyhow::Error),
 }
@@ -134,7 +137,7 @@ impl ApiError {
             | Self::NoRecipe
             | Self::MemoryChanged => StatusCode::CONFLICT,
             Self::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::InvalidSkill => StatusCode::BAD_REQUEST,
+            Self::InvalidSkill | Self::Invalid(_) => StatusCode::BAD_REQUEST,
             Self::NotGit => StatusCode::BAD_REQUEST,
             Self::CopyFailed(_) => StatusCode::BAD_GATEWAY,
             Self::InvalidName | Self::AttachmentInvalid(false) => StatusCode::BAD_REQUEST,
@@ -193,7 +196,7 @@ impl IntoResponse for ApiError {
             _ => None,
         };
         let mut body = serde_json::json!({ "error": self.to_string() });
-        if let Self::CopyFailed(d) = &self {
+        if let Self::CopyFailed(d) | Self::Invalid(d) = &self {
             body["detail"] = serde_json::json!(d);
         }
         let mut res = (self.status(), Json(body)).into_response();
