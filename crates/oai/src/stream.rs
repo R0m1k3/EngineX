@@ -371,6 +371,43 @@ impl Translator {
         })
     }
 
+    /// Retire les appels dont les arguments ne sont pas un objet JSON complet.
+    fn take_truncated_calls(&mut self) -> Vec<Call> {
+        let keys: Vec<u64> = self
+            .calls
+            .iter()
+            .filter(|(_, c)| !args_complete(&c.args))
+            .map(|(k, _)| *k)
+            .collect();
+        keys.into_iter().filter_map(|k| self.calls.remove(&k)).collect()
+    }
+
+    fn truncated_notice(&self, calls: &[Call]) -> String {
+        let limit = self
+            .usage
+            .as_ref()
+            .and_then(|u| u.get("completion_tokens"))
+            .and_then(Value::as_u64)
+            .map(|n| format!(" ({n} jetons)"))
+            .unwrap_or_default();
+        let what: Vec<String> = calls
+            .iter()
+            .map(|c| {
+                format!(
+                    "`{}` ({} caractères d'arguments)",
+                    self.names.split(&c.name).1,
+                    c.args.chars().count()
+                )
+            })
+            .collect();
+        format!(
+            "[EngineX] Réponse coupée à la limite de sortie{limit} au milieu de l'appel {} : \
+             il n'a pas été exécuté. Écris les gros fichiers en plusieurs fois : un squelette court, \
+             puis une section par commande (apply_patch ou `cat >>`), puis reprends la tâche.",
+            what.join(", ")
+        )
+    }
+
     /// Fin du flux de `llama-server` ; `done_seen` = `[DONE]` reçu.
     pub fn finish(&mut self, done_seen: bool) -> Vec<Event> {
         if self.closed {
@@ -381,10 +418,22 @@ impl Translator {
         }
         let mut out = Vec::new();
         self.close_open(&mut out);
+        let cut = self.finish_reason.as_deref() == Some("length");
+        // Un appel coupé par la limite a des arguments illisibles : transmis,
+        // il resterait dans l'historique de Codex et llama.cpp refuserait
+        // ensuite chaque requête du fil (erreur 500). On le remplace par un
+        // message qui explique au modèle comment s'y prendre, et la réponse se
+        // termine normalement.
+        let truncated = if cut { self.take_truncated_calls() } else { Vec::new() };
+        if !truncated.is_empty() {
+            let notice = self.truncated_notice(&truncated);
+            self.text_delta(false, &notice, &mut out);
+            self.close_open(&mut out);
+        }
         self.close_calls(&mut out);
         self.closed = true;
         let usage = self.usage_json();
-        if self.finish_reason.as_deref() == Some("length") {
+        if cut && truncated.is_empty() {
             let mut r = self.response("incomplete");
             r["incomplete_details"] = json!({"reason": "max_output_tokens"});
             r["usage"] = usage;
@@ -406,4 +455,9 @@ impl Translator {
         r["error"] = json!({"code": code, "message": message});
         vec![self.ev("response.failed", json!({ "response": r }))]
     }
+}
+
+/// Arguments d'appel utilisables : un objet JSON complet.
+pub fn args_complete(args: &str) -> bool {
+    matches!(serde_json::from_str::<Value>(args), Ok(Value::Object(_)))
 }

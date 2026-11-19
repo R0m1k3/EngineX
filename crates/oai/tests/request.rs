@@ -279,3 +279,18 @@ fn text_format_and_max_tokens() {
         json!({"type": "json_schema", "json_schema": {"name": "s", "schema": {"type": "object"}, "strict": true}})
     );
 }
+
+#[test]
+fn truncated_call_in_history_is_repaired() {
+    let v = base(json!([
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "écris"}]},
+        {"type": "function_call", "call_id": "c1", "name": "exec_command",
+         "arguments": "{\"cmd\":\"cat > page.html <<'EOF'\\n<html>"},
+        {"type": "function_call_output", "call_id": "c1", "output": "failed to parse function arguments"},
+    ]));
+    let m = msgs(v, &ctx());
+    let call = m.iter().find(|m| m["role"] == "assistant").unwrap();
+    let args = call["tool_calls"][0]["function"]["arguments"].as_str().unwrap();
+    let parsed: Value = serde_json::from_str(args).expect("arguments JSON valides");
+    assert!(parsed["enginex_erreur"].as_str().unwrap().contains("sortie coupée"));
+}

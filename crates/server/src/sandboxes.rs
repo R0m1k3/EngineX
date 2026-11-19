@@ -278,7 +278,7 @@ pub(crate) async fn start(
         }
     }
     let ctx = crate::engine_api::effective_ctx(state, active.id, active.settings.ctx);
-    let toml = crate::codex_config::render(&active.name, ctx, api_url, Some(&mcp_url));
+    let toml = crate::codex_config::render(&active.name, ctx, active.settings.max_output, api_url, Some(&mcp_url));
     write_private(&mounts.codex_home.join("config.toml"), toml.as_bytes())?;
     //    Skills actives, copiées sans suivre de lien.
     if let Err(e) = crate::skills::install_into(state, &mounts.codex_home).await {

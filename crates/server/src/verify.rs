@@ -22,7 +22,9 @@ use crate::{
 pub const DEVELOPER_INSTRUCTIONS: &str = "Après chaque tour qui modifie des fichiers, EngineX lance la \
 vérification décrite dans `.enginex/verify.toml` (ou une recette détectée) et te renvoie les échecs. Écris \
 ou adapte les tests du code que tu modifies et lance-les avant de dire que c'est fini. Tu peux créer ou \
-modifier `.enginex/verify.toml` (format : [[step]] name, run, timeout).";
+modifier `.enginex/verify.toml` (format : [[step]] name, run, timeout). Chaque réponse a une limite de \
+sortie : écris un fichier de plus de 300 lignes en plusieurs fois (un squelette court, puis une section par \
+commande avec apply_patch ou `cat >>`), jamais d'un seul bloc.";
 
 pub const RECIPE: &str = ".enginex/verify.toml";
 const RECIPE_MAX: usize = 64 * 1024;

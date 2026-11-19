@@ -207,10 +207,22 @@ impl<'a> Builder<'a> {
                 self.in_head = false;
                 let name = str_field(item, "name").unwrap_or("");
                 let flat = self.names.insert(str_field(item, "namespace"), name);
+                let raw = str_field(item, "arguments").unwrap_or("");
+                // Appel coupé gardé par Codex : llama.cpp refuserait toute la
+                // requête (« Failed to parse tool call arguments as JSON »).
+                let args = if crate::stream::args_complete(raw) {
+                    raw.to_string()
+                } else {
+                    json!({"enginex_erreur": format!(
+                        "arguments incomplets ({} caractères, sortie coupée) : appel non exécuté",
+                        raw.chars().count()
+                    )})
+                    .to_string()
+                };
                 let call = json!({
                     "id": str_field(item, "call_id").unwrap_or(""),
                     "type": "function",
-                    "function": {"name": flat, "arguments": str_field(item, "arguments").unwrap_or("")},
+                    "function": {"name": flat, "arguments": args},
                 });
                 let pending = self.reasoning.take();
                 match self.msgs.last_mut() {

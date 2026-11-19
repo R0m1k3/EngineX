@@ -1,0 +1,7 @@
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{"role":"assistant","content":null},"finish_reason":null}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{"reasoning_content":"J'écris le fichier."},"finish_reason":null}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_cut","type":"function","function":{"name":"exec_command","arguments":""}}]},"finish_reason":null}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"cmd\":\"cat > page.html <<'EOF'\\n<html>"}}]},"finish_reason":null}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[{"index":0,"delta":{},"finish_reason":"length"}]}
+{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"qwen","choices":[],"usage":{"prompt_tokens":120,"completion_tokens":32768,"total_tokens":32888,"prompt_tokens_details":{"cached_tokens":100}}}
+[DONE]

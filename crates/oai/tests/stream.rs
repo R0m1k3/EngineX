@@ -89,6 +89,53 @@ fn parallel_tools() {
 }
 
 #[test]
+fn truncated_call_becomes_a_notice() {
+    let ev = run("chat-chunks-length-tool.jsonl");
+    let types = names_of(&ev);
+    // L'appel coupé n'est jamais « terminé » : Codex ne l'exécute ni ne le garde.
+    assert!(
+        !ev.iter()
+            .any(|e| e["type"] == "response.output_item.done" && e["item"]["type"] == "function_call"),
+        "{types:?}"
+    );
+    let last = ev.last().unwrap();
+    assert_eq!(last["type"], "response.completed");
+    let out = last["response"]["output"].as_array().unwrap();
+    assert_eq!(out.len(), 2, "réflexion + message");
+    assert_eq!(out[0]["type"], "reasoning");
+    let text = out[1]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("32768 jetons"), "{text}");
+    assert!(text.contains("`exec_command`"), "{text}");
+    assert!(text.contains("plusieurs fois"), "{text}");
+}
+
+#[test]
+fn complete_call_survives_length() {
+    // Coupé juste après un appel complet : il reste transmis.
+    let raw = std::fs::read_to_string(fixture_path("chat-chunks-reasoning-tool.jsonl")).unwrap();
+    let mut t = Translator::new("resp_1".into(), "qwen".into(), names(), counter_ids());
+    let mut ev = t.start();
+    for line in raw.lines().filter(|l| !l.trim().is_empty() && l.trim() != "[DONE]") {
+        let mut c: Value = serde_json::from_str(line).unwrap();
+        if c["choices"][0]["finish_reason"] == "tool_calls" {
+            c["choices"][0]["finish_reason"] = json!("length");
+        }
+        ev.extend(t.push_chunk(&c));
+    }
+    ev.extend(t.finish(true));
+    let ev: Vec<Value> = ev.into_iter().map(|e| e.data).collect();
+    let last = ev.last().unwrap();
+    assert_eq!(last["type"], "response.incomplete");
+    assert!(
+        last["response"]["output"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["type"] == "function_call" && i["arguments"] == "{\"text\":\"hi\"}")
+    );
+}
+
+#[test]
 fn length_is_incomplete() {
     let ev = run("chat-chunks-length.jsonl");
     golden("expected-events-length.json", &json!(ev));
