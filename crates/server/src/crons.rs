@@ -533,6 +533,7 @@ async fn run_prompt(state: &AppState, sid: &str, text: &str, timeout: Duration) 
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+    turns_settled(state, sid, started).await;
     let last: Option<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT id, status, error FROM chat_turns WHERE session_id = ? AND started_at >= ? \
          ORDER BY started_at DESC, rowid DESC LIMIT 1",
@@ -566,6 +567,25 @@ async fn run_prompt(state: &AppState, sid: &str, text: &str, timeout: Duration) 
             ),
         ),
         None => ("failed", "tour introuvable".into()),
+    }
+}
+
+/// Le hub se libère juste avant que la fin du tour soit écrite en base :
+/// attendre (10 s au plus) que plus aucun tour de la session ne soit en cours.
+pub(crate) async fn turns_settled(state: &AppState, sid: &str, since: i64) {
+    for _ in 0..40 {
+        let open: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM chat_turns WHERE session_id = ? AND started_at >= ? AND status = 'inProgress'",
+        )
+        .bind(sid)
+        .bind(since)
+        .fetch_one(state.db())
+        .await
+        .unwrap_or(0);
+        if open == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 

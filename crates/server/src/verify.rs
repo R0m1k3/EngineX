@@ -182,7 +182,15 @@ pub fn spawn_after_turn(
     origin: &'static str,
     pre: Option<String>,
 ) {
+    /// Rend `busy()` à la fin, même sur une panique.
+    struct Settle(Arc<Hub>);
+    impl Drop for Settle {
+        fn drop(&mut self) {
+            self.0.settled();
+        }
+    }
     let fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> = Box::pin(async move {
+        let _settle = Settle(hub.clone());
         let changes = match &pre {
             Some(p) => hub.post_snapshot(&state, &tid, p).await,
             None => None,

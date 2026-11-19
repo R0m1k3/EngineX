@@ -98,6 +98,8 @@ struct HubState {
     memory_idle_base: Option<Instant>,
     /// Attente dans la file commune (`queue.rs`) : position, ce qui passe avant.
     queued: Option<Value>,
+    /// Tour fini, fin pas encore écrite ni vérification décidée.
+    settling: bool,
     /// Interruption demandée pendant l'attente dans la file.
     cancel_queue: bool,
 }
@@ -134,6 +136,7 @@ pub fn hub(state: &AppState, session_id: &str) -> Arc<Hub> {
                     conn_memory_sha: None,
                     memory_idle_base: None,
                     queued: None,
+                    settling: false,
                     cancel_queue: false,
                 }),
                 start: tokio::sync::Mutex::new(()),
@@ -220,7 +223,12 @@ impl Hub {
     /// Tour ou vérification en cours.
     pub fn busy(&self) -> bool {
         let st = self.st.lock().expect("verrou");
-        st.turn.is_some() || st.verify.is_some()
+        st.turn.is_some() || st.verify.is_some() || st.settling
+    }
+
+    /// Fin de tour écrite et vérification lancée (ou écartée).
+    pub fn settled(&self) {
+        self.st.lock().expect("verrou").settling = false;
     }
 
     /// Tour en attente dans la file commune.
@@ -1332,6 +1340,7 @@ impl Hub {
         let (t, reqs) = {
             let mut st = self.st.lock().expect("verrou");
             let t = st.turn.take();
+            st.settling = t.is_some();
             st.last_activity = match &t {
                 Some(t) if t.origin == "memory" => st.memory_idle_base.take().unwrap_or_else(Instant::now),
                 _ => Instant::now(),

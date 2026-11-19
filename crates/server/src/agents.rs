@@ -951,6 +951,7 @@ async fn drive(state: &AppState, a: &AgentRow, sid: &str, text: &str) -> Outcome
         tokio::time::sleep(step).await;
     }
     let gpu_s = begun.elapsed().saturating_sub(paused).as_secs() as i64;
+    crons::turns_settled(state, sid, started).await;
     let turns: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT status, error, usage FROM chat_turns WHERE session_id = ? AND started_at >= ? \
          ORDER BY started_at DESC, rowid DESC",
