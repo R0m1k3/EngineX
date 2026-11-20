@@ -520,9 +520,12 @@ pub async fn responses(
         started,
         dropped: translated.dropped,
         cpu0: llama_cpu(&state),
-        session: caller
-            .as_ref()
-            .and_then(|c| c.name.strip_prefix("sandbox:").filter(|_| c.internal).map(str::to_string)),
+        session: caller.as_ref().and_then(|c| {
+            c.name
+                .strip_prefix("sandbox:")
+                .filter(|_| c.internal)
+                .map(str::to_string)
+        }),
     };
     tokio::spawn(async move {
         let mut outcome = None;

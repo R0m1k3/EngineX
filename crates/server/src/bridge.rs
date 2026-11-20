@@ -1351,10 +1351,10 @@ impl Hub {
                 if item["type"] == "userMessage" {
                     return;
                 }
-                if method == "item/completed" {
-                    if let Some(g) = self.st.lock().expect("verrou").last_gen.clone() {
-                        item["gen"] = g;
-                    }
+                if method == "item/completed"
+                    && let Some(g) = self.st.lock().expect("verrou").last_gen.clone()
+                {
+                    item["gen"] = g;
                 }
                 let iid = item["id"].as_str().unwrap_or("").to_string();
                 let tid = params["turnId"].as_str().map(str::to_string);
