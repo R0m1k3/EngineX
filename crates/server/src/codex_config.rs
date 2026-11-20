@@ -20,8 +20,25 @@ fn toml_str(s: &str) -> String {
 /// tout le travail du tour, il doit rester rare. Le dépassement éventuel est
 /// couvert par le plafond de Codex (95 %) et par le relais (appel tronqué
 /// remplacé par un message).
-pub fn compact_limit(ctx: u64) -> u64 {
-    (ctx as f64 * 0.75).round() as u64
+///
+/// Le seuil laisse aussi la place d'une réponse entière : `reserve` = budget
+/// de réflexion + marge (voir `reserve_for`). Sans cela, un prompt de 45k sur
+/// 65k de contexte passait sous les 75 %, puis la réflexion (16k) remplissait
+/// le contexte : llama-server coupait (`length`) et le tour échouait.
+pub fn compact_limit(ctx: u64, reserve: u64) -> u64 {
+    let frac = (ctx as f64 * 0.75).round() as u64;
+    frac.min(ctx.saturating_sub(reserve)).max(ctx / 4)
+}
+
+/// Place à garder libre après le dernier prompt : réflexion + réponse et
+/// sortie d'outil (10 240 jetons).
+pub fn reserve_for(s: &PresetSettings) -> u64 {
+    let think = if s.reasoning == enginex_engine::args::Reasoning::On {
+        s.reasoning_budget.unwrap_or(0)
+    } else {
+        0
+    };
+    think + 10_240
 }
 
 /// Consigne de résumé du compactage (`compact_prompt`) : celle de Codex, plus
@@ -47,8 +64,8 @@ structured.";
 /// Texte du `config.toml` (sans la clé, lue dans `ENGINEX_API_KEY`).
 /// Config Codex ; `mcp` : URL du serveur MCP d'EngineX (sandboxes seulement,
 /// il exige leur clé interne).
-pub fn render(model: &str, ctx: u64, base_url: &str, mcp: Option<&str>) -> String {
-    let compact = compact_limit(ctx);
+pub fn render(model: &str, ctx: u64, reserve: u64, base_url: &str, mcp: Option<&str>) -> String {
+    let compact = compact_limit(ctx, reserve);
     let mut out = format!(
         "model = {model}\n\
          model_provider = \"enginex\"\n\
@@ -91,6 +108,7 @@ pub async fn codex_config(State(state): State<AppState>, headers: HeaderMap) -> 
         "toml": render(
             &p.name,
             crate::engine_api::effective_ctx(&state, id, s.ctx),
+            reserve_for(&s),
             &base_url,
             None,
         ),
@@ -104,13 +122,21 @@ mod tests {
 
     #[test]
     fn compact_at_three_quarters() {
-        assert_eq!(compact_limit(65536), 49152);
-        assert_eq!(compact_limit(16384), 12288);
+        assert_eq!(compact_limit(65536, 0), 49152);
+        assert_eq!(compact_limit(16384, 0), 12288);
+    }
+
+    #[test]
+    fn compact_leaves_room_for_reasoning() {
+        // 65536 - (16384 + 10240) = 38912 : un prompt de 45k déclenche le compactage.
+        assert_eq!(compact_limit(65536, 26624), 38912);
+        // contexte trop petit : jamais sous 25 %.
+        assert_eq!(compact_limit(16384, 26624), 4096);
     }
 
     #[test]
     fn toml_has_compact_prompt() {
-        let t = super::render("qwen", 65536, "http://x/v1", None);
+        let t = super::render("qwen", 65536, 0, "http://x/v1", None);
         let v: toml::Value = toml::from_str(&t).expect("TOML valide");
         assert_eq!(v["model_auto_compact_token_limit"].as_integer(), Some(49152));
         assert!(

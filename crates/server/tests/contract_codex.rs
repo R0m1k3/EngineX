@@ -209,6 +209,7 @@ async fn as_env(scenario: &str, fake_env: &str, vision: bool) -> AsEnv {
         enginex_server::codex_config::render(
             p["name"].as_str().unwrap(),
             p["settings"]["ctx"].as_u64().unwrap(),
+            0,
             &format!("{base}/v1"),
             None,
         ),

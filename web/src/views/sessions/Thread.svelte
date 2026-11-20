@@ -740,7 +740,7 @@
               <div class="fh"><Icon icon={CircleX} size={18} />Tour en échec</div>
               <p class="pre">{end.error ?? 'erreur inconnue'}</p>
               {#if end.error?.includes('max_output_tokens')}
-                <p class="muted">Le modèle a écrit jusqu’à la limite (souvent une réflexion qui tourne en rond).
+                <p class="muted">Le modèle a écrit jusqu’à la limite : « Sortie max » du preset, ou contexte plein (réflexion + prompt > contexte).
                   Réglages du preset : « Réflexion max par réponse » et « Sortie max par réponse » (<a href="#models/presets">Modèles → Presets</a>).</p>
               {/if}
             </div>
