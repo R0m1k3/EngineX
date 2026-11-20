@@ -194,7 +194,7 @@
       <EmptyState
         icon={FolderGit}
         title="Aucun topic n’est un dépôt git"
-        text="Clonez un dépôt dans un topic (terminal d’une session, ou demandez-le à Codex) : il apparaîtra ici."
+        text="Clonez un dépôt dans un topic (terminal d’une session, ou demandez-le à EX) : il apparaîtra ici."
       />
     </div>
   {:else if repo && tab === 'pulls' && repo.forge}

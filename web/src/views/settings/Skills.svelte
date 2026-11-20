@@ -79,11 +79,11 @@
 
 {#if error}<div class="err"><Note tone="danger">{error}</Note></div>{/if}
 
-<Section title="Skills" text="Un fichier SKILL.md que Codex lit quand la tâche s’y prête. Copiées dans chaque sandbox à son démarrage.">
+<Section title="Skills" text="Un fichier SKILL.md que EX lit quand la tâche s’y prête. Copiées dans chaque sandbox à son démarrage.">
   {#snippet aside()}
     <div class="new"><Button variant="primary" icon={Plus} onclick={create}>Nouvelle skill</Button></div>
   {/snippet}
-  <p class="hint">Codex reçoit le nom et la description de chaque skill active. Un changement vaut pour les sandboxes démarrées ensuite.</p>
+  <p class="hint">EX reçoit le nom et la description de chaque skill active. Un changement vaut pour les sandboxes démarrées ensuite.</p>
   <ul class="rows" aria-label="Skills">
     {#each list as s (s.name)}
       <li>

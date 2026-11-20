@@ -10,6 +10,7 @@
   import IconButton from '../../lib/ui/IconButton.svelte';
   import Kbd from '../../lib/ui/Kbd.svelte';
   import Icon from '../../lib/ui/Icon.svelte';
+  import Select from '../../lib/ui/Select.svelte';
   import { tooltip } from '../../lib/ui/tooltip';
   import { screen } from './phone.svelte';
 
@@ -20,7 +21,15 @@
     send,
     interrupt,
     text = $bindable(''),
+    effort,
+    efforts,
+    effortHint = '',
+    onEffort,
   }: {
+    effort: string;
+    efforts: { value: string; label: string }[];
+    effortHint?: string;
+    onEffort: (v: any) => void;
     sessionId: string;
     running: boolean;
     disabled?: boolean;
@@ -144,14 +153,16 @@
       <div class="ph-row">
         <IconButton icon={Camera} label="Prendre une photo" size="lg" {disabled} onclick={() => camera?.click()} />
         <IconButton icon={ImageIcon} label="Joindre une image" size="lg" {disabled} onclick={() => picker?.click()} />
+        <span class="eff ph"><Select aria-label="Niveau de réflexion" title={effortHint} value={effort} options={efforts}
+          onchange={(e) => onEffort((e.currentTarget as HTMLSelectElement).value)} /></span>
         <textarea
           bind:this={area}
           bind:value={text}
           onkeydown={onKey}
           onpaste={onPaste}
           rows="1"
-          placeholder="Message à Codex"
-          aria-label="Message à Codex"
+          placeholder="Message à EX"
+          aria-label="Message à EX"
           {disabled}
         ></textarea>
         {#if running}
@@ -167,12 +178,14 @@
         onkeydown={onKey}
         onpaste={onPaste}
         rows="2"
-        placeholder={disabled ? 'Session archivée : désarchivez-la pour écrire.' : 'Message à Codex'}
-        aria-label="Message à Codex"
+        placeholder={disabled ? 'Session archivée : désarchivez-la pour écrire.' : 'Message à EX'}
+        aria-label="Message à EX"
         {disabled}
       ></textarea>
       <div class="bar">
         <Button variant="ghost" size="sm" icon={ImageIcon} {disabled} onclick={() => picker?.click()}>Joindre une image</Button>
+        <span class="eff"><span class="efl">Réflexion</span><Select aria-label="Niveau de réflexion" title={effortHint} value={effort} options={efforts}
+          onchange={(e) => onEffort((e.currentTarget as HTMLSelectElement).value)} /></span>
         <span class="hint"><Kbd>Entrée</Kbd> envoyer, <Kbd>Maj</Kbd>+<Kbd>Entrée</Kbd> à la ligne</span>
         {#if running}
           <Button icon={Square} onclick={interrupt}>Arrêter</Button>
@@ -227,6 +240,9 @@
   }
   textarea:focus-visible { outline: none; border: 0; }
   .bar { display: flex; align-items: center; gap: var(--s2); padding: var(--s2); }
+  .eff { display: inline-flex; align-items: center; gap: var(--s2); }
+  .efl { font-size: var(--fs-xs); color: var(--faint); }
+  .eff.ph { align-self: center; max-width: 96px; }
   .hint { margin-left: auto; margin-right: var(--s2); font-size: var(--fs-xs); color: var(--faint); white-space: nowrap; }
   .thumbs { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; padding: var(--s3) var(--s3) 0; }
   .thumb { position: relative; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--bg); }

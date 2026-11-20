@@ -35,10 +35,10 @@
   let isQuestion = $derived(req.method === 'item/tool/requestUserInput');
   let title = $derived(
     req.method === 'item/commandExecution/requestApproval'
-      ? 'Codex veut lancer une commande'
+      ? 'EX veut lancer une commande'
       : req.method === 'item/fileChange/requestApproval'
-        ? 'Codex veut modifier des fichiers'
-        : 'Codex pose une question',
+        ? 'EX veut modifier des fichiers'
+        : 'EX pose une question',
   );
   const size = $derived(screen.phone ? 'lg' : 'md');
 </script>

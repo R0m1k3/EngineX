@@ -71,7 +71,7 @@
   {:else if !st.git}
     <div class="sec">
       <EmptyState icon={GitBranch} title="Pas de dépôt git"
-        text="Le dossier de cette session n’est pas un dépôt git : lancez « git init » dans le terminal, ou demandez-le à Codex." />
+        text="Le dossier de cette session n’est pas un dépôt git : lancez « git init » dans le terminal, ou demandez-le à EX." />
     </div>
   {:else}
     <div class="sec head">

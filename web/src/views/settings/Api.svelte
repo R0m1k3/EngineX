@@ -89,10 +89,10 @@
 
 {#if error}<div class="err"><Note tone="danger">{error}</Note></div>{/if}
 
-<Section title="Clés d’API" text="Codex et les autres clients OpenAI s’identifient avec une clé. Sa valeur n’est montrée qu’à la création.">
+<Section title="Clés d’API" text="EX et les autres clients OpenAI s’identifient avec une clé. Sa valeur n’est montrée qu’à la création.">
   <p class="hint">Adresse : <code>{config?.base_url ?? '/v1'}</code>. Une clé perdue se remplace par une nouvelle.</p>
   <form class="newkey" onsubmit={create}>
-    <Input label="Nom de la clé" bind:value={name} placeholder="codex-portable" maxlength={50} required />
+    <Input label="Nom de la clé" bind:value={name} placeholder="ex-portable" maxlength={50} required />
     <Button type="submit" variant="primary" icon={Plus} disabled={!name.trim()}>Nouvelle clé</Button>
   </form>
   {#if created}
@@ -122,7 +122,7 @@
   {/if}
 </Section>
 
-<Section title="Configuration de Codex" text="Pour utiliser EngineX depuis un Codex installé ailleurs, avec le preset actif.">
+<Section title="Configuration d’un client externe" text="Pour utiliser EngineX depuis un autre client OpenAI, avec le preset actif.">
   {#if config}
     {@const cfg = config}
     <p class="hint">À mettre dans <code>~/.codex/config.toml</code>. La clé se lit dans la variable <code>{cfg.env_key}</code>.</p>

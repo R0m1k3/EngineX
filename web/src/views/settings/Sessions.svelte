@@ -72,14 +72,14 @@
 {#if error}<div class="err"><Note tone="danger">{error}</Note></div>{/if}
 
 <form onsubmit={save}>
-  <Section title="Sandboxes" text="Chaque session a sa sandbox Docker, où tourne Codex. Elle démarre au premier message ; le code et l’historique sont gardés.">
+  <Section title="Sandboxes" text="Chaque session a sa sandbox Docker, où tourne EX. Elle démarre au premier message ; le code et l’historique sont gardés.">
     <div class="g2">
       <Input label="Arrêt après inactivité" unit="min" hint="5 à 1440, sans tour en cours" type="number" min="5" max="1440" bind:value={idle} required />
       <Input label="Sandboxes actives en même temps" hint="1 à 10" type="number" min="1" max="10" bind:value={max} required />
     </div>
   </Section>
 
-  <Section title="Vérification" text="Tests lancés par EngineX après chaque tour qui change des fichiers ; un échec est renvoyé à Codex.">
+  <Section title="Vérification" text="Tests lancés par EngineX après chaque tour qui change des fichiers ; un échec est renvoyé à EX.">
     <Switch bind:checked={verifyOn}>Vérifier après chaque tour qui change des fichiers</Switch>
     <div class="g2">
       <Input label="Corrections automatiques au plus" hint="0 à 10" type="number" min="0" max="10" bind:value={fixes} required disabled={!verifyOn} />
@@ -88,7 +88,7 @@
     <p class="small muted">Si l’agent ne l’a pas ouverte lui-même : un tour de plus, un seul par message ; demande le navigateur de la stack.</p>
   </Section>
 
-  <Section title="Mémoire" text="Un tour de Codex avant l’arrêt pour inactivité, s’il y a eu un message depuis le précédent.">
+  <Section title="Mémoire" text="Un tour d’EX avant l’arrêt pour inactivité, s’il y a eu un message depuis le précédent.">
     <Switch bind:checked={memoryAuto}>Mettre à jour la mémoire en fin de session</Switch>
   </Section>
 

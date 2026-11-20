@@ -58,7 +58,7 @@
   };
   let preset = $derived(list.find((p) => p.id === info?.preset_id) ?? null);
   let presetName = $derived(preset?.name ?? null);
-  // `--fit` a réduit le contexte faute de VRAM : Codex reçoit ce contexte-là.
+  // `--fit` a réduit le contexte faute de VRAM : EX reçoit ce contexte-là.
   let ctxCut = $derived(
     info?.state.state === 'ready' && info.n_ctx != null && preset != null && info.n_ctx < preset.settings.ctx,
   );
@@ -136,7 +136,7 @@
     {#if ctxCut && preset}
       <Note tone="warn">
         Contexte réduit par --fit : {int(info.n_ctx ?? 0)} jetons chargés au lieu de {int(preset.settings.ctx)} (VRAM courte).
-        Codex reçoit {int(info.n_ctx ?? 0)}. Baisser le contexte, passer le KV en q4_0 ou mettre des experts en RAM.
+        EX reçoit {int(info.n_ctx ?? 0)}. Baisser le contexte, passer le KV en q4_0 ou mettre des experts en RAM.
       </Note>
     {/if}
     {#if cpuHeavy && gen}

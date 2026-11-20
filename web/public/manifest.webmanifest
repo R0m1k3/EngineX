@@ -1,7 +1,7 @@
 {
   "name": "EngineX",
   "short_name": "EngineX",
-  "description": "Atelier de code local : sessions Codex sur llama.cpp",
+  "description": "Atelier de code local : sessions EX sur llama.cpp",
   "lang": "fr",
   "id": "/",
   "start_url": "/#dashboard",

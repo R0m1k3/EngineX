@@ -38,7 +38,6 @@
   import Button from '../../lib/ui/Button.svelte';
   import IconButton from '../../lib/ui/IconButton.svelte';
   import Icon from '../../lib/ui/Icon.svelte';
-  import Segmented from '../../lib/ui/Segmented.svelte';
   import Select from '../../lib/ui/Select.svelte';
   import Sheet from '../../lib/ui/Sheet.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
@@ -145,7 +144,7 @@
     if (any) follow();
   }
 
-  function onCodex({ method, params }: { method: string; params: any }) {
+  function onEX({ method, params }: { method: string; params: any }) {
     const field = FIELD[method];
     if (field && live) {
       const p = (buffered[params.itemId] ??= {});
@@ -156,7 +155,7 @@
     // Tout autre événement passe après les textes déjà reçus.
     flushDeltas();
     if (method === 'error') {
-      notice = params?.error?.message ?? 'Erreur de Codex';
+      notice = params?.error?.message ?? 'Erreur d’EX';
       if (params?.willRetry) notice += ' (nouvel essai en cours)';
       return;
     }
@@ -201,7 +200,7 @@
         live = { id: null, items: [d.item], partial: {}, usage: null };
         follow(true);
       },
-      codex: onCodex,
+      codex: onEX,
       request: (r) => {
         requests = [...requests.filter((x) => x.rid !== r.rid), r];
         follow();
@@ -291,6 +290,31 @@
       return { it, end };
     }),
   );
+
+  // Débit moyen d'une suite d'éléments : jetons écrits / temps de génération, un appel au modèle compté une fois.
+  function avgTps(items: ItemData[]): number | null {
+    const seen = new Set<number>();
+    let n = 0, secs = 0;
+    for (const x of items) {
+      const g = x?.gen;
+      if (!g?.tps || !g.n || seen.has(g.at)) continue;
+      seen.add(g.at);
+      n += g.n;
+      secs += g.n / g.tps;
+    }
+    return secs > 0 ? n / secs : null;
+  }
+  const fmtTps = (v: number) => `${v >= 10 ? Math.round(v) : v.toFixed(1).replace('.', ',')} t/s`;
+  /** Dernier élément de chaque appel au modèle : le débit n'est affiché qu'une fois par appel. */
+  const lastOfCall = (list: ItemData[], i: number) => !!list[i]?.gen?.tps && list[i + 1]?.gen?.at !== list[i].gen.at;
+  const turnTps = $derived.by(() => {
+    const by: Record<string, ItemData[]> = {};
+    for (const h of history) if (h.turn_id) (by[h.turn_id] ??= []).push(h.data);
+    return Object.fromEntries(Object.entries(by).map(([k, v]) => [k, avgTps(v)]));
+  });
+  const histData = $derived(history.map((h) => h.data));
+  const sessionTps = $derived(avgTps(histData));
+  const liveTps = $derived(avgTps(live?.items ?? []));
 
   const tokens = (u: Usage | null) =>
     u?.last ? `${u.last.inputTokens.toLocaleString('fr-FR')} jetons lus, ${u.last.outputTokens.toLocaleString('fr-FR')} écrits` : '';
@@ -448,7 +472,7 @@
   const autoOrigin = (it: { turn_id: string | null; data: ItemData }) =>
     (it.data as { origin?: string }).origin ?? (it.turn_id ? turns[it.turn_id]?.origin : undefined);
   const AUTO_LABEL: Record<string, string> = {
-    verify: 'Vérification EngineX : rapport d’échec envoyé à Codex',
+    verify: 'Vérification EngineX : rapport d’échec envoyé à EX',
     memory: 'Mise à jour de la mémoire en fin de session',
   };
 
@@ -521,11 +545,6 @@
       onchange={(e) => setPreset((e.currentTarget as HTMLSelectElement).value)} />
     {#if big}<p class="hint">Changé, il est chargé au prochain message (la sandbox redémarre).</p>{/if}
   </div>
-  <div class="ctl" class:big use:tooltip={big ? null : EFFORT_HINT[session?.effort ?? 'medium']}>
-    <span class="lbl">Réflexion</span>
-    <Segmented label="Réflexion" size={big ? 'lg' : 'md'} value={session?.effort ?? 'medium'} options={EFFORTS} onchange={(v) => setEffort(v)} />
-    {#if big}<p class="hint">{EFFORT_HINT[session?.effort ?? 'medium']}. Moins = réponses plus rapides.</p>{/if}
-  </div>
   <div class="ctl" class:big>
     {#if !big}<span class="lbl">Approbation</span>{/if}
     <Select label={big ? 'Approbation' : undefined} aria-label="Approbation" size={big ? 'lg' : 'md'}
@@ -546,9 +565,9 @@
     <div class="chips">
       {@render sandboxBadge()}
       <button class="chip" onclick={() => (settings = true)}><Icon icon={Box} size={14} />{modelLabel}</button>
-      <button class="chip" onclick={() => (settings = true)}>Réflexion {session?.effort ?? 'medium'}</button>
       <button class="chip" onclick={() => (settings = true)}>{session?.approval === 'prudent' ? 'Prudent' : 'Automatique'}</button>
       {#if session?.copy_branch}<span class="chip static"><Icon icon={GitBranch} size={14} />{session.copy_branch}</span>{/if}
+      {#if sessionTps}<span class="chip static num">moyenne {fmtTps(sessionTps)}</span>{/if}
     </div>
     <Menu side="bottom-end" bind:open={moreOpen} anchor={moreBtn} items={moreItems} label="Outils et réglages de la session" />
     <Sheet bind:open={settings} title="Réglages de la session">
@@ -558,6 +577,7 @@
     <header class="head">
       <div class="r1">
         <button class="title" onclick={rename} use:tooltip={'Renommer'}><h1 class="ell">{session?.title ?? '…'}</h1></button>
+        {#if sessionTps}<span use:tooltip={'Débit moyen de la session'}><Badge><span class="num">moyenne {fmtTps(sessionTps)}</span></Badge></span>{/if}
         {#if session?.copy_branch}
           <span use:tooltip={'Copie séparée'}><Badge><Icon icon={GitBranch} size={14} />{session.copy_branch}</Badge></span>
           <Button size="sm" variant="ghost" icon={GitMerge} busy={bringing} disabled={bringing || !!live} onclick={bring}>
@@ -606,11 +626,11 @@
       {@render strip(Undo2, '', undo)}
     {/if}
     {#if session?.pending_note}
-      {#snippet note()}Une note sur ce retour arrière sera jointe à votre prochain message pour Codex.{/snippet}
+      {#snippet note()}Une note sur ce retour arrière sera jointe à votre prochain message pour EX.{/snippet}
       {@render strip(Info, '', note)}
     {/if}
     {#if session?.pending_revert}
-      {#snippet rev()}Retour de conversation en attente : il sera appliqué à Codex au prochain message.{/snippet}
+      {#snippet rev()}Retour de conversation en attente : il sera appliqué à EX au prochain message.{/snippet}
       {@render strip(Info, '', rev)}
     {/if}
   </div>
@@ -626,7 +646,7 @@
             text="La sandbox démarre au premier message ; elle s’arrête seule après un moment sans activité." />
         </div>
       {/if}
-      {#each rows as { it, end } (it.item_id)}
+      {#each rows as { it, end }, ri (it.item_id)}
         {#if it.kind === 'userMessage' && AUTO_LABEL[autoOrigin(it) ?? '']}
           <details class="auto">
             <summary><Icon icon={ChevronRight} size={16} class="chev" />{AUTO_LABEL[autoOrigin(it) ?? '']}</summary>
@@ -634,6 +654,7 @@
           </details>
         {:else}
           <Item item={it.data} sessionId={id} />
+          {#if lastOfCall(histData, ri)}<p class="tps num">{fmtTps(it.data.gen.tps)}</p>{/if}
         {/if}
         {#if it.kind === 'userMessage' && it.turn_id && (autoOrigin(it) ?? 'user') === 'user' && !live}
           {@const t = turns[it.turn_id]}
@@ -661,19 +682,21 @@
               {/if}
             </div>
           {/if}
-          {#if end.status === 'interrupted' || tokens(end.usage)}
+          {#if end.status === 'interrupted' || tokens(end.usage) || turnTps[end.id]}
             <p class="foot num">
               {#if end.status === 'interrupted'}<span>Tour interrompu.</span>{/if}
               {#if tokens(end.usage)}<span>{tokens(end.usage)}</span>{/if}
+              {#if turnTps[end.id]}<span>moyenne {fmtTps(turnTps[end.id]!)}</span>{/if}
             </p>
           {/if}
         {/if}
       {/each}
-      {#each liveItems as it (it.id)}
+      {#each liveItems as it, li (it.id)}
         <Item item={it} sessionId={id} />
+        {#if lastOfCall(liveItems, li)}<p class="tps num">{fmtTps(it.gen.tps)}</p>{/if}
       {/each}
       {#if live}
-        <p class="working num"><Icon icon={LoaderCircle} size={16} class="spin" />Codex travaille…{tokens(live.usage) ? ` ${tokens(live.usage)}` : ''}</p>
+        <p class="working num"><Icon icon={LoaderCircle} size={16} class="spin" />EX travaille…{tokens(live.usage) ? ` ${tokens(live.usage)}` : ''}{liveTps ? ` · moyenne ${fmtTps(liveTps)}` : ''}</p>
       {/if}
       {#each requests as r (r.rid)}
         <Approval req={r} sessionId={id} />
@@ -683,7 +706,7 @@
   </div>
 
   {#if error}<p class="err" role="alert"><Icon icon={CircleX} size={16} />{error}</p>{/if}
-  <Composer sessionId={id} running={!!live} disabled={session?.archived ?? false} {send} {interrupt} bind:text={draft} />
+  <Composer effort={session?.effort ?? 'medium'} efforts={EFFORTS} effortHint={EFFORT_HINT[session?.effort ?? 'medium']} onEffort={setEffort} sessionId={id} running={!!live} disabled={session?.archived ?? false} {send} {interrupt} bind:text={draft} />
   {#if reverting}<Revert close={() => (reverting = null)} choose={revert} />{/if}
 </section>
 
@@ -765,6 +788,7 @@
   .failed p { margin: 0; }
   .fh { display: flex; align-items: center; gap: var(--s2); font-weight: 600; font-size: var(--fs-md); }
   .fh :global(.ui-icon) { color: var(--danger); }
+  .tps { margin: calc(-1 * var(--s2)) 0 0; font-size: var(--fs-xs); color: var(--faint); text-align: right; }
   .foot { display: flex; gap: var(--s3); flex-wrap: wrap; margin: calc(-1 * var(--s2)) 0 0; font-size: var(--fs-xs); color: var(--faint); }
   .working { display: flex; align-items: center; gap: var(--s2); margin: 0; font-size: var(--fs-sm); color: var(--muted); }
   .working :global(.spin) { color: var(--accent); animation: spin 1s linear infinite; }

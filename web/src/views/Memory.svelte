@@ -144,7 +144,7 @@
 {/snippet}
 
 <Page title="Mémoire">
-  {#snippet meta()}<span class="pmeta">Notes données à Codex au début de chaque session : globales, du projet, puis du topic.</span>{/snippet}
+  {#snippet meta()}<span class="pmeta">Notes données à EX au début de chaque session : globales, du projet, puis du topic.</span>{/snippet}
 
   <div class="mem">
     <nav class="levels" aria-label="Niveaux de mémoire">
@@ -182,8 +182,8 @@
         </div>
       </div>
       <p class="explain">
-        {#if file === 'instructions'}Vos consignes : Codex les lit sans pouvoir les modifier.
-        {:else}Tenue par Codex pendant les sessions ; vous pouvez la corriger ici.{/if}
+        {#if file === 'instructions'}Vos consignes : EX les lit sans pouvoir les modifier.
+        {:else}Tenue par EX pendant les sessions ; vous pouvez la corriger ici.{/if}
       </p>
 
       {#if error}
@@ -194,7 +194,7 @@
       {/if}
 
       <textarea bind:value={content} spellcheck="false" aria-label="{file === 'memory' ? 'Mémoire' : 'Instructions'} : {label}"
-        placeholder={file === 'memory' ? '(vide) Une ligne par fait : - AAAA-MM-JJ : …' : '(vide) Vos consignes pour Codex à ce niveau.'}></textarea>
+        placeholder={file === 'memory' ? '(vide) Une ligne par fait : - AAAA-MM-JJ : …' : '(vide) Vos consignes pour EX à ce niveau.'}></textarea>
 
       <div class="foot">
         <span class="count num" class:warn={size > limit * 0.75} class:over={size > limit}>

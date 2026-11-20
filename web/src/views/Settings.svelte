@@ -19,9 +19,9 @@
   const tabs = [
     { id: 'engine', label: 'Moteur', text: 'llama.cpp, versions, mise à jour', icon: Cpu },
     { id: 'sessions', label: 'Sessions', text: 'Sandboxes, vérification, git', icon: MessageSquare },
-    { id: 'skills', label: 'Skills', text: 'Fichiers SKILL.md donnés à Codex', icon: Sparkles },
+    { id: 'skills', label: 'Skills', text: 'Fichiers SKILL.md donnés à EX', icon: Sparkles },
     { id: 'vault', label: 'Clés', text: 'Secrets des sandboxes', icon: KeyRound },
-    { id: 'api', label: 'API', text: 'Clés d’API et configuration de Codex', icon: Plug },
+    { id: 'api', label: 'API', text: 'Clés d’API et configuration d’EX', icon: Plug },
     { id: 'appearance', label: 'Apparence', text: 'Thème et taille du texte', icon: Palette },
   ];
   // Bureau : #settings seul ouvre Moteur. Téléphone : #settings seul montre la liste.

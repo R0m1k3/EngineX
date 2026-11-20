@@ -325,7 +325,7 @@ export const rollbackVersion = () => request('POST', '/api/engine/versions/rollb
 export const deleteVersion = (tag: string) => request('DELETE', `/api/engine/versions/${q(tag)}`);
 export const setAutoUpdate = (on: boolean) => request<{ on: boolean }>('PUT', '/api/engine/auto-update', { on });
 
-// ---- API pour Codex ----
+// ---- API pour EX ----
 
 export interface ApiKey {
   id: number;
@@ -592,7 +592,7 @@ export interface QueueState {
 }
 export const queueState = () => request<QueueState>('GET', '/api/queue');
 
-/** Élément d'un fil (forme Codex : `type`, `id` et les champs du type). */
+/** Élément d'un fil (forme EX : `type`, `id` et les champs du type). */
 export type ItemData = Record<string, any>;
 
 export interface StoredItem {

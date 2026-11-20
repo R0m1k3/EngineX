@@ -4,6 +4,8 @@
   import CircleUser from '@lucide/svelte/icons/circle-user';
   import KeyRound from '@lucide/svelte/icons/key-round';
   import LogOut from '@lucide/svelte/icons/log-out';
+  import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
+  import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
   import Icon from '../../lib/ui/Icon.svelte';
   import Menu from '../../lib/ui/Menu.svelte';
   import { tooltip } from '../../lib/ui/tooltip';
@@ -19,20 +21,26 @@
 
   const groups = [1, 2, 3, 4].map((g) => PAGES.filter((p) => p.group === g));
   const settings = pageDef('settings')!;
+  let wide = $state(typeof localStorage !== 'undefined' && localStorage.getItem('enginex.sidebar') === 'wide');
+  $effect(() => {
+    document.documentElement.style.setProperty('--act-w', wide ? '208px' : '52px');
+    localStorage.setItem('enginex.sidebar', wide ? 'wide' : 'narrow');
+  });
+  const tip = (text: string) => (wide ? null : { text, side: 'right' as const });
   let account = $state(false);
   let accountBtn: HTMLButtonElement | undefined = $state();
 </script>
 
-<nav class="activity" aria-label="Pages">
+<nav class="activity" class:wide aria-label="Pages">
   <a class="logo" href="#dashboard" aria-label="EngineX, tableau de bord"><Logo size={24} /></a>
-  <button class="act" onclick={onPalette} use:tooltip={{ text: 'Commandes', side: 'right', kbd: 'Ctrl K' }} aria-label="Commandes (Ctrl+K)">
-    <Icon icon={Search} size={20} />
+  <button class="act" onclick={onPalette} use:tooltip={wide ? null : { text: 'Commandes', side: 'right', kbd: 'Ctrl K' }} aria-label="Commandes (Ctrl+K)">
+    <Icon icon={Search} size={20} />{#if wide}<span class="lb">Commandes</span><kbd>Ctrl K</kbd>{/if}
   </button>
   {#each groups as g, i (i)}
     <hr />
     {#each g as p (p.id)}
-      <a class="act" class:on={page === p.id} href="#{p.id}" aria-current={page === p.id ? 'page' : undefined} aria-label={p.label} use:tooltip={{ text: p.label, side: 'right' }}>
-        <Icon icon={p.icon} size={22} />
+      <a class="act" class:on={page === p.id} href="#{p.id}" aria-current={page === p.id ? 'page' : undefined} aria-label={p.label} use:tooltip={tip(p.label)}>
+        <Icon icon={p.icon} size={22} />{#if wide}<span class="lb">{p.label}</span>{/if}
       </a>
     {/each}
   {/each}
@@ -44,14 +52,18 @@
     aria-label="Compte"
     aria-haspopup="menu"
     aria-expanded={account}
-    use:tooltip={{ text: 'Compte', side: 'right' }}
+    use:tooltip={tip('Compte')}
     onclick={() => (account = !account)}
   >
-    <Icon icon={CircleUser} size={22} />
+    <Icon icon={CircleUser} size={22} />{#if wide}<span class="lb">Compte</span>{/if}
   </button>
-  <a class="act" class:on={page === settings.id} href="#settings" aria-current={page === 'settings' ? 'page' : undefined} aria-label={settings.label} use:tooltip={{ text: settings.label, side: 'right' }}>
-    <Icon icon={settings.icon} size={22} />
+  <a class="act" class:on={page === settings.id} href="#settings" aria-current={page === 'settings' ? 'page' : undefined} aria-label={settings.label} use:tooltip={tip(settings.label)}>
+    <Icon icon={settings.icon} size={22} />{#if wide}<span class="lb">{settings.label}</span>{/if}
   </a>
+  <button class="act" aria-label={wide ? 'Replier la barre latérale' : 'Déplier la barre latérale'} aria-expanded={wide}
+    use:tooltip={tip('Déplier la barre latérale')} onclick={() => (wide = !wide)}>
+    <Icon icon={wide ? PanelLeftClose : PanelLeftOpen} size={22} />{#if wide}<span class="lb">Replier</span>{/if}
+  </button>
 </nav>
 
 <Menu
@@ -97,6 +109,13 @@
   .act:hover { color: var(--text); background: var(--raised); }
   .act.on { color: var(--text); }
   .act.on::before { content: ''; position: absolute; left: -6px; top: 8px; bottom: 8px; width: 2px; border-radius: 1px; background: var(--accent); }
+  .wide { align-items: stretch; padding-left: var(--s2); padding-right: var(--s2); }
+  .wide .act, .wide .logo { width: auto; justify-content: start; grid-auto-flow: column; grid-template-columns: 24px 1fr auto; gap: var(--s3); padding: 0 var(--s3); text-align: left; }
+  .wide .act { place-items: center start; font: inherit; font-size: var(--fs-sm); }
+  .wide .act.on::before { left: -8px; }
+  .lb { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; justify-self: start; }
+  kbd { font: inherit; font-size: var(--fs-xs); color: var(--faint); }
+  .wide hr { width: auto; }
   hr { width: 24px; margin: 6px 0; border: 0; border-top: 1px solid var(--line-strong); flex: none; }
   .end { margin-top: auto; }
 </style>

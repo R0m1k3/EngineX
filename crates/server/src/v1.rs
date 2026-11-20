@@ -381,6 +381,8 @@ struct Log {
     dropped: BTreeMap<String, usize>,
     /// Temps processeur de llama-server au moment où la requête lui part.
     cpu0: Option<(u32, f64, Instant)>,
+    /// Session de la sandbox appelante (débit par action dans le fil).
+    session: Option<String>,
 }
 
 /// Secondes de processeur consommées par llama-server (`/proc/<pid>/stat`).
@@ -456,6 +458,9 @@ impl Log {
         if let Some(mut st) = stats {
             st["preset"] = json!(self.preset);
             st["cpu_cores"] = json!(cores);
+            if let Some(sid) = &self.session {
+                crate::bridge::hub(state, sid).note_gen(&st);
+            }
             *state.0.last_gen.lock().expect("stats") = Some(st);
         }
         tracing::info!(
@@ -515,6 +520,9 @@ pub async fn responses(
         started,
         dropped: translated.dropped,
         cpu0: llama_cpu(&state),
+        session: caller
+            .as_ref()
+            .and_then(|c| c.name.strip_prefix("sandbox:").filter(|_| c.internal).map(str::to_string)),
     };
     tokio::spawn(async move {
         let mut outcome = None;
@@ -758,6 +766,7 @@ pub async fn chat_completions(
         started,
         dropped: BTreeMap::new(),
         cpu0: llama_cpu(&state),
+        session: None,
     };
     let streamed = req.get("stream").and_then(Value::as_bool) == Some(true);
     let res = match state.0.http.post(chat_url(&state)).json(&req).send().await {

@@ -117,6 +117,8 @@ struct HubState {
     settling: bool,
     /// Interruption demandée pendant l'attente dans la file.
     cancel_queue: bool,
+    /// Débit du dernier appel au modèle (collé aux éléments qui en sortent).
+    last_gen: Option<Value>,
 }
 
 pub struct Hub {
@@ -154,6 +156,7 @@ pub fn hub(state: &AppState, session_id: &str) -> Arc<Hub> {
                     queued: None,
                     settling: false,
                     cancel_queue: false,
+                    last_gen: None,
                 }),
                 start: tokio::sync::Mutex::new(()),
                 revert: tokio::sync::Mutex::new(()),
@@ -411,6 +414,13 @@ impl Hub {
     pub(crate) async fn ready(self: &Arc<Self>, state: &AppState) -> Result<(Client, String), String> {
         self.ensure_conn(state).await?;
         self.client_cwd().ok_or_else(|| "sandbox arrêtée".to_string())
+    }
+
+    /// Débit d'un appel au modèle qui vient de finir.
+    pub(crate) fn note_gen(&self, st: &Value) {
+        self.st.lock().expect("verrou").last_gen = Some(json!({
+            "tps": st["tokens_per_s"], "n": st["predicted"], "at": st["at"],
+        }));
     }
 
     pub(crate) fn emit_event(&self, name: &'static str, data: Value) {
@@ -811,6 +821,7 @@ impl Hub {
     async fn adopt_turn(&self, state: &AppState, tid: &str) {
         let (user_id, started, origin, pre) = {
             let mut st = self.st.lock().expect("verrou");
+            st.last_gen = None;
             let Some(t) = st.turn.as_mut() else { return };
             if t.id.is_some() {
                 return;
@@ -1336,9 +1347,14 @@ impl Hub {
                 }
             }
             "item/started" | "item/completed" => {
-                let item = params["item"].clone();
+                let mut item = params["item"].clone();
                 if item["type"] == "userMessage" {
                     return;
+                }
+                if method == "item/completed" {
+                    if let Some(g) = self.st.lock().expect("verrou").last_gen.clone() {
+                        item["gen"] = g;
+                    }
                 }
                 let iid = item["id"].as_str().unwrap_or("").to_string();
                 let tid = params["turnId"].as_str().map(str::to_string);

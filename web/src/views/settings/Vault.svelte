@@ -92,7 +92,7 @@
 
 <Section title="Ajouter un secret" text="Chaque secret devient une variable d’environnement dans les sandboxes.">
   <p class="hint">
-    Les commandes de Codex le lisent avec <code>$NOM</code>. Il est chiffré sur le disque et remplacé par <code>***</code>
+    Les commandes d’EX le lisent avec <code>$NOM</code>. Il est chiffré sur le disque et remplacé par <code>***</code>
     dans l’historique et dans ce que voit le modèle. Les valeurs de moins de 6 caractères ne sont pas masquées.
   </p>
   <form class="form" onsubmit={save}>

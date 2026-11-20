@@ -103,7 +103,7 @@
     <div class="entries">
       {#if error}<p class="error small pad">{error}</p>{/if}
       {#if !dirs[''] && !error}<div class="pad"><Skeleton lines={5} /></div>{/if}
-      {#if dirs['']?.entries.length === 0}<p class="faint small pad">Dossier vide : il se remplit quand Codex ou vous y créez des fichiers.</p>{/if}
+      {#if dirs['']?.entries.length === 0}<p class="faint small pad">Dossier vide : il se remplit quand EX ou vous y créez des fichiers.</p>{/if}
       {@render level('', 0)}
     </div>
   </div>
