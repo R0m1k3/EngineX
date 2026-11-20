@@ -305,6 +305,27 @@ fn inline_type(rel: &str) -> Option<&'static str> {
 const CSP: &str = "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox";
 const CSP_PDF: &str = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'";
 
+/// Supprime des fichiers ou dossiers du dossier de travail de la session
+/// (panneau Fichiers). Refusé pendant un tour ; `.git` reste intouchable.
+pub async fn delete(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    crate::error::ApiJson(b): crate::error::ApiJson<crate::wsfiles::PathsBody>,
+) -> Result<Json<Value>, ApiError> {
+    let r = sessions::row(&state, &id).await?;
+    let paths = crate::wsfiles::clean_paths(&b.paths)?;
+    if paths.iter().any(|p| p == ".git" || p.starts_with(".git/")) {
+        return Err(ApiError::BadRequest);
+    }
+    if crate::bridge::hub(&state, &id).busy() {
+        return Err(ApiError::TurnInProgress);
+    }
+    let f = snapshots::folder(&state, &r).await?;
+    let _g = snapshots::lock(&state, &f).await;
+    let n = crate::wsfiles::delete_beneath(f.work.clone(), paths).await?;
+    Ok(Json(json!({ "deleted": n })))
+}
+
 /// Fichier brut, envoyé en flux depuis le descripteur ouvert.
 pub async fn file(
     State(state): State<AppState>,

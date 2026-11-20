@@ -1098,7 +1098,7 @@ async fn bridge_verify() {
     assert_eq!(n, 2);
     // La ref `green` pointe sur l'instantané d'après le tour de correction.
     let row = enginex_server::sessions::row(&b.e.state, &sid).await.unwrap();
-    let repo = enginex_server::snapshots::topic_repo(&b.e.state, row.topic_id);
+    let repo = enginex_server::snapshots::folder(&b.e.state, &row).await.unwrap().snap;
     let green = std::process::Command::new("git")
         .arg("--git-dir")
         .arg(&repo)

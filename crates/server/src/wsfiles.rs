@@ -520,10 +520,10 @@ pub async fn rename(State(state): State<AppState>, ApiJson(b): ApiJson<MoveBody>
 
 #[derive(Deserialize)]
 pub struct PathsBody {
-    paths: Vec<String>,
+    pub paths: Vec<String>,
 }
 
-fn clean_paths(raw: &[String]) -> Result<Vec<String>, ApiError> {
+pub(crate) fn clean_paths(raw: &[String]) -> Result<Vec<String>, ApiError> {
     if raw.is_empty() || raw.len() > MAX_PATHS {
         return Err(ApiError::BadRequest);
     }
@@ -613,8 +613,14 @@ pub async fn delete(State(state): State<AppState>, ApiJson(b): ApiJson<PathsBody
     for p in &paths {
         writable(p)?;
     }
-    let dir = root(&state);
-    let n = blocking(move || {
+    let n = delete_beneath(root(&state), paths).await?;
+    Ok(Json(json!({"deleted": n})))
+}
+
+/// Supprime `paths` (déjà nettoyés) sous `dir`, dossiers compris, sans suivre
+/// de lien ; rend le nombre d'entrées supprimées (les absentes sont ignorées).
+pub(crate) async fn delete_beneath(dir: std::path::PathBuf, paths: Vec<String>) -> Result<usize, ApiError> {
+    blocking(move || {
         let root = open_root(&dir).map_err(|_| ApiError::NotFound)?;
         let mut n = 0;
         for p in &paths {
@@ -627,8 +633,7 @@ pub async fn delete(State(state): State<AppState>, ApiJson(b): ApiJson<PathsBody
         }
         Ok(n)
     })
-    .await?;
-    Ok(Json(json!({"deleted": n})))
+    .await
 }
 
 #[derive(Deserialize)]

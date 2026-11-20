@@ -793,6 +793,8 @@ export const tree = (id: string, path: string) =>
   request<{ path: string; entries: TreeEntry[]; truncated: boolean }>('GET', `${S(id)}/tree?path=${q(path)}`);
 export const fileText = (id: string, path: string) =>
   request<{ text: string; truncated: boolean; binary: boolean }>('GET', `${S(id)}/file/text?path=${q(path)}`);
+export const deleteFiles = (id: string, paths: string[]) =>
+  request<{ deleted: number }>('POST', `${S(id)}/files/delete`, { paths });
 export const downloadUrl = (id: string, path: string) => `${fileUrl(id, path)}&download=1`;
 export const bringBack = (id: string) =>
   request<{ result: 'merged' | 'branch_only'; reason?: 'topic_dirty' | 'conflict'; branch: string }>('POST', `${S(id)}/bring-back`);

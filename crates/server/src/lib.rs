@@ -161,6 +161,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/sessions/{id}/file", get(files::file))
         .route("/api/sessions/{id}/file/text", get(files::text))
         .route("/api/sessions/{id}/tree", get(files::tree))
+        .route("/api/sessions/{id}/files/delete", post(files::delete))
         .route("/api/sessions/{id}/turns/{tid}/diff", get(sessions::turn_diff))
         .route("/api/sessions/{id}/turns/{tid}/undo-file", post(sessions::undo_file))
         .route("/api/sessions/{id}/turns/{tid}/revert", post(sessions::revert))

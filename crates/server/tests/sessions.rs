@@ -530,6 +530,35 @@ async fn a_session_works_in_its_own_folder_removed_with_it() {
 }
 
 #[tokio::test]
+async fn files_panel_deletes_files_and_folders_of_the_session_only() {
+    let (e, _fake) = env_sessions(&text_script()).await;
+    let sid = new_session(&e, "auto").await;
+    let w = work_dir(&e, &sid).await;
+    std::fs::create_dir_all(w.join("src/deep")).unwrap();
+    std::fs::write(w.join("src/deep/a.rs"), "x").unwrap();
+    std::fs::write(w.join("gros.py"), "x").unwrap();
+    std::fs::write(w.join("garde.txt"), "x").unwrap();
+    std::fs::write(e.dir.path().join("dehors.txt"), "x").unwrap();
+    let url = format!("/api/sessions/{sid}/files/delete");
+    let r = e
+        .send("POST", &url, json!({"paths": ["src", "gros.py", "absent.txt"]}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    assert_eq!(r.body["deleted"], 2);
+    assert!(!w.join("src").exists() && !w.join("gros.py").exists());
+    assert!(w.join("garde.txt").exists());
+    for bad in [
+        json!({"paths": []}),
+        json!({"paths": [".git"]}),
+        json!({"paths": ["../../../../../dehors.txt"]}),
+    ] {
+        let r = e.send("POST", &url, bad.clone()).await;
+        assert!(r.status.is_client_error(), "{bad} : {}", r.status);
+    }
+    assert!(e.dir.path().join("dehors.txt").exists());
+}
+
+#[tokio::test]
 async fn file_route_refuses_escapes_symlinks_and_svg() {
     let (e, _fake) = env_sessions(&text_script()).await;
     let sid = new_session(&e, "auto").await;

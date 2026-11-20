@@ -1,6 +1,9 @@
 <script lang="ts">
   import { octets } from '../../lib/ui/format';
-  import { tree, fileText, fileUrl, downloadUrl, message, type TreeEntry } from '../../lib/api';
+  import { tree, fileText, fileUrl, downloadUrl, deleteFiles, message, type TreeEntry } from '../../lib/api';
+  import { confirmDialog } from '../../lib/ui/dialog.svelte';
+  import { toast } from '../../lib/ui/toast.svelte';
+  import Trash2 from '@lucide/svelte/icons/trash-2';
   import Markdown from './Markdown.svelte';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import FolderIcon from '@lucide/svelte/icons/folder';
@@ -73,6 +76,23 @@
 
   const size = octets;
 
+  async function remove(path: string, dir: boolean) {
+    const what = dir ? `le dossier « ${path} » et tout son contenu` : `« ${path} »`;
+    if (!(await confirmDialog(`Supprimer ${what} ? Impossible à annuler depuis ce panneau.`, { title: 'Supprimer', confirm: 'Supprimer', danger: true })))
+      return;
+    try {
+      await deleteFiles(sessionId, [path]);
+      if (selected === path || selected.startsWith(`${path}/`)) {
+        selected = '';
+        preview = null;
+      }
+      for (const k of Object.keys(opened)) if (k === path || k.startsWith(`${path}/`)) delete opened[k];
+      await refresh();
+    } catch (e) {
+      toast(message(e), 'error');
+    }
+  }
+
   load('');
 </script>
 
@@ -80,15 +100,21 @@
   {#each dirs[path]?.entries ?? [] as e (e.name)}
     {@const p = join(path, e.name)}
     {#if e.kind === 'dir'}
-      <button class="entry" style:padding-left="{depth * 16 + 8}px" aria-expanded={!!opened[p]} onclick={() => toggle(p)}>
-        <Icon icon={ChevronRight} size={14} class="chev" /><Icon icon={FolderIcon} size={16} class="fi" /><span class="ell">{e.name}</span>
-      </button>
+      <div class="row">
+        <button class="entry" style:padding-left="{depth * 16 + 8}px" aria-expanded={!!opened[p]} onclick={() => toggle(p)}>
+          <Icon icon={ChevronRight} size={14} class="chev" /><Icon icon={FolderIcon} size={16} class="fi" /><span class="ell">{e.name}</span>
+        </button>
+        <span class="del"><IconButton icon={Trash2} label="Supprimer le dossier" size="sm" onclick={() => remove(p, true)} /></span>
+      </div>
       {#if opened[p]}{@render level(p, depth + 1)}{/if}
     {:else}
-      <button class="entry" class:sel={selected === p} style:padding-left="{depth * 16 + 22}px"
-        onclick={() => e.kind === 'file' && select(p)} disabled={e.kind !== 'file'} title={e.kind === 'link' ? 'Lien symbolique' : size(e.size)}>
-        <Icon icon={e.kind === 'link' ? Link2 : FileIcon} size={16} class="fi" /><span class="ell">{e.name}</span>
-      </button>
+      <div class="row">
+        <button class="entry" class:sel={selected === p} style:padding-left="{depth * 16 + 22}px"
+          onclick={() => e.kind === 'file' && select(p)} disabled={e.kind !== 'file'} title={e.kind === 'link' ? 'Lien symbolique' : size(e.size)}>
+          <Icon icon={e.kind === 'link' ? Link2 : FileIcon} size={16} class="fi" /><span class="ell">{e.name}</span>
+        </button>
+        <span class="del"><IconButton icon={Trash2} label="Supprimer" size="sm" onclick={() => remove(p, false)} /></span>
+      </div>
     {/if}
   {/each}
   {#if dirs[path]?.truncated}<p class="more" style:padding-left="{depth * 16 + 22}px">1000 entrées au plus.</p>{/if}
@@ -112,6 +138,7 @@
       <div class="tb">
         <code class="grow name" title={selected}><span>{selected}</span></code>
         <IconButton icon={Download} label="Télécharger" size="sm" href={downloadUrl(sessionId, selected)} />
+        <IconButton icon={Trash2} label="Supprimer" size="sm" onclick={() => remove(selected, false)} />
       </div>
       <div class="pv">
         {#if preview?.kind === 'image'}<img src={fileUrl(sessionId, selected)} alt={selected} />
@@ -127,7 +154,7 @@
       </div>
     {:else}
       <div class="pv">
-        <EmptyState icon={FileText} title="Aucun fichier choisi" text="Choisissez un fichier pour le lire ici. Lecture seule ; les secrets du coffre sont masqués dans l’aperçu texte." />
+        <EmptyState icon={FileText} title="Aucun fichier choisi" text="Choisissez un fichier pour le lire ici. Les secrets du coffre sont masqués dans l’aperçu texte ; la corbeille d’une ligne supprime le fichier ou le dossier." />
       </div>
     {/if}
   </div>
@@ -161,6 +188,10 @@
     cursor: pointer;
     filter: none;
   }
+  .row { position: relative; display: flex; align-items: center; }
+  .row:hover, .row:focus-within { background: var(--raised); }
+  .del { position: absolute; right: var(--s1); opacity: 0; }
+  .row:hover .del, .row:focus-within .del { opacity: 1; }
   .entry:hover:not(:disabled) { background: var(--raised); }
   .entry:disabled { color: var(--muted); opacity: 1; cursor: default; }
   .entry.sel { background: var(--accent-soft); border-left-color: var(--accent); }
@@ -177,5 +208,6 @@
   .pv p { margin: 0; }
   @media (max-width: 767px) {
     .entry { height: var(--touch); font-size: var(--fs-md); }
+    .del { opacity: 1; }
   }
 </style>
