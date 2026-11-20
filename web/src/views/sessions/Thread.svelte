@@ -250,13 +250,38 @@
     .then((ps) => (presetList = ps))
     .catch(() => {});
 
+  // Collé en bas tant que Michael ne remonte pas : en ouvrant une session on
+  // arrive à la fin, et on y reste quand le contenu grandit (Markdown, images).
+  let stick = true;
+  let inner: HTMLDivElement | undefined = $state();
+  $effect(() => {
+    void id;
+    stick = true;
+  });
+  const near = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  function onScroll() {
+    if (scroller) stick = near(scroller);
+  }
+  $effect(() => {
+    const el = inner;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (stick && scroller) scroller.scrollTop = scroller.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
   // Défile en bas si l'on y était déjà (ou si l'on vient d'envoyer).
   async function follow(force = false) {
     const el = scroller;
     if (!el) return;
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    const was = stick || near(el);
     await tick();
-    if (force || near) el.scrollTop = el.scrollHeight;
+    if (force || was) {
+      el.scrollTop = el.scrollHeight;
+      stick = true;
+    }
   }
 
   function shown(it: ItemData): ItemData {
@@ -517,10 +542,10 @@
   const sandboxTone = $derived(sandbox.state === 'ready' ? 'ok' : sandbox.state === 'error' ? 'danger' : 'neutral');
   const busySandbox = $derived(['creating', 'pulling', 'starting', 'restarting'].includes(sandbox.state));
   const EFFORTS: { value: Effort; label: string }[] = [
-    { value: 'none', label: 'none' },
-    { value: 'low', label: 'low' },
-    { value: 'medium', label: 'medium' },
-    { value: 'high', label: 'high' },
+    { value: 'none', label: 'Sans réflexion' },
+    { value: 'low', label: 'Réflexion courte' },
+    { value: 'medium', label: 'Réflexion normale' },
+    { value: 'high', label: 'Réflexion longue' },
   ];
   const EFFORT_HINT: Record<Effort, string> = {
     none: 'Aucune réflexion : réponses les plus rapides',
@@ -658,8 +683,8 @@
     {/if}
   </div>
 
-  <div class="scroll" bind:this={scroller}>
-    <div class="in">
+  <div class="scroll" bind:this={scroller} onscroll={onScroll}>
+    <div class="in" bind:this={inner}>
       {#if more}<div class="older"><Button size="sm" variant="ghost" onclick={older}>Messages plus anciens</Button></div>{/if}
       {#if loading && !history.length && !live}
         <div class="sk"><Skeleton height="56px" width="60%" /><Skeleton lines={3} /><Skeleton height="40px" /><Skeleton lines={2} /></div>
@@ -818,7 +843,7 @@
   .fh { display: flex; align-items: center; gap: var(--s2); font-weight: 600; font-size: var(--fs-md); }
   .fh :global(.ui-icon) { color: var(--danger); }
   .tps { margin: calc(-1 * var(--s2)) 0 0; font-size: var(--fs-xs); color: var(--faint); text-align: right; }
-  .stats { display: flex; gap: var(--s4); justify-content: center; flex-wrap: wrap; margin: 0; padding: var(--s1) var(--s6) 0; font-size: var(--fs-xs); color: var(--muted); }
+  .stats { display: flex; gap: var(--s4); justify-content: flex-end; flex-wrap: wrap; max-width: 760px; width: calc(100% - 2 * var(--s6)); margin: 0 auto; padding-top: var(--s1); font-size: var(--fs-xs); color: var(--faint); }
   .foot { display: flex; gap: var(--s3); flex-wrap: wrap; margin: calc(-1 * var(--s2)) 0 0; font-size: var(--fs-xs); color: var(--faint); }
   .working { display: flex; align-items: center; gap: var(--s2); margin: 0; font-size: var(--fs-sm); color: var(--muted); }
   .working :global(.spin) { color: var(--accent); animation: spin 1s linear infinite; }

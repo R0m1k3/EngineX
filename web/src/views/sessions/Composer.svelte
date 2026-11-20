@@ -1,16 +1,15 @@
 <script lang="ts">
   import { uploadAttachment, message, type Attachment } from '../../lib/api';
   import { tick } from 'svelte';
-  import ImageIcon from '@lucide/svelte/icons/image';
-  import Camera from '@lucide/svelte/icons/camera';
   import ArrowUp from '@lucide/svelte/icons/arrow-up';
   import Square from '@lucide/svelte/icons/square';
   import X from '@lucide/svelte/icons/x';
-  import Button from '../../lib/ui/Button.svelte';
+  import Paperclip from '@lucide/svelte/icons/paperclip';
+  import Brain from '@lucide/svelte/icons/brain';
+  import ChevronDown from '@lucide/svelte/icons/chevron-down';
+  import LoaderCircle from '@lucide/svelte/icons/loader-circle';
   import IconButton from '../../lib/ui/IconButton.svelte';
-  import Kbd from '../../lib/ui/Kbd.svelte';
   import Icon from '../../lib/ui/Icon.svelte';
-  import Select from '../../lib/ui/Select.svelte';
   import { tooltip } from '../../lib/ui/tooltip';
   import { screen } from './phone.svelte';
 
@@ -45,7 +44,6 @@
   let error = $state('');
   let dragging = $state(false);
   let picker: HTMLInputElement | undefined = $state();
-  let camera: HTMLInputElement | undefined = $state();
   let area: HTMLTextAreaElement | undefined = $state();
 
   async function add(files: Iterable<File>) {
@@ -149,55 +147,39 @@
     {/if}
     {#if dragging}<div class="drop">Déposez l’image ici</div>{/if}
 
-    {#if screen.phone}
-      <div class="ph-row">
-        <IconButton icon={Camera} label="Prendre une photo" size="lg" {disabled} onclick={() => camera?.click()} />
-        <IconButton icon={ImageIcon} label="Joindre une image" size="lg" {disabled} onclick={() => picker?.click()} />
-        <span class="eff ph"><Select aria-label="Niveau de réflexion" title={effortHint} value={effort} options={efforts}
-          onchange={(e) => onEffort((e.currentTarget as HTMLSelectElement).value)} /></span>
-        <textarea
-          bind:this={area}
-          bind:value={text}
-          onkeydown={onKey}
-          onpaste={onPaste}
-          rows="1"
-          placeholder="Message à EX"
-          aria-label="Message à EX"
-          {disabled}
-        ></textarea>
-        {#if running}
-          <button class="round stop" aria-label="Arrêter le tour" onclick={interrupt}><Icon icon={Square} size={18} /></button>
-        {:else}
-          <button class="round" aria-label="Envoyer" disabled={!canSend} onclick={submit}><Icon icon={ArrowUp} size={22} /></button>
-        {/if}
-      </div>
-    {:else}
-      <textarea
-        bind:this={area}
-        bind:value={text}
-        onkeydown={onKey}
-        onpaste={onPaste}
-        rows="2"
-        placeholder={disabled ? 'Session archivée : désarchivez-la pour écrire.' : 'Message à EX'}
-        aria-label="Message à EX"
-        {disabled}
-      ></textarea>
-      <div class="bar">
-        <Button variant="ghost" size="sm" icon={ImageIcon} {disabled} onclick={() => picker?.click()}>Joindre une image</Button>
-        <span class="eff"><span class="efl">Réflexion</span><Select aria-label="Niveau de réflexion" title={effortHint} value={effort} options={efforts}
-          onchange={(e) => onEffort((e.currentTarget as HTMLSelectElement).value)} /></span>
-        <span class="hint"><Kbd>Entrée</Kbd> envoyer, <Kbd>Maj</Kbd>+<Kbd>Entrée</Kbd> à la ligne</span>
-        {#if running}
-          <Button icon={Square} onclick={interrupt}>Arrêter</Button>
-        {:else}
-          <Button variant="primary" icon={ArrowUp} disabled={!canSend} busy={sending} onclick={submit}>Envoyer</Button>
-        {/if}
-      </div>
-    {/if}
+    <textarea
+      bind:this={area}
+      bind:value={text}
+      onkeydown={onKey}
+      onpaste={onPaste}
+      rows={screen.phone ? 1 : 2}
+      placeholder={disabled ? 'Session archivée : désarchivez-la pour écrire.' : 'Message à EX'}
+      aria-label="Message à EX"
+      title={screen.phone ? undefined : 'Entrée : envoyer, Maj+Entrée : à la ligne'}
+      {disabled}
+    ></textarea>
+    <div class="row">
+      <IconButton icon={Paperclip} label="Joindre une image" size={screen.phone ? 'lg' : 'md'} {disabled} onclick={() => picker?.click()} />
+      <label class="eff" use:tooltip={effortHint}>
+          <Icon icon={Brain} size={15} />
+          <select aria-label="Niveau de réflexion" value={effort} {disabled}
+            onchange={(e) => onEffort((e.currentTarget as HTMLSelectElement).value)}>
+            {#each efforts as o (o.value)}<option value={o.value}>{o.label}</option>{/each}
+          </select>
+          <Icon icon={ChevronDown} size={14} />
+        </label>
+      <span class="grow"></span>
+      {#if running}
+        <button class="round stop" aria-label="Arrêter le tour" use:tooltip={'Arrêter'} onclick={interrupt}><Icon icon={Square} size={14} /></button>
+      {:else}
+        <button class="round" aria-label="Envoyer" use:tooltip={screen.phone ? null : { text: 'Envoyer', kbd: 'Entrée' }} disabled={!canSend} onclick={submit}>
+          {#if sending}<Icon icon={LoaderCircle} size={18} class="spin" />{:else}<Icon icon={ArrowUp} size={18} />{/if}
+        </button>
+      {/if}
+    </div>
   </div>
   {#if error}<p class="err" role="alert">{error}</p>{/if}
-  <input bind:this={picker} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden onchange={picked} />
-  <input bind:this={camera} type="file" accept="image/*" capture="environment" hidden onchange={picked} />
+  <input bind:this={picker} type="file" accept="image/*" multiple hidden onchange={picked} />
 </div>
 
 <style>
@@ -207,8 +189,9 @@
     max-width: 760px;
     margin: 0 auto;
     border: 1px solid var(--line-strong);
-    border-radius: var(--r);
+    border-radius: 14px;
     background: var(--panel);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
   }
   .box:focus-within { border-color: var(--accent); }
   .box.dragging { border-color: var(--accent); border-style: dashed; }
@@ -227,7 +210,7 @@
   textarea {
     display: block;
     width: 100%;
-    min-height: 64px;
+    min-height: 52px;
     border: 0;
     background: transparent;
     resize: none;
@@ -239,20 +222,65 @@
     outline: none;
   }
   textarea:focus-visible { outline: none; border: 0; }
-  .bar { display: flex; align-items: center; gap: var(--s2); padding: var(--s2); }
-  .eff { display: inline-flex; align-items: center; gap: var(--s2); }
-  .efl { font-size: var(--fs-xs); color: var(--faint); }
-  .eff.ph { align-self: center; max-width: 96px; }
-  .hint { margin-left: auto; margin-right: var(--s2); font-size: var(--fs-xs); color: var(--faint); white-space: nowrap; }
+  .row { display: flex; align-items: center; gap: var(--s1); padding: 0 var(--s2) var(--s2); }
+  .grow { flex: 1; }
+  .eff {
+    position: relative;
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    height: 30px;
+    padding: 0 var(--s2);
+    border-radius: 15px;
+    color: var(--muted);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+  }
+  .eff:hover { background: var(--raised); color: var(--text); }
+  .eff:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .eff select {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    padding: 0;
+    width: auto;
+    min-height: 0;
+    font-size: var(--fs-sm);
+    cursor: pointer;
+    outline: none;
+  }
+  .eff select option { color: var(--text); background: var(--panel); }
+  .round {
+    flex: none;
+    width: 34px;
+    height: 34px;
+    min-height: 0;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent-fill);
+    color: var(--accent-ink);
+    filter: none;
+    cursor: pointer;
+  }
+  .round:disabled { background: var(--raised); color: var(--faint); opacity: 1; cursor: default; }
+  .round.stop { background: var(--text); color: var(--bg); }
+  .round :global(.spin) { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .thumbs { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; padding: var(--s3) var(--s3) 0; }
   .thumb { position: relative; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--bg); }
-  .thumb img { height: 64px; display: block; border-radius: var(--r); }
+  .thumb img { height: 56px; display: block; border-radius: var(--r); }
   .remove {
     position: absolute;
     top: -8px;
     right: -8px;
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
     min-height: 0;
     padding: 0;
     display: grid;
@@ -266,43 +294,15 @@
   }
   .up { font-size: var(--fs-sm); color: var(--muted); }
   .err { max-width: 760px; margin: var(--s2) auto 0; color: var(--danger); font-size: var(--fs-sm); }
-  @media (max-width: 900px) { .hint { display: none; } }
 
-  /* Téléphone : collé en bas, champ en pilule, gros boutons */
+  /* Téléphone : carte collée en bas, mêmes éléments, cibles tactiles */
   .composer.phone {
     padding: var(--s2) calc(var(--s2) + var(--safe-right)) calc(var(--s2) + var(--safe-bottom)) calc(var(--s2) + var(--safe-left));
     border-top: 1px solid var(--line);
     background: var(--panel);
   }
-  .phone .box { border: 0; background: none; }
-  .phone .thumbs { padding: var(--s2) var(--s2) var(--s3); }
-  .ph-row { display: flex; align-items: flex-end; gap: 2px; }
-  .phone textarea {
-    flex: 1;
-    min-width: 0;
-    min-height: var(--touch);
-    padding: var(--s3) var(--s4);
-    margin: 0 var(--s1);
-    border: 1px solid var(--line-strong);
-    border-radius: 22px;
-    background: var(--bg);
-  }
-  .phone textarea:focus { border-color: var(--accent); }
-  .round {
-    flex: none;
-    width: 48px;
-    height: 48px;
-    min-height: 0;
-    padding: 0;
-    display: grid;
-    place-items: center;
-    border: 0;
-    border-radius: 50%;
-    background: var(--accent-fill);
-    color: var(--accent-ink);
-    filter: none;
-    cursor: pointer;
-  }
-  .round:disabled { background: var(--raised); color: var(--faint); opacity: 1; }
-  .round.stop { background: var(--raised); color: var(--text); border: 1px solid var(--line-strong); }
+  .phone .box { border-radius: 18px; background: var(--bg); }
+  .phone textarea { min-height: 44px; padding: var(--s3) var(--s4) var(--s1); }
+  .phone .round { width: 40px; height: 40px; }
+  .phone .eff { height: 40px; }
 </style>
