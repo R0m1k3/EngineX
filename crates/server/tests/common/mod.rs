@@ -926,3 +926,14 @@ pub async fn mcp_tool(e: &Env, key: &str, name: &str, args: Value) -> (String, b
         v["result"]["isError"].as_bool().unwrap(),
     )
 }
+
+/// Dossier de travail d'une session : son dossier propre
+/// (`<topic>/sessions/<work_dir>`), sinon le dossier du topic.
+pub async fn work_dir(e: &Env, sid: &str) -> PathBuf {
+    let topic = e.dir.path().join("data/workspace/projects/general/topics/inbox");
+    let b = e.get(&format!("/api/sessions/{sid}")).await.body;
+    match b["session"]["work_dir"].as_str() {
+        Some(n) => topic.join("sessions").join(n),
+        None => topic,
+    }
+}

@@ -66,7 +66,8 @@ fn rel_of(raw: &str) -> Result<String, ApiError> {
 }
 
 /// Dossier géré par EngineX : racine, `projects`, un projet, ses `topics`, un
-/// topic, la mémoire, les skills.
+/// topic, ses `sessions` et leurs dossiers (supprimés avec la session), la
+/// mémoire, les skills.
 pub fn managed(rel: &str) -> bool {
     let p: Vec<&str> = if rel.is_empty() {
         vec![]
@@ -81,6 +82,8 @@ pub fn managed(rel: &str) -> bool {
             | ["projects", _]
             | ["projects", _, "topics"]
             | ["projects", _, "topics", _]
+            | ["projects", _, "topics", _, "sessions"]
+            | ["projects", _, "topics", _, "sessions", _]
     )
 }
 

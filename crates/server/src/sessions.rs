@@ -43,13 +43,16 @@ pub struct SessionRow {
     pub preset_id: Option<i64>,
     /// Effort de réflexion ; `None` = `medium` (budget du preset).
     pub effort: Option<String>,
+    /// Dossier propre : `<topic>/sessions/<work_dir>` ; `None` = dossier du
+    /// topic (anciennes sessions, topics git) ou copie séparée.
+    pub work_dir: Option<String>,
 }
 
 /// Efforts proposés pour une session.
 pub const EFFORTS: [&str; 4] = ["none", "low", "medium", "high"];
 
 const COLS: &str = "id, topic_id, title, thread_id, approval, archived, created_at, updated_at, copy_branch, \
-                    pending_note, pending_revert, undo_snap, memory_seen, preset_id, effort";
+                    pending_note, pending_revert, undo_snap, memory_seen, preset_id, effort, work_dir";
 /// id, statut, erreur, usage, début, fin, origine, pre, post, modifications.
 type TurnRow = (
     String,
@@ -316,10 +319,19 @@ pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CreateBod
     } else {
         None
     };
+    // Dossier propre, sauf copie séparée et topic dépôt git (la session y
+    // travaille sur le dépôt lui-même).
+    let work_dir = if branch.is_none() && !crate::copies::is_git(&topic) {
+        let name = snapshots::session_dir_name(&id, chrono::Local::now().format("%Y-%m-%d").to_string());
+        std::fs::create_dir_all(snapshots::own_dir(&topic.dir, &name)).map_err(anyhow::Error::from)?;
+        Some(name)
+    } else {
+        None
+    };
     let t = now();
     sqlx::query(
-        "INSERT INTO chat_sessions (id, topic_id, title, approval, created_at, updated_at, copy_branch, preset_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chat_sessions (id, topic_id, title, approval, created_at, updated_at, copy_branch, preset_id, work_dir) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(b.topic_id)
@@ -329,9 +341,10 @@ pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CreateBod
     .bind(t)
     .bind(&branch)
     .bind(b.preset_id)
+    .bind(&work_dir)
     .execute(state.db())
     .await?;
-    Ok(Json(json!({ "id": id, "copy_branch": branch })))
+    Ok(Json(json!({ "id": id, "copy_branch": branch, "work_dir": work_dir })))
 }
 
 #[derive(Deserialize)]
@@ -538,9 +551,17 @@ pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<String>)
     // dossier en cours de suppression).
     let mut _guard = None;
     if let Ok(f) = snapshots::folder(&state, &r).await {
-        if r.copy_branch.is_some() {
+        if r.copy_branch.is_some() || r.work_dir.is_some() {
             _guard = Some(snapshots::lock(&state, &f).await);
             let _ = std::fs::remove_dir_all(&f.snap);
+            // Dossier propre : supprimé avec son contenu (la copie, elle, est
+            // sous le dossier de la session, supprimé plus bas).
+            if r.work_dir.is_some()
+                && f.work.exists()
+                && let Err(e) = std::fs::remove_dir_all(&f.work)
+            {
+                tracing::warn!("suppression de {} : {e}", f.work.display());
+            }
         } else if let Err(e) = snapshots::drop_refs(&state, &f).await {
             tracing::warn!("refs de la session {id} : {e:#}");
         }

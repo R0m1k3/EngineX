@@ -75,7 +75,7 @@ fn load_prefers_the_file_and_reports_errors() {
 async fn save_writes_the_detected_recipe_once() {
     let (e, _fake) = env_sessions(&[]).await;
     let sid = new_session(&e, "auto").await;
-    let topic = e.dir.path().join("data/workspace/projects/general/topics/inbox");
+    let topic = work_dir(&e, &sid).await;
     let r = e
         .send(
             "POST",

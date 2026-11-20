@@ -169,6 +169,9 @@ pub struct Folder {
 pub async fn folder(state: &AppState, row: &SessionRow) -> Result<Folder, ApiError> {
     let (work, snap) = if row.copy_branch.is_some() {
         (copy_dir(state, &row.id), session_repo(state, &row.id))
+    } else if let Some(name) = &row.work_dir {
+        let t = workspace::topic(state, row.topic_id).await?;
+        (own_dir(&t.dir, name), session_repo(state, &row.id))
     } else {
         let t = workspace::topic(state, row.topic_id).await?;
         (t.dir, topic_repo(state, row.topic_id))
@@ -178,6 +181,17 @@ pub async fn folder(state: &AppState, row: &SessionRow) -> Result<Folder, ApiErr
         work,
         snap,
     })
+}
+
+/// Dossier propre d'une session : `<topic>/sessions/<nom>`.
+pub fn own_dir(topic_dir: &Path, name: &str) -> PathBuf {
+    topic_dir.join("sessions").join(name)
+}
+
+/// Nom du dossier propre : `AAAA-MM-JJ-<8 premiers caractères de l'id>`.
+pub fn session_dir_name(session_id: &str, date: String) -> String {
+    let short: String = session_id.chars().filter(char::is_ascii_alphanumeric).take(8).collect();
+    format!("{date}-{short}")
 }
 
 pub fn copy_dir(state: &AppState, session_id: &str) -> PathBuf {

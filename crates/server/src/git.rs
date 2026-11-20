@@ -191,7 +191,7 @@ pub async fn session_repo(state: &AppState, session_id: &str) -> Result<Repo, Ap
         dir: f.work,
         project_id: t.project_id,
         helper_id: session_id.to_string(),
-        topic_id: r.copy_branch.is_none().then_some(r.topic_id),
+        topic_id: (r.copy_branch.is_none() && r.work_dir.is_none()).then_some(r.topic_id),
     })
 }
 
@@ -705,11 +705,12 @@ pub async fn push_locked(state: &AppState, repo: &Repo, branch: Option<&str>) ->
 /// topic : pas de changement de branche ni de fusion sous elle.
 async fn ensure_idle(state: &AppState, repo: &Repo) -> Result<(), ApiError> {
     let Some(topic_id) = repo.topic_id else { return Ok(()) };
-    let ids: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM chat_sessions WHERE topic_id = ? AND copy_branch IS NULL AND archived = 0")
-            .bind(topic_id)
-            .fetch_all(state.db())
-            .await?;
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM chat_sessions WHERE topic_id = ? AND copy_branch IS NULL AND work_dir IS NULL AND archived = 0",
+    )
+    .bind(topic_id)
+    .fetch_all(state.db())
+    .await?;
     for h in bridge::hubs(state) {
         if ids.contains(&h.id) && h.busy() {
             return Err(ApiError::TurnInProgress);

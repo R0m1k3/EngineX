@@ -1539,6 +1539,6 @@ pub fn session_json(r: &SessionRow, running: bool) -> Value {
         "created_at": r.created_at, "updated_at": r.updated_at, "running": running,
         "copy_branch": r.copy_branch, "pending_note": r.pending_note,
         "pending_revert": r.pending_revert.is_some(), "undo": r.undo_snap.is_some(),
-        "preset_id": r.preset_id, "effort": r.effort,
+        "preset_id": r.preset_id, "effort": r.effort, "work_dir": r.work_dir,
     })
 }

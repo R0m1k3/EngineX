@@ -230,15 +230,11 @@ pub(crate) async fn start(
     // 2. nouvelle clé interne.
     let key = api_keys::create_internal(state, &key_name(session_id)).await?;
     let dir = session_dir(state, session_id);
-    // Copie séparée : son dossier remplace le topic comme `/workspace`.
-    let copy = crate::sessions::row(state, session_id)
-        .await
-        .map(|r| r.copy_branch.is_some())
-        .unwrap_or(false);
-    let work = if copy {
-        crate::snapshots::copy_dir(state, session_id)
-    } else {
-        topic.dir.clone()
+    // `/workspace` = dossier de la session (dossier propre, copie séparée)
+    // ou, pour les anciennes sessions et les topics git, celui du topic.
+    let work = match crate::sessions::row(state, session_id).await {
+        Ok(r) => crate::snapshots::folder(state, &r).await?.work,
+        Err(_) => topic.dir.clone(),
     };
     let mounts = Mounts {
         work,

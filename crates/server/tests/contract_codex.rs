@@ -665,10 +665,7 @@ async fn bridge_approval() {
     ev.until("request_resolved", |v| v["rid"] == rid).await;
     let t = ev.until("turn_stored", |_| true).await;
     assert_eq!(t["turn"]["status"], "completed", "{t}");
-    let topic =
-        b.e.dir
-            .path()
-            .join("data/workspace/projects/general/topics/inbox/made.txt");
+    let topic = work_dir(&b.e, &sid).await.join("made.txt");
     assert!(topic.exists());
     b.check_fixture("approval", &sid);
 }
@@ -977,7 +974,7 @@ async fn bridge_terminal() {
     term_send(&mut ws, "stty size\n").await;
     term_until(&mut ws, &mut out, "30 100").await;
     term_send(&mut ws, "echo $$ > term.pid\n").await;
-    let topic = b.e.dir.path().join("data/workspace/projects/general/topics/inbox");
+    let topic = work_dir(&b.e, &sid).await;
     let mut pid = String::new();
     for _ in 0..50 {
         pid = std::fs::read_to_string(topic.join("term.pid")).unwrap_or_default();
@@ -1067,14 +1064,14 @@ async fn verify_bridge(model: &str, max_fixes: i64) -> (Bridge, String, Sse) {
         b.e.send("PUT", "/api/settings/sessions", json!({"verify_max_fixes": max_fixes}))
             .await;
     assert_eq!(r.status, 200, "{}", r.text);
-    let topic = b.e.dir.path().join("data/workspace/projects/general/topics/inbox");
+    let sid = new_session(&b.e, "auto").await;
+    let topic = work_dir(&b.e, &sid).await;
     std::fs::create_dir_all(topic.join(".enginex")).unwrap();
     std::fs::write(
         topic.join(".enginex/verify.toml"),
         "[[step]]\nname = \"fichier\"\nrun = \"test -f ok2.txt\"\ntimeout = 60\n",
     )
     .unwrap();
-    let sid = new_session(&b.e, "auto").await;
     let ev = sse(&b.e, &format!("/api/sessions/{sid}/events")).await;
     (b, sid, ev)
 }
@@ -1157,7 +1154,7 @@ fn last_chat_request(b: &Bridge) -> String {
 async fn bridge_revert() {
     let b = bridge_env("revert", "", false).await;
     let sid = new_session(&b.e, "auto").await;
-    let topic = b.e.dir.path().join("data/workspace/projects/general/topics/inbox");
+    let topic = work_dir(&b.e, &sid).await;
     let mut ev = sse(&b.e, &format!("/api/sessions/{sid}/events")).await;
     let mut run = async |text: &str| -> String {
         turn(&b.e, &sid, text).await;

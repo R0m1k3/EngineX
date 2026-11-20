@@ -504,10 +504,36 @@ async fn delete_removes_sandbox_key_rows_and_files_but_not_the_topic() {
 }
 
 #[tokio::test]
+async fn a_session_works_in_its_own_folder_removed_with_it() {
+    let (e, _fake) = env_sessions(&text_script()).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let name = session_body(&e, &sid).await["session"]["work_dir"]
+        .as_str()
+        .expect("dossier propre")
+        .to_string();
+    let own = topic_dir(&e).join("sessions").join(&name);
+    assert!(own.is_dir(), "{}", own.display());
+    let other = new_session(&e, "auto").await;
+    assert_ne!(
+        session_body(&e, &other).await["session"]["work_dir"].as_str(),
+        Some(name.as_str())
+    );
+    // La page Fichiers ne supprime pas ces dossiers (ils suivent la session).
+    let rel = format!("projects/general/topics/inbox/sessions/{name}");
+    assert!(enginex_server::wsfiles::managed(&rel));
+    std::fs::write(own.join("app.py"), "print(1)").unwrap();
+    let r = e.send("DELETE", &format!("/api/sessions/{sid}"), json!({})).await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    assert!(!own.exists());
+    assert!(topic_dir(&e).join("sessions").is_dir());
+}
+
+#[tokio::test]
 async fn file_route_refuses_escapes_symlinks_and_svg() {
     let (e, _fake) = env_sessions(&text_script()).await;
     let sid = new_session(&e, "auto").await;
-    let topic = e.dir.path().join("data/workspace/projects/general/topics/inbox");
+    let topic = work_dir(&e, &sid).await;
     std::fs::write(topic.join("ok.png"), png(4, 4)).unwrap();
     std::fs::write(topic.join("x.svg"), "<svg onload=alert(1)/>").unwrap();
     std::fs::write(e.dir.path().join("outside.png"), png(4, 4)).unwrap();
@@ -577,7 +603,7 @@ async fn turn_writing(e: &Env, ev: &mut Sse, sid: &str, text: &str, files: &[(&s
     assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text);
     ev.until("codex", |v| v["method"] == "turn/started").await;
     for (p, c) in files {
-        std::fs::write(topic_dir(e).join(p), c).unwrap();
+        std::fs::write(work_dir(e, sid).await.join(p), c).unwrap();
     }
     let ch = ev.until("changes", |_| true).await;
     ch["turn_id"].as_str().unwrap().to_string()
@@ -619,7 +645,7 @@ async fn files_only_revert_adds_a_note_and_redo_works() {
         )
         .await;
     assert_eq!(r.status, 200, "{}", r.text);
-    assert!(!topic_dir(&e).join("a.txt").exists());
+    assert!(!work_dir(&e, &sid).await.join("a.txt").exists());
     let s = session_body(&e, &sid).await;
     assert_eq!(s["session"]["undo"], true);
     assert!(s["session"]["pending_note"].as_str().unwrap().contains("Écris a.txt"));
@@ -629,7 +655,10 @@ async fn files_only_revert_adds_a_note_and_redo_works() {
         .send("POST", &format!("/api/sessions/{sid}/restore-undo"), json!({}))
         .await;
     assert_eq!(r.status, 200, "{}", r.text);
-    assert_eq!(std::fs::read_to_string(topic_dir(&e).join("a.txt")).unwrap(), "v1");
+    assert_eq!(
+        std::fs::read_to_string(work_dir(&e, &sid).await.join("a.txt")).unwrap(),
+        "v1"
+    );
     // La note part en tête du tour suivant, puis est vidée ; le bandeau aussi.
     turn(&e, &sid, "Suite").await;
     ev.until("turn_stored", |_| true).await;
@@ -665,7 +694,7 @@ async fn conversation_revert_with_a_live_sandbox() {
         .await;
     assert_eq!(r.status, 200, "{}", r.text);
     assert_eq!(r.body["user"]["text"], "Premier");
-    assert!(!topic_dir(&e).join("b.txt").exists());
+    assert!(!work_dir(&e, &sid).await.join("b.txt").exists());
     let s = session_body(&e, &sid).await;
     assert!(s["items"].as_array().unwrap().is_empty(), "{}", s["items"]);
     assert!(s["turns"].as_array().unwrap().is_empty());
@@ -869,10 +898,15 @@ async fn folder_busy_and_no_snapshot() {
     make_active_preset(&e).await;
     let a = new_session(&e, "auto").await;
     let b = new_session(&e, "auto").await;
+    // Anciennes sessions (sans dossier propre) : elles partagent le topic.
+    sqlx::query("UPDATE chat_sessions SET work_dir = NULL")
+        .execute(e.state.db())
+        .await
+        .unwrap();
     let mut ev_a = sse(&e, &format!("/api/sessions/{a}/events")).await;
     let mut ev_b = sse(&e, &format!("/api/sessions/{b}/events")).await;
     let tid = turn_writing(&e, &mut ev_a, &a, "Premier", &[("g.txt", "x")]).await;
-    // Un tour d'une autre session du même topic : refus.
+    // Un tour d'une autre session du même dossier : refus.
     turn(&e, &b, "Autre").await;
     ev_b.until("codex", |v| v["method"] == "turn/started").await;
     let r = e
@@ -954,13 +988,13 @@ async fn failed_verification_starts_a_fix_turn_then_goes_green() {
     script.push(json!({"expect": "command/exec", "result": exec_result(0, "")}));
     let (e, fake) = env_sessions(&script).await;
     make_active_preset(&e).await;
-    std::fs::create_dir_all(topic_dir(&e).join(".enginex")).unwrap();
+    let sid = new_session(&e, "auto").await;
+    std::fs::create_dir_all(work_dir(&e, &sid).await.join(".enginex")).unwrap();
     std::fs::write(
-        topic_dir(&e).join(".enginex/verify.toml"),
+        work_dir(&e, &sid).await.join(".enginex/verify.toml"),
         "[[step]]\nname = \"fichier\"\nrun = \"test -f ok.txt\"\n",
     )
     .unwrap();
-    let sid = new_session(&e, "auto").await;
     let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
     let t1 = turn_writing(&e, &mut ev, &sid, "Fais-le", &[("h.txt", "x")]).await;
     let v = ev.until("verify", |v| v["status"] == "failed").await;
@@ -997,13 +1031,13 @@ async fn a_message_cancels_a_running_verification() {
     script.extend(second_turn("text"));
     let (e, fake) = env_sessions(&script).await;
     make_active_preset(&e).await;
-    std::fs::create_dir_all(topic_dir(&e).join(".enginex")).unwrap();
+    let sid = new_session(&e, "auto").await;
+    std::fs::create_dir_all(work_dir(&e, &sid).await.join(".enginex")).unwrap();
     std::fs::write(
-        topic_dir(&e).join(".enginex/verify.toml"),
+        work_dir(&e, &sid).await.join(".enginex/verify.toml"),
         "[[step]]\nname = \"long\"\nrun = \"sleep 100\"\n",
     )
     .unwrap();
-    let sid = new_session(&e, "auto").await;
     let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
     turn_writing(&e, &mut ev, &sid, "Premier", &[("i.txt", "x")]).await;
     ev.until("verify", |v| v["status"] == "running").await;
@@ -1026,13 +1060,13 @@ async fn interrupt_cancels_a_verification_and_boot_marks_running_ones_as_errors(
     script.push(json!({"answer": "command/exec", "result": exec_result(-1, "")}));
     let (e, fake) = env_sessions(&script).await;
     make_active_preset(&e).await;
-    std::fs::create_dir_all(topic_dir(&e).join(".enginex")).unwrap();
+    let sid = new_session(&e, "auto").await;
+    std::fs::create_dir_all(work_dir(&e, &sid).await.join(".enginex")).unwrap();
     std::fs::write(
-        topic_dir(&e).join(".enginex/verify.toml"),
+        work_dir(&e, &sid).await.join(".enginex/verify.toml"),
         "[[step]]\nname = \"long\"\nrun = \"sleep 100\"\n",
     )
     .unwrap();
-    let sid = new_session(&e, "auto").await;
     let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
     turn_writing(&e, &mut ev, &sid, "Premier", &[("j.txt", "x")]).await;
     wait_for(|| fake.received("command/exec").len() == 1).await;

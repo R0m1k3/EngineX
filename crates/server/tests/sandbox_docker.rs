@@ -97,7 +97,7 @@ async fn session_in_a_real_docker_sandbox() {
     assert_eq!(t["turn"]["status"], "completed", "{t}\n{:?}", ev.names());
 
     // Fichier écrit sur l'hôte par l'uid 1000.
-    let ok = e.dir.path().join("data/workspace/projects/general/topics/inbox/ok.txt");
+    let ok = work_dir(&e, &sid).await.join("ok.txt");
     let meta = std::fs::metadata(&ok).expect("ok.txt absent");
     assert_eq!(meta.uid(), 1000);
     // Secret visible dans la sandbox, masqué dans l'historique et pour le modèle.
@@ -220,14 +220,14 @@ async fn code_session_in_a_real_docker_sandbox() {
         )
         .await;
     assert_eq!(r.status, 200, "{}", r.text);
-    let topic = e.dir.path().join("data/workspace/projects/general/topics/inbox");
+    let sid = new_session(&e, "auto").await;
+    let topic = work_dir(&e, &sid).await;
     std::fs::create_dir_all(topic.join(".enginex")).unwrap();
     std::fs::write(
         topic.join(".enginex/verify.toml"),
         "[[step]]\nname = \"fichier\"\nrun = \"grep -qx un un.txt && test \\\"$(id -u)\\\" = 1000\"\ntimeout = 60\n",
     )
     .unwrap();
-    let sid = new_session(&e, "auto").await;
     let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
 
     // Tour, instantané, vérification dans le conteneur.

@@ -10,7 +10,7 @@ use serde_json::json;
 async fn env() -> (Env, String, std::path::PathBuf) {
     let (e, _fake) = env_sessions(&script_with("text", |_| {})).await;
     let sid = new_session(&e, "auto").await;
-    let topic = e.dir.path().join("data/workspace/projects/general/topics/inbox");
+    let topic = work_dir(&e, &sid).await;
     (e, sid, topic)
 }
 
