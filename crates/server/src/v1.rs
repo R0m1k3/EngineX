@@ -434,6 +434,7 @@ fn speed_of(t: Option<&Value>) -> (String, Option<Value>) {
             "at": now(),
             "tokens_per_s": (v * 10.0).round() / 10.0,
             "predicted": f("predicted_n"),
+            "predicted_ms": f("predicted_ms"),
             "draft_n": draft,
             "draft_accepted": draft.and(accepted),
         })

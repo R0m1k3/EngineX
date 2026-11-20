@@ -419,7 +419,7 @@ impl Hub {
     /// Débit d'un appel au modèle qui vient de finir.
     pub(crate) fn note_gen(&self, st: &Value) {
         self.st.lock().expect("verrou").last_gen = Some(json!({
-            "tps": st["tokens_per_s"], "n": st["predicted"], "at": st["at"],
+            "tps": st["tokens_per_s"], "n": st["predicted"], "ms": st["predicted_ms"], "at": st["at"],
         }));
     }
 

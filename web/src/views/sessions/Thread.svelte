@@ -313,6 +313,31 @@
     return Object.fromEntries(Object.entries(by).map(([k, v]) => [k, avgTps(v)]));
   });
   const histData = $derived(history.map((h) => h.data));
+  const fmtDur = (sec: number) => {
+    const t = Math.round(sec);
+    if (t < 60) return `${t} s`;
+    const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60);
+    return h ? `${h} h ${String(m).padStart(2, '0')} min` : `${m} min ${String(t % 60).padStart(2, '0')} s`;
+  };
+  const fmtMs = (ms: number) =>
+    ms < 1000 ? `${Math.round(ms)} ms` : ms < 60000 ? `${(ms / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} s` : fmtDur(ms / 1000);
+  const callInfo = (g: { tps: number; ms?: number | null }) => fmtTps(g.tps) + (g.ms ? ` · ${fmtMs(g.ms)}` : '');
+  // Temps de travail : tours finis + tour en cours (horloge locale, relevée chaque seconde).
+  let clock = $state(Date.now());
+  let liveSince = $state(0);
+  $effect(() => {
+    if (!live) {
+      liveSince = 0;
+      return;
+    }
+    liveSince ||= Date.now();
+    const t = setInterval(() => (clock = Date.now()), 1000);
+    return () => clearInterval(t);
+  });
+  const workSecs = $derived(
+    Object.values(turns).reduce((a, t) => a + (t.completed_at && t.started_at ? t.completed_at - t.started_at : 0), 0) +
+      (live && liveSince ? Math.max(0, (clock - liveSince) / 1000) : 0),
+  );
   const sessionTps = $derived(avgTps(histData));
   const liveTps = $derived(avgTps(live?.items ?? []));
 
@@ -567,7 +592,6 @@
       <button class="chip" onclick={() => (settings = true)}><Icon icon={Box} size={14} />{modelLabel}</button>
       <button class="chip" onclick={() => (settings = true)}>{session?.approval === 'prudent' ? 'Prudent' : 'Automatique'}</button>
       {#if session?.copy_branch}<span class="chip static"><Icon icon={GitBranch} size={14} />{session.copy_branch}</span>{/if}
-      {#if sessionTps}<span class="chip static num">moyenne {fmtTps(sessionTps)}</span>{/if}
     </div>
     <Menu side="bottom-end" bind:open={moreOpen} anchor={moreBtn} items={moreItems} label="Outils et réglages de la session" />
     <Sheet bind:open={settings} title="Réglages de la session">
@@ -577,7 +601,6 @@
     <header class="head">
       <div class="r1">
         <button class="title" onclick={rename} use:tooltip={'Renommer'}><h1 class="ell">{session?.title ?? '…'}</h1></button>
-        {#if sessionTps}<span use:tooltip={'Débit moyen de la session'}><Badge><span class="num">moyenne {fmtTps(sessionTps)}</span></Badge></span>{/if}
         {#if session?.copy_branch}
           <span use:tooltip={'Copie séparée'}><Badge><Icon icon={GitBranch} size={14} />{session.copy_branch}</Badge></span>
           <Button size="sm" variant="ghost" icon={GitMerge} busy={bringing} disabled={bringing || !!live} onclick={bring}>
@@ -654,7 +677,7 @@
           </details>
         {:else}
           <Item item={it.data} sessionId={id} />
-          {#if lastOfCall(histData, ri)}<p class="tps num">{fmtTps(it.data.gen.tps)}</p>{/if}
+          {#if lastOfCall(histData, ri)}<p class="tps num">{callInfo(it.data.gen)}</p>{/if}
         {/if}
         {#if it.kind === 'userMessage' && it.turn_id && (autoOrigin(it) ?? 'user') === 'user' && !live}
           {@const t = turns[it.turn_id]}
@@ -693,7 +716,7 @@
       {/each}
       {#each liveItems as it, li (it.id)}
         <Item item={it} sessionId={id} />
-        {#if lastOfCall(liveItems, li)}<p class="tps num">{fmtTps(it.gen.tps)}</p>{/if}
+        {#if lastOfCall(liveItems, li)}<p class="tps num">{callInfo(it.gen)}</p>{/if}
       {/each}
       {#if live}
         <p class="working num"><Icon icon={LoaderCircle} size={16} class="spin" />EX travaille…{tokens(live.usage) ? ` ${tokens(live.usage)}` : ''}{liveTps ? ` · moyenne ${fmtTps(liveTps)}` : ''}</p>
@@ -705,6 +728,12 @@
     </div>
   </div>
 
+  {#if sessionTps || workSecs >= 1}
+    <p class="stats num">
+      {#if sessionTps}<span>Moyenne {fmtTps(sessionTps)}</span>{/if}
+      {#if workSecs >= 1}<span>Temps de travail {fmtDur(workSecs)}</span>{/if}
+    </p>
+  {/if}
   {#if error}<p class="err" role="alert"><Icon icon={CircleX} size={16} />{error}</p>{/if}
   <Composer effort={session?.effort ?? 'medium'} efforts={EFFORTS} effortHint={EFFORT_HINT[session?.effort ?? 'medium']} onEffort={setEffort} sessionId={id} running={!!live} disabled={session?.archived ?? false} {send} {interrupt} bind:text={draft} />
   {#if reverting}<Revert close={() => (reverting = null)} choose={revert} />{/if}
@@ -789,6 +818,7 @@
   .fh { display: flex; align-items: center; gap: var(--s2); font-weight: 600; font-size: var(--fs-md); }
   .fh :global(.ui-icon) { color: var(--danger); }
   .tps { margin: calc(-1 * var(--s2)) 0 0; font-size: var(--fs-xs); color: var(--faint); text-align: right; }
+  .stats { display: flex; gap: var(--s4); justify-content: center; flex-wrap: wrap; margin: 0; padding: var(--s1) var(--s6) 0; font-size: var(--fs-xs); color: var(--muted); }
   .foot { display: flex; gap: var(--s3); flex-wrap: wrap; margin: calc(-1 * var(--s2)) 0 0; font-size: var(--fs-xs); color: var(--faint); }
   .working { display: flex; align-items: center; gap: var(--s2); margin: 0; font-size: var(--fs-sm); color: var(--muted); }
   .working :global(.spin) { color: var(--accent); animation: spin 1s linear infinite; }
