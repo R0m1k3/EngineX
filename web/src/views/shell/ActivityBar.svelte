@@ -105,6 +105,7 @@
     color: var(--faint);
     cursor: pointer;
     filter: none;
+    text-decoration: none;
   }
   .act:hover { color: var(--text); background: var(--raised); }
   .act.on { color: var(--text); }
