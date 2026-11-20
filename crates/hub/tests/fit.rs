@@ -73,10 +73,11 @@ fn verdicts_by_context() {
     assert_eq!(r.kv_mib, 8704);
     assert_eq!(r.cards[0].need_mib, 16401);
     assert_eq!(r.cards[1].need_mib, 13097);
-    assert_eq!(r.verdict, Verdict::NoFit);
+    // Ne passe qu'en entamant la marge de --fit (1 Gio) sur les deux cartes.
+    assert_eq!(r.verdict, Verdict::Tight);
     let r = run(32768, &CARDS);
     assert_eq!((r.cards[0].need_mib, r.cards[1].need_mib), (13919, 11227));
-    assert_eq!(r.verdict, Verdict::Tight); // 2e carte à 91 %
+    assert_eq!(r.verdict, Verdict::Fits); // 2e carte à 91 %, marge comprise
     let r = run(16384, &CARDS);
     assert_eq!((r.cards[0].need_mib, r.cards[1].need_mib), (12678, 10292));
     assert_eq!(r.verdict, Verdict::Fits);
@@ -91,7 +92,7 @@ fn others_reduce_available() {
         },
         CARDS[1],
     ];
-    let r = run(16384, &busy);
+    let r = run(32768, &busy);
     assert_eq!(r.cards[0].avail_mib, 12311);
     assert_ne!(r.verdict, Verdict::Fits);
 }
@@ -205,4 +206,34 @@ fn flash_attention_off_and_mtp_cost_vram() {
     // Lot physique de 2048 : tampons ×4 et logits ×4.
     let big = estimate(&input(true, false, 2048), &CARDS);
     assert!(big.cards[0].need_mib >= on.cards[0].need_mib + 1536);
+}
+
+/// Qwen3.8-27B (qwen35) : 65 blocs dont 1 MTP, attention une couche sur 4,
+/// le reste récurrent. Seules 16 + 1 couches ont un cache KV.
+#[test]
+fn hybrid_counts_only_attention_layers() {
+    let m = GgufMeta {
+        arch: "qwen35".into(),
+        block_count: Some(65),
+        head_count: Some(24),
+        head_count_kv: Some(4),
+        key_length: Some(256),
+        value_length: Some(256),
+        nextn_predict_layers: Some(1),
+        full_attention_interval: Some(4),
+        ssm: Some(enginex_hub::gguf::SsmMeta {
+            conv_kernel: 4,
+            state_size: 128,
+            group_count: 16,
+            time_step_rank: 48,
+            inner_size: 6144,
+        }),
+        ..Default::default()
+    };
+    let kv = kv_bytes(&m, 65536, 1, KvType::Q8_0).unwrap();
+    let attn = 17 * 4 * 512 * 34 / 32 * 65536;
+    let state = 48 * (3 * (6144 + 2 * 16 * 128) + 128 * 6144) * 4;
+    assert_eq!(kv, attn + state);
+    // ≈ 2,4 Gio au lieu de 8,6 en comptant toutes les couches.
+    assert!(kv < 3 << 30);
 }

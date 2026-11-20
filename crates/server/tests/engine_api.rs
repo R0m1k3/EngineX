@@ -161,7 +161,7 @@ async fn models_presets_engine_and_versions() {
     let v = e.until("/api/engine", |v| engine_state(v) == "ready").await;
     assert_eq!(v["origin"], "image");
 
-    // Arrêt (tâche en fond), puis suppression du modèle (et de ses presets).
+    // Arrêt (tâche en fond), puis suppression du preset avec son modèle.
     let r = e.send("POST", "/api/engine/stop", json!({})).await;
     assert_eq!(r.body["started"], true, "{}", r.text);
     let v = e
@@ -170,9 +170,19 @@ async fn models_presets_engine_and_versions() {
         })
         .await;
     assert_eq!(v["job"]["step"], "done", "{v}");
-    let r = e.send("DELETE", &format!("/api/models/{model_id}"), json!({})).await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = e
+        .send("DELETE", &format!("/api/presets/{id}?model=true"), json!({}))
+        .await;
+    assert_eq!(
+        (r.status, &r.body["model_kept"]),
+        (StatusCode::OK, &json!(false)),
+        "{}",
+        r.text
+    );
     assert_eq!(e.get("/api/presets").await.body, json!([]));
+    assert_eq!(e.get("/api/models").await.body, json!([]));
+    let r = e.send("DELETE", &format!("/api/models/{model_id}"), json!({})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text);
     assert!(!e.dir.path().join("models/unsloth").exists());
 }
 

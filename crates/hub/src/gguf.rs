@@ -71,8 +71,24 @@ pub struct GgufMeta {
     /// pas, certains GGUF la gardent sans les poids MTP.
     #[serde(default)]
     pub mtp_block: Option<u64>,
+    /// Modèle hybride (Qwen3-Next, Qwen3.5+) : une couche sur N porte
+    /// l'attention (et donc du cache KV), les autres sont récurrentes.
+    #[serde(default)]
+    pub full_attention_interval: Option<u64>,
+    /// État des couches récurrentes (`ssm.*`) : taille fixe par séquence.
+    #[serde(default)]
+    pub ssm: Option<SsmMeta>,
     /// Clés `general.sampling.*` (suffixe → valeur).
     pub sampling: BTreeMap<String, f64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SsmMeta {
+    pub conv_kernel: u64,
+    pub state_size: u64,
+    pub group_count: u64,
+    pub time_step_rank: u64,
+    pub inner_size: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -322,6 +338,16 @@ fn meta_from(kv: &HashMap<String, Value>) -> GgufMeta {
         expert_used_count: a("expert_used_count").filter(|n| *n > 0),
         nextn_predict_layers: a("nextn_predict_layers").filter(|n| *n > 0),
         mtp_block: None,
+        full_attention_interval: a("full_attention_interval").filter(|n| *n > 1),
+        ssm: (|| {
+            Some(SsmMeta {
+                conv_kernel: a("ssm.conv_kernel")?,
+                state_size: a("ssm.state_size")?,
+                group_count: a("ssm.group_count").unwrap_or(1),
+                time_step_rank: a("ssm.time_step_rank").unwrap_or(1),
+                inner_size: a("ssm.inner_size")?,
+            })
+        })(),
         sampling,
         arch,
     }

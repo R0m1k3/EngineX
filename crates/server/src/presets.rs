@@ -3,7 +3,7 @@
 
 use axum::{
     Json,
-    extract::{Path as UrlPath, State},
+    extract::{Path as UrlPath, Query, State},
 };
 use enginex_engine::args::{DraftKind, PresetSettings, Reasoning, needs_reload};
 use enginex_hub::{
@@ -355,17 +355,56 @@ async fn delete_row(state: &AppState, id: i64) -> Result<(), sqlx::Error> {
         .map(|_| ())
 }
 
+#[derive(Deserialize, Default)]
+pub struct DeleteQuery {
+    /// Supprimer aussi le modèle, s'il ne sert à aucun autre preset.
+    #[serde(default)]
+    model: bool,
+}
+
+/// Modèle du preset `id` à supprimer avec lui : aucun autre preset ne s'en sert
+/// (ni comme modèle, ni comme brouillon).
+async fn model_to_drop(state: &AppState, id: i64, model_id: i64) -> Result<Option<ModelRow>, ApiError> {
+    let others: Vec<(i64, String)> = sqlx::query_as("SELECT model_id, settings FROM presets WHERE id != ?")
+        .bind(id)
+        .fetch_all(&state.0.db)
+        .await?;
+    let used = others.iter().any(|(mid, settings)| {
+        *mid == model_id
+            || serde_json::from_str::<PresetSettings>(settings).is_ok_and(|s| s.spec.draft_model_id == Some(model_id))
+    });
+    if used {
+        return Ok(None);
+    }
+    Ok(Some(models::model(state, model_id).await?))
+}
+
 /// Preset inactif : supprimé tout de suite. Preset actif : tâche en fond qui
-/// attend la fin des requêtes /v1, arrête le moteur, puis supprime.
-pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) -> Result<Json<Value>, ApiError> {
-    preset(&state, id).await?;
+/// attend la fin des requêtes /v1, arrête le moteur, puis supprime. Avec
+/// `?model=true`, son modèle part aussi s'il ne sert à rien d'autre.
+pub async fn delete(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<i64>,
+    Query(q): Query<DeleteQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let with_model = q.model;
+    let p = preset(&state, id).await?;
+    let drop = if with_model {
+        model_to_drop(&state, id, p.model_id).await?
+    } else {
+        None
+    };
+    let model_kept = with_model && drop.is_none();
     sqlx::query("DELETE FROM settings WHERE key = 'preset.default' AND value = ?")
         .bind(id.to_string())
         .execute(&state.0.db)
         .await?;
     if active_id(&state).await? != Some(id) {
         delete_row(&state, id).await?;
-        return Ok(Json(json!({ "ok": true })));
+        if let Some(m) = &drop {
+            models::remove_model(&state, m).await?;
+        }
+        return Ok(Json(json!({ "ok": true, "model_kept": model_kept })));
     }
     engine_api::begin_job(&state, "delete", &id.to_string())?;
     let s = state.clone();
@@ -373,15 +412,26 @@ pub async fn delete(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) ->
         let _gate = engine_api::take_gate(&s).await;
         s.supervisor().stop(false).await;
         let r = async {
-            set_setting(&s, "preset.active", None).await?;
-            delete_row(&s, id).await
+            set_setting(&s, "preset.active", None)
+                .await
+                .map_err(|e| e.to_string())?;
+            delete_row(&s, id).await.map_err(|e| e.to_string())?;
+            if let Some(m) = &drop {
+                models::remove_model(&s, m).await.map_err(|e| e.to_string())?;
+            }
+            Ok::<_, String>(())
         }
         .await
-        .map(|_| "preset supprimé, moteur arrêté".to_string())
-        .map_err(|e| e.to_string());
+        .map(|_| {
+            if drop.is_some() {
+                "preset et modèle supprimés, moteur arrêté".to_string()
+            } else {
+                "preset supprimé, moteur arrêté".to_string()
+            }
+        });
         engine_api::end_job(&s, r);
     });
-    Ok(Json(json!({ "started": true })))
+    Ok(Json(json!({ "started": true, "model_kept": model_kept })))
 }
 
 #[derive(Deserialize)]

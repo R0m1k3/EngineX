@@ -111,8 +111,21 @@ pub fn kv_bytes(meta: &GgufMeta, ctx: u64, parallel: u64, kv: KvType) -> Option<
     let k = meta.key_length.or_else(head_dim)?;
     let v = meta.value_length.or_else(head_dim)?;
     let (num, den) = kv.bytes();
-    let per_token = layers * heads_kv * (k + v) * num / den;
-    Some(per_token * ctx * parallel.max(1))
+    let nextn = meta.nextn_predict_layers.unwrap_or(0).min(layers);
+    let main = layers - nextn;
+    // Hybride : seules les couches d'attention (une sur N) ont un cache KV ;
+    // les couches récurrentes gardent un état fixe par séquence (f32).
+    let (attn, recurrent) = match meta.full_attention_interval {
+        Some(n) if n > 1 => (main / n + nextn, main - main / n),
+        _ => (layers, 0),
+    };
+    let per_token = attn * heads_kv * (k + v) * num / den;
+    let state = meta.ssm.map_or(0, |s| {
+        let conv = s.conv_kernel.saturating_sub(1) * (s.inner_size + 2 * s.group_count * s.state_size);
+        let ssm = s.state_size * s.inner_size;
+        recurrent * (conv + ssm) * 4
+    });
+    Some((per_token * ctx + state) * parallel.max(1))
 }
 
 pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
@@ -171,10 +184,12 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
             }
         })
         .collect();
-    let all = |pct: u64| needs.iter().all(|c| c.need_mib * 100 <= c.avail_mib * pct);
-    let verdict = if all(90) {
+    // Le besoin compte déjà la marge `fit_target` de `--fit` : tient s'il
+    // passe marge comprise, serré s'il ne passe qu'en l'entamant.
+    let margin = input.fit_target_mib;
+    let verdict = if needs.iter().all(|c| c.need_mib <= c.avail_mib) {
         Verdict::Fits
-    } else if all(100) {
+    } else if needs.iter().all(|c| c.need_mib.saturating_sub(margin) <= c.avail_mib) {
         Verdict::Tight
     } else if input.meta.expert_count.is_some() {
         Verdict::Offload

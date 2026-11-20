@@ -89,7 +89,22 @@
       `Supprimer le preset ${p.name} ?${p.active ? ' Le moteur sera arrêté après les requêtes en cours.' : ''}`,
       { title: 'Supprimer le preset', confirm: 'Supprimer', danger: true },
     );
-    if (ok) await run(() => deletePreset(p.id), p.active ? 'Suppression lancée : le moteur s’arrête après les requêtes en cours.' : 'Preset supprimé.');
+    if (!ok) return;
+    // Le modèle ne sert qu'à ce preset : proposer de libérer le disque.
+    const m = modelOf(p);
+    const alone = !!m && m.presets.every((id) => id === p.id);
+    const withModel =
+      alone &&
+      (await confirmDialog(
+        `Supprimer aussi le modèle ${m!.file} (${(m!.size_bytes / 1e9).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Go) ? Aucun autre preset ne s’en sert.`,
+        { title: 'Supprimer le modèle', confirm: 'Supprimer le modèle', cancel: 'Garder le modèle', danger: true },
+      ));
+    let done = p.active ? 'Suppression lancée : le moteur s’arrête après les requêtes en cours.' : withModel ? 'Preset et modèle supprimés.' : 'Preset supprimé.';
+    await run(async () => {
+      const r = await deletePreset(p.id, withModel);
+      if (r?.model_kept) done = 'Preset supprimé ; modèle gardé : un autre preset s’en sert comme brouillon.';
+      toast(done, 'ok');
+    });
   }
 
   const modelOf = (p: Preset) => mods.find((m) => m.id === p.model_id);

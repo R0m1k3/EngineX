@@ -757,6 +757,13 @@ pub async fn delete_model(State(state): State<AppState>, UrlPath(id): UrlPath<i6
             return Err(ApiError::ModelInUse);
         }
     }
+    remove_model(&state, &m).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Supprime les fichiers d'un modèle et sa ligne (ses presets partent avec,
+/// `ON DELETE CASCADE`).
+pub async fn remove_model(state: &AppState, m: &ModelRow) -> Result<(), ApiError> {
     let dir = &state.config().models_dir;
     let mut names: Vec<String> = serde_json::from_str(&m.shards)?;
     names.extend(m.mmproj.clone());
@@ -773,10 +780,10 @@ pub async fn delete_model(State(state): State<AppState>, UrlPath(id): UrlPath<i6
         }
     }
     sqlx::query("DELETE FROM models WHERE id = ?")
-        .bind(id)
+        .bind(m.id)
         .execute(&state.0.db)
         .await?;
-    Ok(Json(json!({ "ok": true })))
+    Ok(())
 }
 
 /// Verdict de place d'un modèle local avec les réglages d'un preset.

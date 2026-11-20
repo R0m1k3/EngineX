@@ -308,7 +308,8 @@ export const presets = () => request<Preset[]>('GET', '/api/presets');
 export const copyPreset = (from: number, name: string) => request<{ id: number }>('POST', '/api/presets', { from, name });
 export const savePreset = (id: number, name: string, settings: PresetSettings) =>
   request<{ reload_needed: boolean }>('PUT', `/api/presets/${id}`, { name, settings });
-export const deletePreset = (id: number) => request('DELETE', `/api/presets/${id}`);
+export const deletePreset = (id: number, withModel = false) =>
+  request<{ ok?: boolean; started?: boolean; model_kept?: boolean }>('DELETE', `/api/presets/${id}${withModel ? '?model=true' : ''}`);
 export const presetFit = (id: number, settings: PresetSettings) =>
   request<FitReport>('POST', `/api/presets/${id}/fit`, { settings });
 export const activatePreset = (id: number, confirm_nofit = false) =>
