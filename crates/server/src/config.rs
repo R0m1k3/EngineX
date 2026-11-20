@@ -141,6 +141,9 @@ pub struct Config {
     pub llama_bin: Option<PathBuf>,
     /// Binaire llama-server de l'image.
     pub image_bin: PathBuf,
+    /// llama-server patché pour l'architecture `maxwell-moe` (Maxwell-V1-Flash),
+    /// que llama.cpp officiel ne charge pas : pris d'office pour ces modèles.
+    pub maxwell_bin: PathBuf,
     pub nvidia_smi: PathBuf,
     pub trust_proxy: bool,
     pub models_dir: PathBuf,
@@ -202,6 +205,7 @@ impl Config {
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
             image_bin: var("ENGINEX_IMAGE_LLAMA_BIN", "/app/llama-server").into(),
+            maxwell_bin: var("ENGINEX_MAXWELL_LLAMA_BIN", "/opt/llama-maxwell/llama-server").into(),
             nvidia_smi: var("ENGINEX_NVIDIA_SMI", "nvidia-smi").into(),
             trust_proxy: trust == "1" || trust == "true",
             models_dir: var("ENGINEX_MODELS", "/models").into(),

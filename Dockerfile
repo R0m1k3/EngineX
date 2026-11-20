@@ -47,6 +47,9 @@ LABEL org.opencontainers.image.source="https://github.com/R0m1k3/EngineX" \
       org.opencontainers.image.revision="${ENGINEX_REVISION}" \
       org.opencontainers.image.description="EngineX - application locale qui pilote un agent de code (llama.cpp + Codex)"
 COPY --from=build /src/target/release/enginex /usr/local/bin/enginex
+# llama-server patché pour Maxwell-V1-Flash (architecture `maxwell-moe`), image
+# construite à part par .github/workflows/llama-maxwell.yml.
+COPY --from=ghcr.io/r0m1k3/llama-maxwell:b12464 /opt/llama-maxwell /opt/llama-maxwell
 # Pas d'utilisateur créé : un uid n'a pas besoin d'entrée dans /etc/passwd,
 # et l'image amont peut déjà avoir un uid/gid 1000.
 RUN mkdir -p /data /models && chown 1000:1000 /data /models

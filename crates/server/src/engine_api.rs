@@ -161,7 +161,19 @@ pub async fn launch(state: &AppState, id: i64) -> Result<(), ApiError> {
         },
         _ => (None, 0),
     };
-    let (bin, _) = current_bin(state).await?;
+    let bin = match engine_for_arch(state, &meta.arch) {
+        Some(b) => {
+            if !b.exists() {
+                tracing::error!(
+                    "preset {id} : architecture {} : moteur {} absent",
+                    meta.arch,
+                    b.display()
+                );
+            }
+            b
+        }
+        None => current_bin(state).await?.0,
+    };
     let caps = probe::help(&bin).await.map(|h| probe::caps(&h)).unwrap_or(Caps::NONE);
     let gpus = probe::read_gpus(&state.config().nvidia_smi)
         .await
@@ -439,6 +451,14 @@ pub(crate) async fn active_tag(state: &AppState) -> Result<String, ApiError> {
         .await?
         .unwrap_or_else(|| IMAGE_TAG.to_string()))
 }
+
+/// Moteur dédié à une architecture que llama.cpp officiel ne charge pas.
+pub(crate) fn engine_for_arch(state: &AppState, arch: &str) -> Option<PathBuf> {
+    (arch == MAXWELL_ARCH).then(|| state.config().maxwell_bin.clone())
+}
+
+/// Architecture de Maxwell-V1-Flash (port AtomicChat, hors llama.cpp officiel).
+pub const MAXWELL_ARCH: &str = "maxwell-moe";
 
 pub(crate) fn bin_of(state: &AppState, tag: &str) -> PathBuf {
     if tag == IMAGE_TAG {

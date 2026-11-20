@@ -27,6 +27,7 @@ async fn env() -> Env {
         bind: "127.0.0.1:0".parse().unwrap(),
         data_dir: dir.path().to_path_buf(),
         llama_bin: Some(fixture.clone()),
+        maxwell_bin: "/nonexistent/llama-server-maxwell".into(),
         image_bin: fixture,
         nvidia_smi: "/nonexistent/nvidia-smi".into(),
         trust_proxy: false,

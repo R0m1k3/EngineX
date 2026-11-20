@@ -451,6 +451,7 @@ pub async fn env_cfg(fake_env: &str, tweak: impl FnOnce(&mut Config)) -> Env {
         bind: "127.0.0.1:0".parse().unwrap(),
         data_dir: dir.path().join("data"),
         llama_bin: None,
+        maxwell_bin: dir.path().join("llama-server-maxwell"),
         image_bin,
         nvidia_smi: "/nonexistent/nvidia-smi".into(),
         trust_proxy: false,
