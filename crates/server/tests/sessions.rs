@@ -287,6 +287,10 @@ async fn engine_not_ready_is_refused() {
     // L'activation tourne en tâche de fond : attendre que le preset soit
     // marqué actif (le chargement, lui, dure FAKE_LOAD_MS).
     e.until("/api/presets", |v| v[0]["active"] == true).await;
+    e.until("/api/engine", |v| {
+        v["state"]["state"] == "starting" && v["state"]["preset_id"] == id
+    })
+    .await;
     let sid = new_session(&e, "auto").await;
     let r = turn(&e, &sid, "x").await;
     assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{}", r.text);
