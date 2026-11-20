@@ -141,6 +141,10 @@ async fn mtp_moe_and_speed() {
     let g = &eng["last_gen"];
     assert_eq!(g["tokens_per_s"], 50.0);
     assert_eq!(
+        (g["cache_n"].clone(), g["prompt_n"].clone()),
+        (json!(940.0), json!(60.0))
+    );
+    assert_eq!(
         (g["draft_n"].as_f64(), g["draft_accepted"].as_f64()),
         (Some(16.0), Some(12.0))
     );

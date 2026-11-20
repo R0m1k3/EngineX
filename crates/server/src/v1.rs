@@ -437,6 +437,9 @@ fn speed_of(t: Option<&Value>) -> (String, Option<Value>) {
             "predicted_ms": f("predicted_ms"),
             "draft_n": draft,
             "draft_accepted": draft.and(accepted),
+            "prompt_n": f("prompt_n"),
+            "prompt_ms": f("prompt_ms"),
+            "cache_n": f("cache_n"),
         })
     });
     (s, stats)

@@ -346,7 +346,22 @@
   };
   const fmtMs = (ms: number) =>
     ms < 1000 ? `${Math.round(ms)} ms` : ms < 60000 ? `${(ms / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} s` : fmtDur(ms / 1000);
-  const callInfo = (g: { tps: number; ms?: number | null }) => fmtTps(g.tps) + (g.ms ? ` · ${fmtMs(g.ms)}` : '');
+  const fmtTok = (n: number) =>
+    n < 1000 ? `${Math.round(n)}` : n < 1e6 ? `${(n / 1000).toLocaleString('fr-FR', { maximumFractionDigits: n < 1e4 ? 1 : 0 })}k` : `${(n / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: 1 })}M`;
+  type Gen = { tps: number; n?: number | null; ms?: number | null; model?: string | null; prompt_n?: number | null; prompt_ms?: number | null; cache_n?: number | null };
+  /** Ligne sous un appel au modèle : modèle · durée · entrée → sortie · cache · débit. */
+  function callInfo(g: Gen): string {
+    const parts: string[] = [];
+    if (g.model) parts.push(g.model);
+    const ms = (g.ms ?? 0) + (g.prompt_ms ?? 0);
+    if (ms) parts.push(fmtMs(ms));
+    const input = (g.prompt_n ?? 0) + (g.cache_n ?? 0);
+    if (input && g.n) parts.push(`${fmtTok(input)} → ${fmtTok(g.n)}`);
+    if (input && g.cache_n != null)
+      parts.push(`Cache ${((g.cache_n * 100) / input).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %`);
+    parts.push(fmtTps(g.tps));
+    return '✓ ' + parts.join(' · ');
+  }
   // Temps de travail : tours finis + tour en cours (horloge locale, relevée chaque seconde).
   let clock = $state(Date.now());
   let liveSince = $state(0);
@@ -842,7 +857,7 @@
   .failed p { margin: 0; }
   .fh { display: flex; align-items: center; gap: var(--s2); font-weight: 600; font-size: var(--fs-md); }
   .fh :global(.ui-icon) { color: var(--danger); }
-  .tps { margin: calc(-1 * var(--s2)) 0 0; font-size: var(--fs-xs); color: var(--faint); text-align: right; }
+  .tps { margin: calc(-1 * var(--s2)) 0 0; font-size: var(--fs-xs); color: var(--faint); }
   .stats { display: flex; gap: var(--s4); justify-content: flex-end; flex-wrap: wrap; max-width: 760px; width: calc(100% - 2 * var(--s6)); margin: 0 auto; padding-top: var(--s1); font-size: var(--fs-xs); color: var(--faint); }
   .foot { display: flex; gap: var(--s3); flex-wrap: wrap; margin: calc(-1 * var(--s2)) 0 0; font-size: var(--fs-xs); color: var(--faint); }
   .working { display: flex; align-items: center; gap: var(--s2); margin: 0; font-size: var(--fs-sm); color: var(--muted); }

@@ -340,7 +340,7 @@ static SPEC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// `timings` de llama-server (dernier morceau du flux).
 fn timings_json() -> Value {
-    let mut t = json!({"prompt_n": 60, "prompt_ms": 120.0, "prompt_per_second": 500.0,
+    let mut t = json!({"cache_n": 940, "prompt_n": 60, "prompt_ms": 120.0, "prompt_per_second": 500.0,
         "predicted_n": 20, "predicted_ms": 400.0, "predicted_per_second": 50.0});
     if SPEC.get().copied().unwrap_or(false) {
         t["draft_n"] = json!(16);
