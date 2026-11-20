@@ -37,7 +37,10 @@ pub struct SupervisorConfig {
     pub port: u16,
     pub log_path: PathBuf,
     pub nvidia_smi: PathBuf,
+    /// Chargement arrêté après ce délai sans progrès (octets lus, mémoire, log).
     pub ready_timeout: Duration,
+    /// Durée maximale d'un chargement, même s'il progresse.
+    pub load_limit: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -127,6 +130,8 @@ struct Inner {
     state: watch::Sender<EngineState>,
     running: tokio::sync::Mutex<Option<Running>>,
     logs: Mutex<VecDeque<String>>,
+    /// Lignes de log reçues depuis le démarrage (signe de progrès).
+    lines: AtomicU64,
     /// Numéro du lancement en cours : les tâches d'un ancien lancement s'arrêtent.
     generation: AtomicU64,
     http: reqwest::Client,
@@ -147,6 +152,7 @@ impl Supervisor {
             state: watch::channel(EngineState::Stopped).0,
             running: tokio::sync::Mutex::new(None),
             logs: Mutex::new(VecDeque::with_capacity(LOG_LINES)),
+            lines: AtomicU64::new(0),
             generation: AtomicU64::new(0),
             no_spec: Mutex::new(HashMap::new()),
             fell_back: Mutex::new(None),
@@ -296,6 +302,9 @@ impl Supervisor {
         let mut retried: Option<(Vec<String>, String)> = None;
         let health = format!("http://127.0.0.1:{}/health", self.0.cfg.port);
         let mut ready = false;
+        // Dernier progrès vu : octets chargés, lignes de log, et quand.
+        let mut mark = (0u64, 0u64);
+        let mut moved = Instant::now();
         loop {
             tokio::time::sleep(if ready { POLL } else { LOAD_POLL }).await;
             if !self.current(generation) {
@@ -329,6 +338,8 @@ impl Supervisor {
                             pid = r.pid;
                             *self.0.running.lock().await = Some(r);
                             started = Instant::now();
+                            moved = started;
+                            mark = (0, 0);
                             continue;
                         }
                         Err(e) => self.log_line(format!("[enginex] {e}")),
@@ -368,16 +379,36 @@ impl Supervisor {
                     preset_id: spec.preset_id,
                     pid,
                 });
-            } else if started.elapsed() > self.0.cfg.ready_timeout {
-                self.stop(false).await;
-                self.0.state.send_replace(EngineState::Failed {
-                    preset_id: spec.preset_id,
-                    cause: "délai de chargement dépassé".into(),
-                    last_lines: self.logs(20),
-                });
-                return;
             } else {
-                let p = load_progress(pid, spec.model_bytes);
+                let bytes = load_bytes(pid);
+                let now = (bytes, self.0.lines.load(Ordering::Relaxed));
+                if now.0 > mark.0 || now.1 != mark.1 {
+                    mark = (now.0.max(mark.0), now.1);
+                    moved = Instant::now();
+                }
+                let stalled = moved.elapsed() > self.0.cfg.ready_timeout;
+                if stalled || started.elapsed() > self.0.cfg.load_limit {
+                    let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
+                    self.log_line(format!(
+                        "[enginex] délai de chargement dépassé après {} s ({}) : {:.1} Gio chargés sur {:.1}",
+                        started.elapsed().as_secs(),
+                        if stalled {
+                            format!("rien de neuf depuis {} s", moved.elapsed().as_secs())
+                        } else {
+                            "durée maximale".to_string()
+                        },
+                        gib(mark.0),
+                        gib(spec.model_bytes),
+                    ));
+                    self.stop(false).await;
+                    self.0.state.send_replace(EngineState::Failed {
+                        preset_id: spec.preset_id,
+                        cause: "délai de chargement dépassé".into(),
+                        last_lines: self.logs(20),
+                    });
+                    return;
+                }
+                let p = percent(mark.0, spec.model_bytes);
                 self.0.state.send_if_modified(|s| match s {
                     EngineState::Starting { progress, .. } if *progress != p => {
                         *progress = p;
@@ -395,6 +426,7 @@ impl Supervisor {
             l.pop_front();
         }
         l.push_back(line);
+        self.0.lines.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Lit une sortie ligne à ligne vers la mémoire et le fichier de log.
@@ -438,10 +470,8 @@ fn signal_group(pid: u32, sig: libc::c_int) {
 }
 
 /// max(octets lus, mémoire résidente) / taille du modèle, plafonné à 99 %.
-fn load_progress(pid: u32, model_bytes: u64) -> u8 {
-    if model_bytes == 0 {
-        return 0;
-    }
+/// Octets du modèle déjà chargés : lus sur disque ou résidents (cache de pages).
+fn load_bytes(pid: u32) -> u64 {
     let read = std::fs::read_to_string(format!("/proc/{pid}/io"))
         .ok()
         .and_then(|s| {
@@ -458,7 +488,14 @@ fn load_progress(pid: u32, model_bytes: u64) -> u8 {
                 .and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
         })
         .map_or(0, |kb| kb * 1024);
-    (read.max(rss) * 100 / model_bytes).min(99) as u8
+    read.max(rss)
+}
+
+fn percent(bytes: u64, model_bytes: u64) -> u8 {
+    if model_bytes == 0 {
+        return 0;
+    }
+    (bytes * 100 / model_bytes).min(99) as u8
 }
 
 #[cfg(test)]

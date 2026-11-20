@@ -8,6 +8,7 @@
 //!   `soft` : le signale et continue sans (brouillon refusé) ;
 //! - `FAKE_FIT_CTX=N` : avec `--fit on`, contexte ramené à N (VRAM courte) ;
 //! - `FAKE_LOAD_MS` (défaut 300) : `/health` répond 503 pendant ce temps ;
+//! - `FAKE_LOAD_TICK_MS` : écrit une ligne de chargement à ce rythme ;
 //! - `FAKE_CRASH_MS` : sort avec le code 1 après ce délai ;
 //! - `FAKE_OOM=1` : écrit une erreur cudaMalloc et sort ;
 //! - `FAKE_NO_TOOLS=1` : `/apply-template` rend un texte sans les outils
@@ -151,6 +152,14 @@ async fn main() {
     }
     let started = Instant::now();
     let load = Duration::from_millis(env_u64("FAKE_LOAD_MS", 300));
+    if let Ok(ms) = std::env::var("FAKE_LOAD_TICK_MS").map(|v| v.parse::<u64>().unwrap_or(100)) {
+        tokio::spawn(async move {
+            while started.elapsed() < load {
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                eprintln!("load_tensors: loading ...");
+            }
+        });
+    }
     let no_tools = std::env::var("FAKE_NO_TOOLS").as_deref() == Ok("1");
     let chat = Arc::new(Chat::from_env());
     let app = Router::new()

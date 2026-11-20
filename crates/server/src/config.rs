@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use crate::state::READY_TIMEOUT;
+use crate::state::LOAD_LIMIT;
 
 /// Délais de l'API `/v1` et de la mise à jour automatique (les tests les
 /// raccourcissent ; pas de variable d'environnement).
@@ -117,7 +117,7 @@ impl Default for Timings {
     fn default() -> Self {
         Self {
             keepalive: Duration::from_secs(15),
-            wait_limit: READY_TIMEOUT * 2 + Duration::from_secs(60),
+            wait_limit: LOAD_LIMIT + Duration::from_secs(60),
             probe_wait: Duration::from_secs(30),
             auto_loop: true,
             auto: AutoUpdateTimings {

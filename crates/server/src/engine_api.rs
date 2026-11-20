@@ -28,7 +28,7 @@ use crate::{
     error::{ApiError, ApiJson},
     models::{self, model_path},
     presets,
-    state::{AppState, EngineProbe, READY_TIMEOUT, now},
+    state::{AppState, EngineProbe, LOAD_LIMIT, now},
     system::{current_bin, reset_cache, set_setting, setting},
 };
 
@@ -208,7 +208,7 @@ pub async fn launch(state: &AppState, id: i64) -> Result<(), ApiError> {
 pub(crate) async fn wait_loaded(state: &AppState) -> bool {
     let mut rx = state.supervisor().subscribe();
     let r = tokio::time::timeout(
-        READY_TIMEOUT + Duration::from_secs(30),
+        LOAD_LIMIT + Duration::from_secs(30),
         rx.wait_for(|s| {
             matches!(
                 s,

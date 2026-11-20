@@ -12,6 +12,7 @@ fn sup(dir: &std::path::Path, port: u16, timeout: Duration) -> Supervisor {
         log_path: dir.join("logs/llama-server.log"),
         nvidia_smi: "/nonexistent".into(),
         ready_timeout: timeout,
+        load_limit: timeout * 20,
     })
 }
 
@@ -128,6 +129,22 @@ async fn load_timeout() {
         unreachable!()
     };
     assert_eq!(cause, "délai de chargement dépassé");
+}
+
+#[tokio::test]
+async fn load_that_progresses_outlives_the_stall_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = common::free_port();
+    // Silence toléré 800 ms ; chargement de 2,5 s qui écrit toutes les 200 ms.
+    let s = sup(dir.path(), port, Duration::from_millis(800));
+    let bin = common::wrapper(&dir.path().join("ticking"), "FAKE_LOAD_MS=2500 FAKE_LOAD_TICK_MS=200");
+    s.start(spec(bin, port)).await.unwrap();
+    let st = until(&s, |st| {
+        matches!(st, EngineState::Ready { .. } | EngineState::Failed { .. })
+    })
+    .await;
+    assert!(matches!(st, EngineState::Ready { .. }), "{st:?}");
+    s.stop(false).await;
 }
 
 #[tokio::test]

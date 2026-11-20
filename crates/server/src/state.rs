@@ -23,8 +23,10 @@ use crate::{config::Config, engine_api::JobState, limiter::Limiter, models::Down
 pub const HASH_PERMITS: usize = 2;
 /// Échecs de clé d'API permis par IP en 15 min sur `/v1`.
 pub const V1_MAX_FAILURES: u32 = 20;
-/// Délai de chargement d'un modèle (un 27B sur disque lent).
+/// Chargement d'un modèle abandonné après ce délai sans progrès.
 pub const READY_TIMEOUT: Duration = Duration::from_secs(600);
+/// Durée maximale d'un chargement qui progresse (un 27B sur disque lent).
+pub const LOAD_LIMIT: Duration = Duration::from_secs(40 * 60);
 
 /// Résultat des sondes faites quand le moteur devient prêt.
 #[derive(Clone, Debug, Default, serde::Serialize)]
@@ -111,6 +113,7 @@ impl AppState {
             log_path: config.data_dir.join("logs/llama-server.log"),
             nvidia_smi: config.nvidia_smi.clone(),
             ready_timeout: READY_TIMEOUT,
+            load_limit: LOAD_LIMIT,
         });
         let browser = enginex_browser::Browser::new(config.web.browser_url.clone());
         Self(Arc::new(Inner {
