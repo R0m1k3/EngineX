@@ -636,21 +636,19 @@ pub(crate) async fn delete_beneath(dir: std::path::PathBuf, paths: Vec<String>) 
     .await
 }
 
-#[derive(Deserialize)]
-pub struct ZipQuery {
-    /// Chemins séparés par des retours à la ligne.
-    paths: String,
-}
-
 /// Ajoute `name` (sous `dirfd`) à l'archive sous le nom `arc`, sans suivre
-/// de lien (les liens sont ignorés).
+/// de lien (les liens sont ignorés) ; `.git` sauté si `skip_git`.
 fn zip_add(
     z: &mut zip::ZipWriter<File>,
     dirfd: &OwnedFd,
     name: &CString,
     arc: &str,
     opts: zip::write::SimpleFileOptions,
+    skip_git: bool,
 ) -> std::io::Result<()> {
+    if skip_git && name.as_bytes() == b".git" {
+        return Ok(());
+    }
     // SAFETY: descripteur valide, nom C valide.
     let fd = unsafe {
         libc::openat(
@@ -677,7 +675,7 @@ fn zip_add(
             .map_err(std::io::Error::other)?;
         for child in names_in(&owned)? {
             let cn = child.to_string_lossy().into_owned();
-            zip_add(z, &owned, &child, &format!("{arc}/{cn}"), opts)?;
+            zip_add(z, &owned, &child, &format!("{arc}/{cn}"), opts, skip_git)?;
         }
     } else if m.is_file() {
         z.start_file(arc, opts).map_err(std::io::Error::other)?;
@@ -686,10 +684,16 @@ fn zip_add(
     Ok(())
 }
 
-pub async fn zip(State(state): State<AppState>, Query(q): Query<ZipQuery>) -> Result<Response, ApiError> {
-    let raw: Vec<String> = q.paths.lines().map(str::to_string).filter(|s| !s.is_empty()).collect();
-    let paths = clean_paths(&raw)?;
-    let dir = root(&state);
+/// Archive zip de `paths` (déjà nettoyés) sous `dir`, ou de tout `dir` si
+/// `paths` est vide (entrées à la racine de l'archive), envoyée en flux sous
+/// le nom `name`.zip. Construite dans un fichier temporaire de `<data>/tmp`.
+pub(crate) async fn zip_beneath(
+    state: &AppState,
+    dir: std::path::PathBuf,
+    paths: Vec<String>,
+    name: &str,
+    skip_git: bool,
+) -> Result<Response, ApiError> {
     let tmp_dir = state.config().data_dir.join("tmp");
     let f = blocking(move || {
         std::fs::create_dir_all(&tmp_dir)?;
@@ -699,10 +703,18 @@ pub async fn zip(State(state): State<AppState>, Query(q): Query<ZipQuery>) -> Re
         let opts = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .large_file(true);
+        if paths.is_empty() {
+            // La racine est ouverte en O_PATH : la relire pour lister.
+            let top = open_beneath(&root, "", libc::O_RDONLY | libc::O_DIRECTORY).map_err(io_err)?;
+            for child in names_in(&top).map_err(io_err)? {
+                let arc = child.to_string_lossy().into_owned();
+                zip_add(&mut z, &top, &child, &arc, opts, skip_git).map_err(io_err)?;
+            }
+        }
         for p in &paths {
             let (pfd, name) = parent_fd(&root, p).map_err(io_err)?;
             let arc = split(p).1.to_string();
-            zip_add(&mut z, &pfd, &name, &arc, opts).map_err(io_err)?;
+            zip_add(&mut z, &pfd, &name, &arc, opts, skip_git).map_err(io_err)?;
         }
         z.finish().map_err(|e| ApiError::Internal(e.into()))?;
         Ok(tmp)
@@ -717,11 +729,52 @@ pub async fn zip(State(state): State<AppState>, Query(q): Query<ZipQuery>) -> Re
     let h = res.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
     h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
-    h.insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_static("attachment; filename=\"fichiers.zip\""),
-    );
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let safe = if safe.trim_matches(['_', '.']).is_empty() {
+        "fichiers".into()
+    } else {
+        safe
+    };
+    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{safe}.zip\"")) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
     Ok(res)
+}
+
+#[derive(Deserialize)]
+pub struct ZipQuery {
+    /// Chemins séparés par des retours à la ligne.
+    #[serde(default)]
+    pub(crate) paths: String,
+}
+
+impl ZipQuery {
+    pub(crate) fn list(&self) -> Vec<String> {
+        self.paths
+            .lines()
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+}
+
+/// Zip de la page Fichiers : nom de l'archive = la seule entrée, sinon « fichiers ».
+pub async fn zip(State(state): State<AppState>, Query(q): Query<ZipQuery>) -> Result<Response, ApiError> {
+    let paths = clean_paths(&q.list())?;
+    let name = match paths.as_slice() {
+        [one] => split(one).1.to_string(),
+        _ => "fichiers".into(),
+    };
+    zip_beneath(&state, root(&state), paths, &name, false).await
 }
 
 // ---------------------------------------------------------------- disque

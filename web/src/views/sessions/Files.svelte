@@ -1,6 +1,6 @@
 <script lang="ts">
   import { octets } from '../../lib/ui/format';
-  import { tree, fileText, fileUrl, downloadUrl, deleteFiles, message, type TreeEntry } from '../../lib/api';
+  import { tree, fileText, fileUrl, downloadUrl, sessionZipUrl, deleteFiles, message, type TreeEntry } from '../../lib/api';
   import { confirmDialog } from '../../lib/ui/dialog.svelte';
   import { toast } from '../../lib/ui/toast.svelte';
   import Trash2 from '@lucide/svelte/icons/trash-2';
@@ -11,6 +11,7 @@
   import Link2 from '@lucide/svelte/icons/link-2';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Download from '@lucide/svelte/icons/download';
+  import FileArchive from '@lucide/svelte/icons/file-archive';
   import FileText from '@lucide/svelte/icons/file-text';
   import Icon from '../../lib/ui/Icon.svelte';
   import IconButton from '../../lib/ui/IconButton.svelte';
@@ -104,7 +105,10 @@
         <button class="entry" style:padding-left="{depth * 16 + 8}px" aria-expanded={!!opened[p]} onclick={() => toggle(p)}>
           <Icon icon={ChevronRight} size={14} class="chev" /><Icon icon={FolderIcon} size={16} class="fi" /><span class="ell">{e.name}</span>
         </button>
-        <span class="del"><IconButton icon={Trash2} label="Supprimer le dossier" size="sm" onclick={() => remove(p, true)} /></span>
+        <span class="del">
+          <IconButton icon={FileArchive} label="Télécharger le dossier en zip" size="sm" href={sessionZipUrl(sessionId, [p])} />
+          <IconButton icon={Trash2} label="Supprimer le dossier" size="sm" onclick={() => remove(p, true)} />
+        </span>
       </div>
       {#if opened[p]}{@render level(p, depth + 1)}{/if}
     {:else}
@@ -124,6 +128,7 @@
   <div class="list">
     <div class="tb">
       <span class="grow">Dossier de travail</span>
+      <IconButton icon={FileArchive} label="Tout télécharger en zip" size="sm" href={sessionZipUrl(sessionId)} />
       <IconButton icon={RefreshCw} label="Actualiser" size="sm" onclick={refresh} />
     </div>
     <div class="entries">
@@ -190,7 +195,7 @@
   }
   .row { position: relative; display: flex; align-items: center; }
   .row:hover, .row:focus-within { background: var(--raised); }
-  .del { position: absolute; right: var(--s1); opacity: 0; }
+  .del { position: absolute; right: var(--s1); opacity: 0; display: flex; gap: 2px; }
   .row:hover .del, .row:focus-within .del { opacity: 1; }
   .entry:hover:not(:disabled) { background: var(--raised); }
   .entry:disabled { color: var(--muted); opacity: 1; cursor: default; }

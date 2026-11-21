@@ -559,6 +559,34 @@ async fn files_panel_deletes_files_and_folders_of_the_session_only() {
 }
 
 #[tokio::test]
+async fn files_panel_zips_a_folder_or_the_whole_session_folder() {
+    let (e, _fake) = env_sessions(&text_script()).await;
+    let sid = new_session(&e, "auto").await;
+    let w = work_dir(&e, &sid).await;
+    std::fs::create_dir_all(w.join("app/src")).unwrap();
+    std::fs::create_dir_all(w.join(".git")).unwrap();
+    std::fs::write(w.join("app/src/main.py"), "print(1)").unwrap();
+    std::fs::write(w.join("notes.md"), "x").unwrap();
+    std::fs::write(w.join(".git/config"), "x").unwrap();
+    let url = format!("/api/sessions/{sid}/files/zip");
+    let z = e.get(&format!("{url}?paths=app")).await;
+    assert_eq!(z.status, StatusCode::OK);
+    assert_eq!(&z.text.as_bytes()[..2], b"PK");
+    assert!(z.text.contains("app/src/main.py"));
+    assert!(!z.text.contains("notes.md"));
+    let cd = z.headers["content-disposition"].to_str().unwrap();
+    assert!(cd.contains("app.zip"), "{cd}");
+    let z = e.get(&url).await;
+    assert_eq!(z.status, StatusCode::OK);
+    assert!(z.text.contains("app/src/main.py") && z.text.contains("notes.md"));
+    assert!(!z.text.contains(".git/config"));
+    for bad in [".git", "../../../../etc"] {
+        let r = e.get(&format!("{url}?paths={bad}")).await;
+        assert!(r.status.is_client_error(), "{bad} : {}", r.status);
+    }
+}
+
+#[tokio::test]
 async fn file_route_refuses_escapes_symlinks_and_svg() {
     let (e, _fake) = env_sessions(&text_script()).await;
     let sid = new_session(&e, "auto").await;

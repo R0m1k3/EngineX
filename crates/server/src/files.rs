@@ -326,6 +326,34 @@ pub async fn delete(
     Ok(Json(json!({ "deleted": n })))
 }
 
+/// Zip de dossiers ou fichiers du dossier de travail de la session (panneau
+/// Fichiers), ou du dossier entier si `paths` est vide ; `.git` exclu.
+pub async fn zip(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Query(q): Query<crate::wsfiles::ZipQuery>,
+) -> Result<Response, ApiError> {
+    let work = work_of(&state, &id).await?;
+    let raw = q.list();
+    let paths = if raw.is_empty() {
+        Vec::new()
+    } else {
+        crate::wsfiles::clean_paths(&raw)?
+    };
+    if paths.iter().any(|p| p == ".git" || p.starts_with(".git/")) {
+        return Err(ApiError::BadRequest);
+    }
+    let name = match paths.as_slice() {
+        [one] => one.rsplit('/').next().unwrap_or(one).to_string(),
+        [] => work
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        _ => "fichiers".into(),
+    };
+    crate::wsfiles::zip_beneath(&state, work, paths, &name, true).await
+}
+
 /// Fichier brut, envoyé en flux depuis le descripteur ouvert.
 pub async fn file(
     State(state): State<AppState>,

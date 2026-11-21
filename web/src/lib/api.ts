@@ -796,6 +796,9 @@ export const fileText = (id: string, path: string) =>
 export const deleteFiles = (id: string, paths: string[]) =>
   request<{ deleted: number }>('POST', `${S(id)}/files/delete`, { paths });
 export const downloadUrl = (id: string, path: string) => `${fileUrl(id, path)}&download=1`;
+/** Zip de dossiers ou fichiers de la session ; sans chemin, tout le dossier de travail. */
+export const sessionZipUrl = (id: string, paths: string[] = []) =>
+  `${S(id)}/files/zip?paths=${q(paths.join('\n'))}`;
 export const bringBack = (id: string) =>
   request<{ result: 'merged' | 'branch_only'; reason?: 'topic_dirty' | 'conflict'; branch: string }>('POST', `${S(id)}/bring-back`);
 
