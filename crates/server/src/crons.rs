@@ -421,7 +421,7 @@ async fn run_taken(state: AppState, c: CronRow, trigger: &'static str) {
             let (st, out) = if c.kind == "shell" {
                 run_shell(&state, &sid, &c.body, timeout).await
             } else {
-                run_prompt(&state, &sid, &c.body, timeout).await
+                run_prompt(&state, &sid, &c.body, timeout, "cron").await
             };
             (st, out, Some(sid))
         }
@@ -510,9 +510,15 @@ pub(crate) fn reason(e: &ApiError) -> String {
     }
 }
 
-async fn run_prompt(state: &AppState, sid: &str, text: &str, timeout: Duration) -> (&'static str, String) {
+pub(crate) async fn run_prompt(
+    state: &AppState,
+    sid: &str,
+    text: &str,
+    timeout: Duration,
+    origin: &'static str,
+) -> (&'static str, String) {
     let started = now();
-    if let Err(e) = sessions::start_turn(state, sid, text, Vec::new(), "cron").await {
+    if let Err(e) = sessions::start_turn(state, sid, text, Vec::new(), origin).await {
         return ("failed", reason(&e));
     }
     let hub = bridge::hub(state, sid);

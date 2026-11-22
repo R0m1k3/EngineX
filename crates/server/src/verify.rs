@@ -215,7 +215,7 @@ pub async fn after_turn(
     changes: Option<&Value>,
 ) {
     // Pas de vérification après la mise à jour de la mémoire.
-    if origin == "memory" {
+    if matches!(origin, "memory" | "bench") {
         return;
     }
     if status != "completed" {

@@ -6,6 +6,7 @@ pub mod appgate;
 pub mod attachments;
 pub mod auth;
 pub mod autoupdate;
+pub mod bench;
 pub mod board;
 pub mod bridge;
 pub mod browser;
@@ -142,6 +143,12 @@ pub fn app(state: AppState) -> Router {
         .route("/api/agents/{id}/run", post(agents::run_now))
         .route("/api/agents/{id}/stop", post(agents::stop))
         .route("/api/agents/{id}/runs", get(agents::runs))
+        .route("/api/bench/cases", get(bench::list_cases))
+        .route("/api/bench/runs", get(bench::list_runs).post(bench::start))
+        .route("/api/bench/runs/{id}", get(bench::get_run).delete(bench::delete_run))
+        .route("/api/bench/runs/{id}/stop", post(bench::stop))
+        .route("/api/bench/runs/{id}/cases/{cid}/rate", post(bench::rate))
+        .route("/api/bench/compare", get(bench::compare))
         .route("/api/skills", get(skills::list))
         .route("/api/skills/{name}", get(skills::get).put(skills::put))
         .route("/api/skills/{name}/enabled", put(skills::put_enabled))

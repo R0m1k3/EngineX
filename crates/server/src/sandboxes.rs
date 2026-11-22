@@ -288,7 +288,12 @@ pub(crate) async fn start(
     }
     // 5. environnement, puis conteneur.
     // Ordre : identité git, secrets (un secret GIT_* l'emporte), variables d'EngineX.
-    let secrets = vault::env_for(state, topic.project_id).await?;
+    // Les sessions de la page Tester n'ont aucun secret du coffre.
+    let secrets = if crate::bench::is_bench_session(state, session_id).await {
+        Vec::new()
+    } else {
+        vault::env_for(state, topic.project_id).await?
+    };
     let injected: Vec<String> = secrets.iter().map(|(_, v)| v.clone()).collect();
     let mut env = git_env(state).await;
     env.extend(secrets);

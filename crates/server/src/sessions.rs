@@ -309,19 +309,32 @@ fn valid_approval(a: &str) -> bool {
 pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CreateBody>) -> Result<Json<Value>, ApiError> {
     let topic = workspace::topic(&state, b.topic_id).await?;
     let approval = b.approval.unwrap_or_else(|| "auto".into());
-    if !valid_approval(&approval) {
+    let (id, branch, work_dir) = create_session(&state, &topic, b.preset_id, &approval, b.copy).await?;
+    Ok(Json(json!({ "id": id, "copy_branch": branch, "work_dir": work_dir })))
+}
+
+/// Crée une session (validation, copie séparée éventuelle, dossier propre,
+/// ligne en base) : retourne (id, branche de la copie, nom du dossier propre).
+pub async fn create_session(
+    state: &AppState,
+    topic: &crate::workspace::TopicInfo,
+    preset_id: Option<i64>,
+    approval: &str,
+    copy: bool,
+) -> Result<(String, Option<String>, Option<String>), ApiError> {
+    if !valid_approval(approval) {
         return Err(ApiError::BadRequest);
     }
-    check_preset(&state, b.preset_id).await?;
+    check_preset(state, preset_id).await?;
     let id = uuid::Uuid::new_v4().to_string();
-    let branch = if b.copy {
-        Some(crate::copies::create(&state, &topic, &id).await?)
+    let branch = if copy {
+        Some(crate::copies::create(state, topic, &id).await?)
     } else {
         None
     };
     // Dossier propre, sauf copie séparée et topic dépôt git (la session y
     // travaille sur le dépôt lui-même).
-    let work_dir = if branch.is_none() && !crate::copies::is_git(&topic) {
+    let work_dir = if branch.is_none() && !crate::copies::is_git(topic) {
         let name = snapshots::session_dir_name(&id, chrono::Local::now().format("%Y-%m-%d").to_string());
         std::fs::create_dir_all(snapshots::own_dir(&topic.dir, &name)).map_err(anyhow::Error::from)?;
         Some(name)
@@ -334,17 +347,17 @@ pub async fn create(State(state): State<AppState>, ApiJson(b): ApiJson<CreateBod
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(b.topic_id)
+    .bind(topic.id)
     .bind(DEFAULT_TITLE)
-    .bind(&approval)
+    .bind(approval)
     .bind(t)
     .bind(t)
     .bind(&branch)
-    .bind(b.preset_id)
+    .bind(preset_id)
     .bind(&work_dir)
     .execute(state.db())
     .await?;
-    Ok(Json(json!({ "id": id, "copy_branch": branch, "work_dir": work_dir })))
+    Ok((id, branch, work_dir))
 }
 
 #[derive(Deserialize)]

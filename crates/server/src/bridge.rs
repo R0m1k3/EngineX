@@ -546,7 +546,7 @@ impl Hub {
         if st.turn.is_some() {
             return Err(ApiError::TurnInProgress);
         }
-        if matches!(origin, "user" | "cron" | "agent") {
+        if matches!(origin, "user" | "cron" | "agent" | "bench") {
             st.fixes_done = 0;
             st.app.checks = 0;
         }

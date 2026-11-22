@@ -10,6 +10,7 @@ import Box from '@lucide/svelte/icons/box';
 import Cpu from '@lucide/svelte/icons/cpu';
 import BookOpen from '@lucide/svelte/icons/book-open';
 import Settings from '@lucide/svelte/icons/settings';
+import FlaskConical from '@lucide/svelte/icons/flask-conical';
 import Bell from '@lucide/svelte/icons/bell';
 import type { IconType } from '../../lib/ui/types';
 
@@ -31,6 +32,7 @@ export const PAGES: PageDef[] = [
   { id: 'tasks', label: 'Tâches', icon: SquareCheck, group: 1 },
   { id: 'agents', label: 'Agents', icon: Bot, group: 1 },
   { id: 'crons', label: 'Crons', icon: Clock, group: 1 },
+  { id: 'bench', label: 'Tester', icon: FlaskConical, group: 1 },
   { id: 'files', label: 'Fichiers', icon: Folder, group: 2, fill: true },
   { id: 'git', label: 'Git', icon: GitBranch, group: 2, fill: true },
   { id: 'models', label: 'Modèles', icon: Box, group: 3 },

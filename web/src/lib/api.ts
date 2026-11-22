@@ -425,6 +425,8 @@ export function message(e: unknown): string {
       return 'Modèle utilisé par le preset actif : arrêtez-le ou activez-en un autre.';
     case 'engine_in_use':
       return 'Ce moteur est utilisé (actif ou moteur de l’image).';
+    case 'not_audited':
+      return 'Ce test n’est pas encore audité : la note se saisit après l’audit.';
     case 'job_running':
       return 'Une opération sur le moteur est déjà en cours.';
     case 'already_downloaded':
@@ -1235,3 +1237,90 @@ export const createWebhook = (b: { name: string; level: FeedLevel; push: boolean
 export const patchWebhook = (id: number, b: Partial<Pick<Webhook, 'name' | 'level' | 'push' | 'enabled' | 'agent_id'>>) =>
   request('PATCH', `/api/webhooks/${id}`, b);
 export const deleteWebhook = (id: number) => request('DELETE', `/api/webhooks/${id}`);
+
+// ---- Tester (page Tester) ----
+
+export interface BenchCaseDef {
+  key: string;
+  title: string;
+  prompt: string;
+  criteria_count: number;
+  timeout_s: number;
+}
+
+export interface BenchCriterion {
+  name: string;
+  ok: boolean;
+  proof: string;
+}
+
+export interface BenchAudit {
+  criteria: BenchCriterion[];
+  auto_count: number;
+  alerts: { kind: 'big_file' | 'repeated_command' | 'added_package'; text: string }[];
+  metrics: {
+    duration_s: number;
+    tokens: number;
+    commands: number;
+    file_changes: number;
+    tps: number | null;
+    turns: number;
+  };
+}
+
+export interface BenchManual {
+  fonctionne: number;
+  qualite: number;
+  rendu: number;
+  consigne: number;
+}
+
+export interface BenchCase {
+  id: number;
+  key: string;
+  title: string;
+  session_id: string | null;
+  status: 'pending' | 'running' | 'done' | 'failed';
+  reason: string | null;
+  audit: BenchAudit | null;
+  auto_score: number | null;
+  manual: BenchManual | null;
+  manual_score: number | null;
+  final: number | null;
+  comment: string | null;
+  audited_at: number | null;
+}
+
+export interface BenchRunSummary {
+  id: number;
+  preset_id: number;
+  preset: string;
+  status: 'running' | 'done' | 'stopped';
+  started_at: number;
+  finished_at: number | null;
+  cases: number;
+  rated: number;
+  average: number | null;
+}
+
+export interface BenchRun extends Omit<BenchRunSummary, 'cases' | 'rated' | 'average'> {
+  cases: BenchCase[];
+}
+
+export interface BenchCompare {
+  preset_id: number;
+  preset: string;
+  runs: number;
+  average: number;
+  cases: { key: string; average: number; runs: number }[];
+}
+
+export const benchCases = () => request<BenchCaseDef[]>('GET', '/api/bench/cases');
+export const benchRuns = () => request<BenchRunSummary[]>('GET', '/api/bench/runs');
+export const benchRun = (id: number) => request<BenchRun>('GET', `/api/bench/runs/${id}`);
+export const startBench = (cases?: string[]) => request<{ id: number }>('POST', '/api/bench/runs', { cases });
+export const stopBench = (id: number) => request('POST', `/api/bench/runs/${id}/stop`, {});
+export const deleteBench = (id: number) => request('DELETE', `/api/bench/runs/${id}`);
+export const rateBench = (run: number, caseId: number, b: BenchManual & { comment?: string }) =>
+  request('POST', `/api/bench/runs/${run}/cases/${caseId}/rate`, b);
+export const benchCompare = () => request<BenchCompare[]>('GET', '/api/bench/compare');

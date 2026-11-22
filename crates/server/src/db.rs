@@ -17,6 +17,14 @@ pub async fn open(data_dir: &Path) -> anyhow::Result<SqlitePool> {
     let pool = SqlitePoolOptions::new().max_connections(8).connect_with(opts).await?;
     backup_before(&pool, data_dir, 6, "enginex.db.pre-0006").await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
+    // Page Tester : un run interrompu par un arrêt du serveur ne reprend pas.
+    sqlx::query("UPDATE bench_cases SET status = 'failed', reason = 'serveur redémarré' WHERE status = 'running'")
+        .execute(&pool)
+        .await?;
+    sqlx::query("UPDATE bench_runs SET status = 'stopped', finished_at = ? WHERE status = 'running'")
+        .bind(crate::state::now())
+        .execute(&pool)
+        .await?;
     Ok(pool)
 }
 

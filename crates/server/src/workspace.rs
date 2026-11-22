@@ -137,6 +137,28 @@ async fn insert_topic(state: &AppState, project_id: i64, name: &str, slug: &str)
     }
 }
 
+/// Topic `<projet>/<topic>` (slug = nom), créé s'ils manquent (page Tester).
+pub async fn ensure_topic(state: &AppState, project: &str, topic: &str) -> Result<TopicInfo, ApiError> {
+    let pid: Option<i64> = sqlx::query_scalar("SELECT id FROM projects WHERE slug = ?")
+        .bind(project)
+        .fetch_optional(state.db())
+        .await?;
+    let pid = match pid {
+        Some(p) => p,
+        None => insert_project(state, project, project).await?,
+    };
+    let tid: Option<i64> = sqlx::query_scalar("SELECT id FROM topics WHERE project_id = ? AND slug = ?")
+        .bind(pid)
+        .bind(topic)
+        .fetch_optional(state.db())
+        .await?;
+    let tid = match tid {
+        Some(t) => t,
+        None => insert_topic(state, pid, topic, topic).await?,
+    };
+    self::topic(state, tid).await
+}
+
 /// Premier démarrage : `general/inbox`.
 pub async fn boot(state: &AppState) -> anyhow::Result<()> {
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM projects")

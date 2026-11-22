@@ -32,6 +32,8 @@ pub enum ApiError {
     RateLimited(u64),
     #[error("busy")]
     Busy,
+    #[error("not_audited")]
+    NotAudited,
     #[error("model_in_use")]
     ModelInUse,
     #[error("engine_in_use")]
@@ -140,6 +142,7 @@ impl ApiError {
             | Self::NotEmpty
             | Self::NoVision
             | Self::TurnInProgress
+            | Self::NotAudited
             | Self::TooManySandboxes
             | Self::FolderBusy
             | Self::ChangedSince

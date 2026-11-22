@@ -851,7 +851,7 @@ pub async fn check_disk(state: &AppState) {
 /// duré (il n'est sans doute plus devant l'écran).
 pub fn turn_done(state: &AppState, sid: &str, origin: &str, status: &str, started: i64, error: Option<&str>) {
     const LONG: i64 = 120;
-    if matches!(origin, "cron" | "memory" | "agent") || status == "interrupted" {
+    if matches!(origin, "cron" | "memory" | "agent" | "bench") || status == "interrupted" {
         return;
     }
     if matches!(origin, "user" | "verify") && now() - started < LONG {

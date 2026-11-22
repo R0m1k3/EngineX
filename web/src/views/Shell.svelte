@@ -24,6 +24,7 @@
     settings: () => import('./Settings.svelte'),
     tasks: () => import('./Tasks.svelte'),
     crons: () => import('./Crons.svelte'),
+    bench: () => import('./Bench.svelte'),
     agents: () => import('./Agents.svelte'),
     files: () => import('./Files.svelte'),
     git: () => import('./Git.svelte'),
