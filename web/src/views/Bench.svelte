@@ -27,12 +27,23 @@
   let busy = $state(false);
 
   const active = $derived(runs.find((r) => r.status === 'running') ?? null);
+  // Run en cours, avec ses cas : sert au bandeau et à la liste des tests.
+  let live = $state<BenchRun | null>(null);
+  const liveCase = $derived(live?.cases.find((c) => c.status === 'running') ?? null);
+  const liveIndex = $derived(live && liveCase ? live.cases.indexOf(liveCase) + 1 : 0);
+  const liveByKey = $derived(new Map((live?.cases ?? []).map((c) => [c.key, c])));
+  // Horloge à la seconde pour les temps qui avancent.
+  let nowS = $state(Math.floor(Date.now() / 1000));
+  const elapsed = (c: BenchCase | null | undefined) =>
+    c?.started_at == null ? null : Math.max(0, (c.finished_at ?? (c.status === 'running' ? nowS : c.started_at)) - c.started_at);
 
   async function refresh() {
     try {
       const [r, d] = await Promise.all([benchRuns(), defs ? Promise.resolve(defs) : benchCases()]);
       runs = r;
       defs = d;
+      const run = r.find((x) => x.status === 'running');
+      live = run ? await benchRun(run.id) : null;
       error = '';
       if (current) {
         current = await benchRun(current.id);
@@ -45,7 +56,8 @@
   refresh();
   // Pendant un run, la page se met à jour toute seule.
   const timer = setInterval(() => { if (active || current?.status === 'running') refresh(); }, 3000);
-  onDestroy(() => clearInterval(timer));
+  const clock = setInterval(() => { if (live) nowS = Math.floor(Date.now() / 1000); }, 1000);
+  onDestroy(() => { clearInterval(timer); clearInterval(clock); });
 
   async function launch(keys?: string[]) {
     busy = true;
@@ -153,7 +165,7 @@
 </script>
 
 <Page title="Tester">
-  {#snippet meta()}{#if active}<span class="num">run {active.id} en cours · {active.preset}</span>{/if}{/snippet}
+  {#snippet meta()}{#if active}<span class="num">run {active.id} · {active.preset}{#if liveCase} · test {liveIndex}/{live?.cases.length} : {liveCase.title} · {dur(elapsed(liveCase) ?? 0)}{#if liveCase.reason} · {liveCase.reason}{/if}{/if}</span>{/if}{/snippet}
   {#snippet actions()}
     {#if active}
       <Button variant="danger" icon={Square} onclick={stop}>Stop</Button>
@@ -187,7 +199,11 @@
               <span class="faint small"> · {d.criteria_count} critères · plafond {Math.round(d.timeout_s / 60)} min</span>
               <details><summary class="faint small">Consigne</summary><p class="prompt">{d.prompt}</p></details>
             </div>
-            {#if lastByKey.has(d.key)}<Badge tone="ok" title="Note finale du run affiché">{score(lastByKey.get(d.key))}</Badge>{/if}
+            {#if liveByKey.has(d.key)}
+              {@const lc = liveByKey.get(d.key)!}
+              <span class="num faint small">{elapsed(lc) != null ? dur(elapsed(lc)!) : ''}{lc.status === 'running' && lc.reason ? ` · ${lc.reason}` : ''}</span>
+              <Badge tone={tone(lc.status)} dot={lc.status === 'running'}>{label[lc.status]}</Badge>
+            {:else if lastByKey.has(d.key)}<Badge tone="ok" title="Note finale du run affiché">{score(lastByKey.get(d.key))}</Badge>{/if}
             <Button size="sm" icon={Play} onclick={() => launch([d.key])} disabled={busy || !!active}>Lancer</Button>
           </li>
         {/each}
@@ -200,6 +216,7 @@
         <div class="rowline">
           <Button variant="ghost" icon={ArrowLeft} onclick={() => (selected = null)}>Retour</Button>
           <h2 class="grow">{c.title}</h2>
+          {#if elapsed(c) != null}<span class="num faint">{dur(elapsed(c)!)}</span>{/if}
           <Badge tone={tone(c.status)} dot>{label[c.status]}</Badge>
           {#if c.session_id}<Button size="sm" icon={MessageSquare} href={`#sessions/${c.session_id}`}>Ouvrir la session</Button>{/if}
         </div>
@@ -291,12 +308,13 @@
         </ul>
         {#if current}
           <table class="grid">
-            <thead><tr><th>Test</th><th>État</th><th>Auto</th><th>Manuelle</th><th>Finale</th></tr></thead>
+            <thead><tr><th>Test</th><th>État</th><th>Durée</th><th>Auto</th><th>Manuelle</th><th>Finale</th></tr></thead>
             <tbody>
               {#each current.cases as c (c.id)}
                 <tr class="row" onclick={() => (selected = c)} onkeydown={(e) => e.key === 'Enter' && (selected = c)} tabindex="0">
                   <td>{c.title}</td>
                   <td><Badge tone={tone(c.status)}>{label[c.status]}</Badge>{#if c.audited_at && c.manual_score == null} <span class="faint small">à noter</span>{/if}</td>
+                  <td class="num">{elapsed(c) != null ? dur(elapsed(c)!) : '—'}</td>
                   <td class="num">{score(c.auto_score)}</td>
                   <td class="num">{score(c.manual_score)}</td>
                   <td class="num">{score(c.final)}</td>

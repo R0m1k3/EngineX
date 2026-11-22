@@ -713,7 +713,9 @@ impl Hub {
         let note = row.as_ref().and_then(|r| r.pending_note.clone());
         // Mémoire modifiée depuis le dernier envoi : bloc joint en tête du tour.
         let mut refresh = None;
+        // Session Tester : jamais de mémoire, même quand elle change.
         if let Some(r) = &row
+            && !crate::bench::is_bench_session(&state, &self.id).await
             && let Ok(t) = workspace::topic(&state, r.topic_id).await
         {
             let (bloc, sha) = crate::memory::block(&state, &t.project_slug, &t.slug);
@@ -1113,7 +1115,11 @@ impl Hub {
             return Err(fail(e.to_string()).await);
         }
         let policy = types::approval_policy(&session.approval);
-        let (instructions, memory_sha) = crate::memory::instructions(state, &topic.project_slug, &topic.slug);
+        let (instructions, memory_sha) = if crate::bench::is_bench_session(state, &self.id).await {
+            (crate::memory::bench_instructions(state), String::new())
+        } else {
+            crate::memory::instructions(state, &topic.project_slug, &topic.slug)
+        };
         let mut lost_context = false;
         let thread_id = match &session.thread_id {
             Some(tid) => match client

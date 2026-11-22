@@ -1289,6 +1289,8 @@ export interface BenchCase {
   final: number | null;
   comment: string | null;
   audited_at: number | null;
+  started_at: number | null;
+  finished_at: number | null;
 }
 
 export interface BenchRunSummary {

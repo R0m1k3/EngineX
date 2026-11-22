@@ -397,3 +397,50 @@ async fn recall_and_session_read() {
     let (t, err) = tool(&e, &ka, "session_read", json!({"session_id": "nope"})).await;
     assert!(err && t.contains("inconnue"), "{t}");
 }
+
+#[tokio::test]
+async fn a_bench_session_has_no_memory_tools() {
+    let e = env().await;
+    let sid = new_session(&e, "auto").await;
+    let key = sandbox_key(&e, &sid).await;
+    let names = |v: &Value| -> Vec<String> {
+        v["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(names(&rpc(&e, &key, "tools/list", json!({})).await).contains(&"mem_read".to_string()));
+    // La même session rattachée à un cas Tester perd mémoire et historique.
+    sqlx::query("INSERT INTO bench_runs (id, preset_id, status, started_at) VALUES (1, 1, 'running', 1)")
+        .execute(e.state.db())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO bench_cases (run_id, case_key, session_id, status) VALUES (1, 'counter', ?, 'running')")
+        .bind(&sid)
+        .execute(e.state.db())
+        .await
+        .unwrap();
+    let list = names(&rpc(&e, &key, "tools/list", json!({})).await);
+    for t in enginex_server::memory::MEMORY_TOOLS {
+        assert!(!list.contains(&t.to_string()), "{t} : {list:?}");
+    }
+    assert!(list.contains(&"web_search".to_string()), "{list:?}");
+    let v = rpc(
+        &e,
+        &key,
+        "tools/call",
+        json!({"name": "mem_read", "arguments": {"level": "global"}}),
+    )
+    .await;
+    assert!(v["error"]["message"].as_str().unwrap().contains("outil inconnu"), "{v}");
+    let v = rpc(
+        &e,
+        &key,
+        "tools/call",
+        json!({"name": "recall", "arguments": {"query": "x"}}),
+    )
+    .await;
+    assert!(v.get("error").is_some(), "{v}");
+}

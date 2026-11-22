@@ -179,11 +179,13 @@ type CaseRow = (
     Option<f64>,
     Option<String>,
     Option<i64>,
+    Option<i64>,
+    Option<i64>,
 );
 
 async fn case_rows(state: &AppState, run_id: i64) -> Result<Vec<Value>, ApiError> {
     let rows: Vec<CaseRow> = sqlx::query_as(
-        "SELECT id, case_key, session_id, status, reason, audit_json, auto_score, manual_json, manual_score, comment, audited_at \
+        "SELECT id, case_key, session_id, status, reason, audit_json, auto_score, manual_json, manual_score, comment, audited_at, started_at, finished_at \
          FROM bench_cases WHERE run_id = ? ORDER BY id",
     )
     .bind(run_id)
@@ -192,14 +194,14 @@ async fn case_rows(state: &AppState, run_id: i64) -> Result<Vec<Value>, ApiError
     Ok(rows
         .into_iter()
         .map(
-            |(id, key, sid, status, reason, audit, auto, manual, mscore, comment, audited)| {
+            |(id, key, sid, status, reason, audit, auto, manual, mscore, comment, audited, started, finished)| {
                 let title = cases::get(&key).map(|c| c.title).unwrap_or("(cas retiré)");
                 json!({
                     "id": id, "key": key, "title": title, "session_id": sid, "status": status, "reason": reason,
                     "audit": audit.and_then(|a| serde_json::from_str::<Value>(&a).ok()),
                     "auto_score": auto, "manual": manual.and_then(|m| serde_json::from_str::<Value>(&m).ok()),
                     "manual_score": mscore, "final": final_score(auto, mscore), "comment": comment,
-                    "audited_at": audited,
+                    "audited_at": audited, "started_at": started, "finished_at": finished,
                 })
             },
         )
@@ -483,6 +485,11 @@ async fn run_case(
         fail_case(state, case_id, "arrêté").await;
         return;
     }
+    // Phase visible dans la page pendant que les critères tournent.
+    let _ = sqlx::query("UPDATE bench_cases SET reason = 'audit des critères…' WHERE id = ?")
+        .bind(case_id)
+        .execute(state.db())
+        .await;
     let audit = audit(state, case, &sid, &dir, started).await;
     let auto: Option<f64> = {
         let crit = audit["criteria"].as_array().cloned().unwrap_or_default();

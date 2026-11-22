@@ -46,6 +46,8 @@ struct Caller {
     topic: String,
     project_id: i64,
     topic_id: i64,
+    /// Session de la page Tester : sans outils de mémoire ni d'historique.
+    bench: bool,
 }
 
 async fn caller(state: &AppState, peer: std::net::SocketAddr, headers: &HeaderMap) -> Result<Caller, V1Error> {
@@ -70,6 +72,7 @@ async fn caller(state: &AppState, peer: std::net::SocketAddr, headers: &HeaderMa
         topic: t.slug,
         project_id: t.project_id,
         topic_id: t.id,
+        bench: crate::bench::is_bench_session(state, sid).await,
     })
 }
 
@@ -126,10 +129,10 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             res
         }
         "ping" => rpc_result(&id, json!({})),
-        "tools/list" => rpc_result(&id, json!({ "tools": all_tools(&state) })),
+        "tools/list" => rpc_result(&id, json!({ "tools": all_tools(&state, who.bench) })),
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or("");
-            let Some(schema) = all_tools(&state).into_iter().find(|t| t["name"] == name) else {
+            let Some(schema) = all_tools(&state, who.bench).into_iter().find(|t| t["name"] == name) else {
                 return rpc_error(&id, -32602, &format!("outil inconnu : {name}"));
             };
             let args = match params.get("arguments") {
@@ -176,9 +179,13 @@ fn tool(name: &str, description: &str, props: Value, required: &[&str]) -> Value
     })
 }
 
-/// Outils de la session : ceux d'EngineX, plus le navigateur s'il est configuré.
-fn all_tools(state: &AppState) -> Vec<Value> {
+/// Outils de la session : ceux d'EngineX, plus le navigateur s'il est configuré ;
+/// une session Tester n'a ni la mémoire ni l'historique (`memory::MEMORY_TOOLS`).
+fn all_tools(state: &AppState, bench: bool) -> Vec<Value> {
     let mut t = tools();
+    if bench {
+        t.retain(|x| !memory::MEMORY_TOOLS.iter().any(|n| x["name"] == *n));
+    }
     if state.0.browser.enabled() {
         t.extend(crate::browser::tools());
     }

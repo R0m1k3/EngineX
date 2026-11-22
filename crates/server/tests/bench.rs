@@ -90,6 +90,10 @@ async fn a_case_runs_is_audited_then_rated() {
     // static-page : 3 critères ; le 3e échoue.
     let (e, fake) = env_sessions(&script(&[(0, "ok1"), (0, "ok2"), (1, "css trop court")])).await;
     make_active_preset(&e).await;
+    // Une mémoire globale existe : le test ne doit pas la recevoir.
+    let mem = e.dir.path().join("data/workspace/memory/memory.md");
+    std::fs::create_dir_all(mem.parent().unwrap()).unwrap();
+    std::fs::write(&mem, "- SOLUTION-SECRETE\n").unwrap();
     let r = e
         .send("POST", "/api/bench/runs", json!({"cases": ["static-page"]}))
         .await;
@@ -100,6 +104,9 @@ async fn a_case_runs_is_audited_then_rated() {
     assert_eq!(run["status"], "done", "{run}");
     let c = &run["cases"][0];
     assert_eq!(c["status"], "done", "{c}");
+    // Heures de début et de fin : la page en tire la durée de chaque test.
+    let (st, fi) = (c["started_at"].as_i64().unwrap(), c["finished_at"].as_i64().unwrap());
+    assert!(fi >= st, "{c}");
     let auto = c["auto_score"].as_f64().unwrap();
     assert!((auto - 200.0 / 3.0).abs() < 0.01, "{auto}");
     let crit = c["audit"]["criteria"].as_array().unwrap();
@@ -121,6 +128,20 @@ async fn a_case_runs_is_audited_then_rated() {
         .unwrap()
         .to_string();
     assert!(text.contains("Le Fournil"), "{text}");
+    // Aucune mémoire : ni dans les instructions du fil, ni jointe au tour.
+    let instr = fake.received("thread/start")[0]["params"]["developerInstructions"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        !instr.contains("SOLUTION-SECRETE") && !instr.contains("EngineX garde des notes"),
+        "{instr}"
+    );
+    assert!(instr.contains("Session de test"), "{instr}");
+    assert!(
+        !text.contains("SOLUTION-SECRETE") && !text.contains("<memoire_enginex>"),
+        "{text}"
+    );
     // Note : hors bornes refusée, puis acceptée ; finale = (auto + manuelle) / 2.
     let cid = c["id"].as_i64().unwrap();
     let url = format!("/api/bench/runs/{id}/cases/{cid}/rate");
