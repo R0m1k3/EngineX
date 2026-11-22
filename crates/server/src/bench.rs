@@ -32,6 +32,8 @@ const CRITERION_TIMEOUT_S: u64 = 240;
 const BIG_FILE_LINES: usize = 400;
 const REPEAT_COMMAND: usize = 3;
 const PROOF_MAX: usize = 2000;
+/// Au-delà, un fichier n'est pas lu pour l'alerte « fichier long » (données, binaires).
+const MAX_SCAN_BYTES: u64 = 1 << 20;
 
 /// Verrou de démarrage : un seul run actif à la fois.
 static START: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -258,6 +260,7 @@ pub async fn stop(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) -> R
     if r.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
+    close_pending(&state, id).await;
     // Interrompt le tour en cours : la tâche de fond voit le statut `stopped`.
     let sid: Option<String> = sqlx::query_scalar(
         "SELECT session_id FROM bench_cases WHERE run_id = ? AND status = 'running' AND session_id IS NOT NULL",
@@ -286,7 +289,9 @@ pub async fn delete_run(State(state): State<AppState>, UrlPath(id): UrlPath<i64>
             .fetch_all(state.db())
             .await?;
     for sid in sids {
-        let _ = sessions::delete(State(state.clone()), UrlPath(sid)).await;
+        if let Err(e) = sessions::delete(State(state.clone()), UrlPath(sid.clone())).await {
+            tracing::warn!("tester : suppression de la session {sid} : {e:?}");
+        }
     }
     sqlx::query("DELETE FROM bench_runs WHERE id = ?")
         .bind(id)
@@ -345,7 +350,18 @@ async fn run_status(state: &AppState, run_id: i64) -> String {
         .unwrap_or_default()
 }
 
+/// Les cas jamais lancés d'un run arrêté ne restent pas « en attente ».
+async fn close_pending(state: &AppState, run_id: i64) {
+    let _ = sqlx::query(
+        "UPDATE bench_cases SET status = 'failed', reason = 'non lancé (run arrêté)' WHERE run_id = ? AND status = 'pending'",
+    )
+    .bind(run_id)
+    .execute(state.db())
+    .await;
+}
+
 async fn finish_run(state: &AppState, run_id: i64, status: &str) {
+    close_pending(state, run_id).await;
     let _ = sqlx::query("UPDATE bench_runs SET status = ?, finished_at = ? WHERE id = ? AND status = 'running'")
         .bind(status)
         .bind(now())
@@ -378,14 +394,16 @@ async fn run_task(state: AppState, run_id: i64, preset: i64, cases_list: Vec<(i6
         }
         run_case(&state, run_id, preset, case_id, case, &topic).await;
     }
-    if stopped {
-        finish_run(&state, run_id, "stopped").await;
+    finish_run(&state, run_id, if stopped { "stopped" } else { "done" }).await;
+    // Arrêt demandé pendant le dernier cas : la boucle ne l'a pas vu.
+    let word = if run_status(&state, run_id).await == "stopped" {
+        "arrêté"
     } else {
-        finish_run(&state, run_id, "done").await;
-    }
+        "terminé"
+    };
     crate::feed::emit(
         &state,
-        crate::feed::Note::new("bench", "info", format!("Tester : run {run_id} terminé ({total} cas)")).link("#bench"),
+        crate::feed::Note::new("bench", "info", format!("Tester : run {run_id} {word} ({total} cas)")).link("#bench"),
     );
 }
 
@@ -445,18 +463,26 @@ async fn run_case(
         .bind(case_id)
         .execute(state.db())
         .await;
+    // Stop arrivé pendant la préparation : pas de tour.
+    if run_status(state, run_id).await != "running" {
+        fail_case(state, case_id, "arrêté").await;
+        return;
+    }
     let timeout = Duration::from_secs(case.timeout_s.min(MAX_TURN_S));
     let (outcome, message) = crate::crons::run_prompt(state, &sid, case.prompt, timeout, "bench").await;
     let stopped = run_status(state, run_id).await != "running";
-    let (status, reason) = if stopped {
-        ("failed", Some("arrêté".to_string()))
-    } else if outcome == "ok" {
+    let (status, reason) = if outcome == "ok" {
         ("done", None)
     } else if message.starts_with("délai dépassé") {
         ("failed", Some("plafond de temps".to_string()))
     } else {
         ("failed", Some(message.chars().take(300).collect::<String>()))
     };
+    // Arrêté : pas d'audit (il lancerait encore les critères), donc pas de note.
+    if stopped {
+        fail_case(state, case_id, "arrêté").await;
+        return;
+    }
     let audit = audit(state, case, &sid, &dir, started).await;
     let auto: Option<f64> = {
         let crit = audit["criteria"].as_array().cloned().unwrap_or_default();
@@ -482,11 +508,7 @@ async fn run_case(
 
 async fn audit(state: &AppState, case: &Case, sid: &str, dir: &Path, since: i64) -> Value {
     // Les fichiers de test fournis sont remis tels quels avant les critères.
-    for rel in case.protected {
-        if let Some((_, content)) = case.files.iter().find(|(r, _)| r == rel) {
-            let _ = write_file(dir, rel, content);
-        }
-    }
+    restore_protected(case, dir);
     let criteria = run_criteria(state, case, sid).await;
     json!({
         "criteria": criteria,
@@ -494,6 +516,20 @@ async fn audit(state: &AppState, case: &Case, sid: &str, dir: &Path, since: i64)
         "alerts": alerts(state, case, sid, dir).await,
         "metrics": metrics(state, sid, since).await,
     })
+}
+
+/// Le dossier est écrit par la sandbox : on passe par `files::*_beneath`
+/// (aucun lien suivi), sinon un test remplacé par un lien ferait écrire hors du dossier.
+fn restore_protected(case: &Case, dir: &Path) {
+    for rel in case.protected {
+        if let Some((_, content)) = case.files.iter().find(|(r, _)| r == rel) {
+            let res = crate::files::remove_beneath(dir, rel)
+                .and_then(|()| crate::files::create_beneath(dir, rel, content.as_bytes()));
+            if let Err(e) = res {
+                tracing::warn!("tester : restauration de {rel} : {e}");
+            }
+        }
+    }
 }
 
 async fn run_criteria(state: &AppState, case: &Case, sid: &str) -> Vec<Value> {
@@ -588,7 +624,8 @@ async fn alerts(state: &AppState, case: &Case, sid: &str, dir: &Path) -> Vec<Val
             }
         }
     }
-    out.dedup();
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|a| seen.insert(a.to_string()));
     out
 }
 
@@ -624,7 +661,12 @@ fn big_files(root: &Path, dir: &Path, depth: usize, case: &Case, out: &mut Vec<(
     for e in rd.flatten() {
         let p = e.path();
         let name = e.file_name().to_string_lossy().to_string();
-        if p.is_dir() {
+        // Liens ignorés : ils peuvent pointer hors du dossier de la session.
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
             if matches!(
                 name.as_str(),
                 ".git" | "node_modules" | "__pycache__" | ".enginex" | "target" | "venv" | ".venv"
@@ -632,8 +674,13 @@ fn big_files(root: &Path, dir: &Path, depth: usize, case: &Case, out: &mut Vec<(
                 continue;
             }
             big_files(root, &p, depth + 1, case, out);
-        } else if let Ok(text) = std::fs::read_to_string(&p) {
+        } else if ft.is_file() && e.metadata().is_ok_and(|m| m.len() <= MAX_SCAN_BYTES) {
             let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().to_string();
+            let Some(text) =
+                crate::files::read_beneath(root, &rel, MAX_SCAN_BYTES as usize).and_then(|b| String::from_utf8(b).ok())
+            else {
+                continue;
+            };
             if case.files.iter().any(|(r, _)| *r == rel) || rel.ends_with(".json") || rel.ends_with(".lock") {
                 continue;
             }
@@ -732,5 +779,30 @@ mod tests {
             }
         }
         assert_eq!(cases::all().len(), 10);
+    }
+
+    #[test]
+    fn restore_and_scan_never_follow_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (work, outside) = (tmp.path().join("w"), tmp.path().join("hors.txt"));
+        std::fs::create_dir(&work).unwrap();
+        std::fs::write(&outside, "x\n".repeat(BIG_FILE_LINES + 10)).unwrap();
+        let case = cases::get("bugfix").unwrap();
+        let rel = case.protected[0];
+        std::os::unix::fs::symlink(&outside, work.join(rel)).unwrap();
+        std::os::unix::fs::symlink(tmp.path(), work.join("lien")).unwrap();
+        restore_protected(case, &work);
+        // Le fichier hors du dossier est intact, le test est redevenu un vrai fichier.
+        assert_eq!(
+            std::fs::read_to_string(&outside).unwrap().lines().count(),
+            BIG_FILE_LINES + 10
+        );
+        let m = std::fs::symlink_metadata(work.join(rel)).unwrap();
+        assert!(m.is_file());
+        let want = case.files.iter().find(|(r, _)| *r == rel).unwrap().1;
+        assert_eq!(std::fs::read_to_string(work.join(rel)).unwrap(), want);
+        let mut big = Vec::new();
+        big_files(&work, &work, 0, case, &mut big);
+        assert!(big.is_empty(), "{big:?}");
     }
 }

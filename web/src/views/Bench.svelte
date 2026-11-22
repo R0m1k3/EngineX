@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import {
     benchCases, benchRuns, benchRun, startBench, stopBench, deleteBench, rateBench, benchCompare, sessionDetail, message,
     type BenchCaseDef, type BenchRunSummary, type BenchRun, type BenchCase, type BenchCompare, type ChangedFile,
@@ -116,10 +116,14 @@
     ['fonctionne', 'Fonctionne'], ['qualite', 'Qualité du code'], ['rendu', 'Rendu visuel'], ['consigne', 'Suivi de la consigne'],
   ];
 
+  // Le rafraîchissement remplace `selected` toutes les 3 s pendant un run :
+  // l'effet ne repart qu'au changement de cas ou à la fin de son audit, pour ne pas
+  // effacer une note en cours de saisie.
+  const selKey = $derived(selected ? `${selected.id}:${selected.audited_at ?? ''}` : '');
   $effect(() => {
-    const c = selected;
+    if (!selKey) { files = []; return; }
+    const c = untrack(() => selected)!;
     files = [];
-    if (!c) return;
     axes = c.manual ? { ...c.manual } : { fonctionne: 3, qualite: 3, rendu: 3, consigne: 3 };
     comment = c.comment ?? '';
     if (c.session_id) {
@@ -193,7 +197,7 @@
     {#if selected && current}
       {@const c = selected}
       <div class="detail">
-        <div class="bar">
+        <div class="rowline">
           <Button variant="ghost" icon={ArrowLeft} onclick={() => (selected = null)}>Retour</Button>
           <h2 class="grow">{c.title}</h2>
           <Badge tone={tone(c.status)} dot>{label[c.status]}</Badge>
@@ -204,7 +208,9 @@
         <section>
           <h3>1. Ce que le modèle a fait</h3>
           {#if !c.audit}
-            <p class="faint">Pas encore d’audit : le test est en cours.</p>
+            <p class="faint">
+              {c.status === 'running' || c.status === 'pending' ? 'Pas encore d’audit : le test est en cours.' : 'Pas d’audit pour ce test.'}
+            </p>
           {:else}
             <p class="metrics num">
               durée {dur(c.audit.metrics.duration_s)} · {c.audit.metrics.tokens} jetons ·
@@ -258,7 +264,7 @@
               {/each}
             </div>
             <Textarea label="Commentaire" bind:value={comment} rows={3} />
-            <div class="bar">
+            <div class="rowline">
               <Button variant="primary" onclick={save} busy={saving}>Enregistrer la note</Button>
               <span class="num faint">
                 auto {score(c.auto_score)} · manuelle {score(c.manual_score)} · finale {score(c.final)}
@@ -346,7 +352,7 @@
   .row { cursor: pointer; }
   .row:hover, .row:focus-visible { background: var(--hover, rgba(127, 127, 127, 0.1)); }
   .detail { display: grid; gap: 16px; padding: 0 var(--sp-4, 16px) var(--sp-4, 16px); }
-  .bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .rowline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   h2 { margin: 0; font-size: var(--fs-lg, 1.1rem); }
   h3 { margin: 0 0 8px; font-size: var(--fs-md, 1rem); }
   h4 { margin: 12px 0 4px; font-size: var(--fs-sm); }

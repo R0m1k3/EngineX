@@ -203,7 +203,7 @@ Ne modifie pas test_cart.py. Lance les tests pour le vérifier : python3 -m unit
     Case {
         key: "rest-api",
         title: "API REST minimale",
-        prompt: "Écris server.py (bibliothèque standard Python uniquement) : une API JSON sur le port 8000. \
+        prompt: "Écris server.py (bibliothèque standard Python uniquement) : une API JSON sur le port donné par la variable d'environnement PORT (8000 par défaut). \
 GET /items → liste ; POST /items avec {\"name\": \"...\"} → crée (201) et renvoie l'objet avec son id ; GET /items/<id> → l'objet ou 404 ; DELETE /items/<id> → 204 ou 404. \
 Les données restent en mémoire. Lance-le en arrière-plan et vérifie avec curl.",
         files: &[],
@@ -211,15 +211,15 @@ Les données restent en mémoire. Lance-le en arrière-plan et vérifie avec cur
         criteria: &[
             Criterion {
                 name: "POST /items → 201 avec id",
-                script: "(python3 server.py >/dev/null 2>&1 & echo $! >/tmp/srv.pid); sleep 2; r=$(curl -s -o /tmp/o.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{\"name\":\"x\"}' localhost:8000/items); kill $(cat /tmp/srv.pid) 2>/dev/null; [ \"$r\" = 201 ] && grep -q '\"id\"' /tmp/o.json",
+                script: "P=8101; (PORT=$P python3 server.py >/dev/null 2>&1 & echo $! >/tmp/srv.pid); sleep 2; r=$(curl -s -o /tmp/o.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{\"name\":\"x\"}' localhost:$P/items); kill $(cat /tmp/srv.pid) 2>/dev/null; [ \"$r\" = 201 ] && grep -q '\"id\"' /tmp/o.json",
             },
             Criterion {
                 name: "GET /items liste l'objet créé ; GET /items/<id> le renvoie",
-                script: "(python3 server.py >/dev/null 2>&1 & echo $! >/tmp/srv.pid); sleep 2; id=$(curl -s -X POST -d '{\"name\":\"zz\"}' -H 'Content-Type: application/json' localhost:8000/items | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"id\"])'); a=$(curl -s localhost:8000/items); b=$(curl -s localhost:8000/items/$id); kill $(cat /tmp/srv.pid) 2>/dev/null; echo \"$a\" | grep -q zz && echo \"$b\" | grep -q zz",
+                script: "P=8102; (PORT=$P python3 server.py >/dev/null 2>&1 & echo $! >/tmp/srv.pid); sleep 2; id=$(curl -s -X POST -d '{\"name\":\"zz\"}' -H 'Content-Type: application/json' localhost:$P/items | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"id\"])'); a=$(curl -s localhost:$P/items); b=$(curl -s localhost:$P/items/$id); kill $(cat /tmp/srv.pid) 2>/dev/null; echo \"$a\" | grep -q zz && echo \"$b\" | grep -q zz",
             },
             Criterion {
                 name: "id inconnu → 404 ; DELETE → 204 puis 404",
-                script: "(python3 server.py >/dev/null 2>&1 & echo $! >/tmp/srv.pid); sleep 2; id=$(curl -s -X POST -d '{\"name\":\"d\"}' -H 'Content-Type: application/json' localhost:8000/items | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"id\"])'); n=$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/items/99999); d=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE localhost:8000/items/$id); g=$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/items/$id); kill $(cat /tmp/srv.pid) 2>/dev/null; [ \"$n\" = 404 ] && [ \"$d\" = 204 ] && [ \"$g\" = 404 ]",
+                script: "P=8103; (PORT=$P python3 server.py >/dev/null 2>&1 & echo $! >/tmp/srv.pid); sleep 2; id=$(curl -s -X POST -d '{\"name\":\"d\"}' -H 'Content-Type: application/json' localhost:$P/items | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"id\"])'); n=$(curl -s -o /dev/null -w '%{http_code}' localhost:$P/items/99999); d=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE localhost:$P/items/$id); g=$(curl -s -o /dev/null -w '%{http_code}' localhost:$P/items/$id); kill $(cat /tmp/srv.pid) 2>/dev/null; [ \"$n\" = 404 ] && [ \"$d\" = 204 ] && [ \"$g\" = 404 ]",
             },
         ],
         timeout_s: 1200,

@@ -21,6 +21,12 @@ pub async fn open(data_dir: &Path) -> anyhow::Result<SqlitePool> {
     sqlx::query("UPDATE bench_cases SET status = 'failed', reason = 'serveur redémarré' WHERE status = 'running'")
         .execute(&pool)
         .await?;
+    sqlx::query(
+        "UPDATE bench_cases SET status = 'failed', reason = 'non lancé (serveur redémarré)' \
+         WHERE status = 'pending' AND run_id IN (SELECT id FROM bench_runs WHERE status = 'running')",
+    )
+    .execute(&pool)
+    .await?;
     sqlx::query("UPDATE bench_runs SET status = 'stopped', finished_at = ? WHERE status = 'running'")
         .bind(crate::state::now())
         .execute(&pool)

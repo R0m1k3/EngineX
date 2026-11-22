@@ -65,9 +65,16 @@ async fn stop_marks_a_running_run_stopped() {
         .execute(e.state.db())
         .await
         .unwrap();
+    sqlx::query("INSERT INTO bench_cases (run_id, case_key, status) VALUES (1, 'counter', 'pending')")
+        .execute(e.state.db())
+        .await
+        .unwrap();
     let r = e.send("POST", "/api/bench/runs/1/stop", json!({})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(e.get("/api/bench/runs/1").await.body["status"], "stopped");
+    let run = e.get("/api/bench/runs/1").await.body;
+    assert_eq!(run["status"], "stopped");
+    // Le cas jamais lancé ne reste pas « en attente ».
+    assert_eq!(run["cases"][0]["status"], "failed");
     let again = e.send("POST", "/api/bench/runs/1/stop", json!({})).await;
     assert_eq!(again.status, StatusCode::NOT_FOUND);
     // Un run arrêté se supprime ; un run actif non.
