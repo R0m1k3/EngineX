@@ -11,6 +11,8 @@
   let { sessionId }: { sessionId: string } = $props();
 
   let st = $state<PreviewStatus | null>(null);
+  // Port de l'app montrée ; FILES (0) = fichiers du dossier (page sans serveur).
+  const FILES = 0;
   let port = $state<number | null>(null);
   let url = $state('');
   let frame = $state(0);
@@ -20,8 +22,9 @@
     try {
       st = await previewStatus(sessionId);
       error = '';
-      // Un seul port : ouvert tout de suite.
-      if (!port && st.running && st.ports.length === 1) await show(st.ports[0]);
+      // Un seul port : ouvert tout de suite ; aucune app mais un index.html : la page.
+      if (port === null && st.running && st.ports.length === 1) await show(st.ports[0]);
+      else if (port === null && (!st.running || !st.ports.length) && st.has_index) await show(FILES);
     } catch (e) {
       error = message(e);
     }
@@ -41,9 +44,9 @@
 
   $effect(() => {
     load();
-    // Ports relus tant qu'aucune app n'est montrée.
+    // Ports relus tant qu'aucune app n'est montrée (la page du dossier compte comme aucune).
     const t = setInterval(() => {
-      if (!port) load();
+      if (port === null || port === FILES) load();
     }, 5000);
     return () => clearInterval(t);
   });
@@ -51,23 +54,28 @@
 
 <div class="preview">
   <div class="tb">
-    {#if st?.running && st.ports.length}
+    {#if (st?.running && st.ports.length) || st?.has_index}
       <span class="faint">Port</span>
       <div class="ports" role="group" aria-label="Port de l’app">
-        {#each st.ports as p (p)}
+        {#if st?.has_index}
+          <button class="port" aria-pressed={port === FILES} title="index.html du dossier, sans serveur" onclick={() => show(FILES)}>Page</button>
+        {/if}
+        {#each st?.running ? st.ports : [] as p (p)}
           <button class="port num" aria-pressed={p === port} onclick={() => show(p)}>{p}</button>
         {/each}
       </div>
     {/if}
     <span class="grow url ell" title={url}>{url}</span>
     {#if url}
-      <IconButton icon={RotateCw} label="Recharger l’app" size="sm" onclick={() => show(port!)} />
+      <IconButton icon={RotateCw} label="Recharger l’app" size="sm" onclick={() => show(port ?? FILES)} />
       <IconButton icon={ExternalLink} label="Ouvrir dans un nouvel onglet" size="sm" href={url} target="_blank" rel="noopener" />
     {/if}
     <IconButton icon={RefreshCw} label="Relire les ports" size="sm" tip="left" onclick={load} />
   </div>
   {#if error}<p class="error small pad">{error}</p>{/if}
-  {#if !st && !error}<div class="pad"><Skeleton lines={3} /></div>
+  {#if url}
+    <!-- une page ou une app est montrée : pas d'état vide -->
+  {:else if !st && !error}<div class="pad"><Skeleton lines={3} /></div>
   {:else if st && !st.enabled}
     <div class="pad"><EmptyState icon={AppWindow} title="Aperçu désactivé" text="L’aperçu est désactivé sur ce serveur (ENGINEX_PREVIEW_BIND=off)." /></div>
   {:else if st && !st.running}

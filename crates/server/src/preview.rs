@@ -26,11 +26,16 @@ use serde_json::{Value, json};
 use crate::{
     auth, bridge,
     error::{ApiError, ApiJson},
-    sessions,
+    sessions, snapshots,
     state::AppState,
 };
 
 pub const COOKIE: &str = "enginex_preview";
+/// « Port » du laissez-passer qui sert les fichiers du dossier de la session
+/// (pages HTML sans serveur) au lieu d'une app de la sandbox.
+pub const FILES: u16 = 0;
+/// Taille maximale d'un fichier servi en mode fichiers.
+const FILES_MAX: usize = 32 << 20;
 /// Laissez-passer gardés au plus (les plus vieux partent d'abord).
 const MAX_GRANTS: usize = 256;
 const GRANT_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -105,17 +110,26 @@ pub async fn status(
     UrlPath(id): UrlPath<String>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    sessions::row(&state, &id).await?;
+    let row = sessions::row(&state, &id).await?;
     let base = origin(&state, &headers);
+    // Page à servir sans app : `index.html` à la racine du dossier de la session.
+    let has_index = match snapshots::folder(&state, &row).await {
+        Ok(f) => tokio::task::spawn_blocking(move || crate::files::kind_beneath(&f.work, "index.html") == Some(false))
+            .await
+            .unwrap_or(false),
+        Err(_) => false,
+    };
     let Some((fwd, token)) = bridge::hub(&state, &id).preview_target() else {
-        return Ok(Json(json!({"running": false, "ports": [], "enabled": base.is_some()})));
+        return Ok(Json(
+            json!({"running": false, "ports": [], "enabled": base.is_some(), "has_index": has_index}),
+        ));
     };
     let (ports, error) = match enginex_sandbox::fwd::list(fwd.as_deref(), &token).await {
         Ok(p) => (p, None),
         Err(e) => (Vec::new(), Some(e.to_string())),
     };
     Ok(Json(
-        json!({"running": true, "ports": ports, "error": error, "enabled": base.is_some()}),
+        json!({"running": true, "ports": ports, "error": error, "enabled": base.is_some(), "has_index": has_index}),
     ))
 }
 
@@ -133,9 +147,7 @@ pub async fn open(
     sessions::row(&state, &id).await?;
     let base =
         origin(&state, &headers).ok_or(ApiError::Invalid("aperçu désactivé (ENGINEX_PREVIEW_BIND=off)".into()))?;
-    if b.port == 0 {
-        return Err(ApiError::Invalid("port invalide".into()));
-    }
+    // `FILES` (0) : les fichiers du dossier, pas une app.
     let g = state.0.previews.create(&id, b.port);
     Ok(Json(
         json!({"url": format!("{base}/__enginex/open?g={g}"), "origin": base}),
@@ -264,7 +276,124 @@ async fn proxy(State(state): State<AppState>, req: Request) -> Response<Body> {
             "Pas d'aperçu ouvert dans ce navigateur : ouvre-le depuis l'onglet Aperçu d'une session.",
         );
     };
+    if port == FILES {
+        let path = req.uri().path().to_string();
+        return serve_files(&state, &sid, &path).await;
+    }
     forward(&state, &sid, port, req).await
+}
+
+/// `%XX` décodés (chemin d'URL) ; `None` si le résultat n'est pas de l'UTF-8.
+fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Some(v) = std::str::from_utf8(&b[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            out.push(v);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn files_type(rel: &str) -> &'static str {
+    let ext = rel
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "js" | "mjs" | "cjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" | "map" => "application/json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "wasm" => "application/wasm",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "mp4" => "video/mp4",
+        "txt" | "md" | "csv" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Sert un fichier du dossier de la session (mode `FILES`), sur l'origine
+/// d'aperçu : la page peut lancer son JavaScript sans toucher à l'UI. Lecture
+/// par `files::read_beneath` (aucun lien suivi) ; pas besoin de la sandbox.
+async fn serve_files(state: &AppState, sid: &str, raw: &str) -> Response<Body> {
+    let Ok(row) = sessions::row(state, sid).await else {
+        return page(StatusCode::NOT_FOUND, "Session supprimée.");
+    };
+    let Ok(folder) = snapshots::folder(state, &row).await else {
+        return page(StatusCode::NOT_FOUND, "Dossier de la session introuvable.");
+    };
+    let Some(path) = percent_decode(raw) else {
+        return page(StatusCode::BAD_REQUEST, "Chemin illisible.");
+    };
+    let rel = path.trim_matches('/').to_string();
+    if !rel.is_empty() && !snapshots::valid_rel(&rel) {
+        return page(StatusCode::NOT_FOUND, "Fichier introuvable.");
+    }
+    let work = folder.work;
+    let dir_slash = path.ends_with('/');
+    let res = tokio::task::spawn_blocking(move || {
+        let is_dir = rel.is_empty() || crate::files::kind_beneath(&work, &rel) == Some(true);
+        if is_dir && !rel.is_empty() && !dir_slash {
+            // Dossier sans « / » final : les liens relatifs de sa page casseraient.
+            return Err(Some(format!("/{rel}/")));
+        }
+        let file = if is_dir {
+            if rel.is_empty() {
+                "index.html".to_string()
+            } else {
+                format!("{rel}/index.html")
+            }
+        } else {
+            rel
+        };
+        match crate::files::read_beneath(&work, &file, FILES_MAX) {
+            Some(b) if b.len() <= FILES_MAX => Ok((file, b)),
+            _ => Err(None),
+        }
+    })
+    .await;
+    match res {
+        Ok(Ok((file, bytes))) => {
+            let mut r = Response::new(Body::from(bytes));
+            let h = r.headers_mut();
+            h.insert(header::CONTENT_TYPE, HeaderValue::from_static(files_type(&file)));
+            h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+            h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            r
+        }
+        Ok(Err(Some(to))) => {
+            let mut r = Response::new(Body::empty());
+            *r.status_mut() = StatusCode::FOUND;
+            if let Ok(v) = HeaderValue::from_str(&to) {
+                r.headers_mut().insert(header::LOCATION, v);
+            }
+            r
+        }
+        _ => page(
+            StatusCode::NOT_FOUND,
+            "Fichier introuvable dans le dossier de la session.",
+        ),
+    }
 }
 
 /// Relaie une requête (HTTP ou WebSocket) vers l'app de la sandbox de `sid`

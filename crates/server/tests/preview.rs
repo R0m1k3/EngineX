@@ -174,3 +174,67 @@ async fn preview_disabled() {
         .await;
     assert_eq!(r.status, 400, "{}", r.text);
 }
+
+#[tokio::test]
+async fn preview_serves_the_session_files_without_an_app() {
+    let e = env_cfg("", |c| {
+        c.web.preview_bind = Some("127.0.0.1:0".parse().unwrap());
+        c.web.preview_public_port = 8091;
+    })
+    .await;
+    let sid = new_session(&e, "auto").await;
+    let dir = work_dir(&e, &sid).await;
+    std::fs::write(
+        dir.join("index.html"),
+        "<h1>Le Fournil</h1><script src=app.js></script>",
+    )
+    .unwrap();
+    std::fs::write(dir.join("app.js"), "console.log(1)").unwrap();
+    std::fs::create_dir(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("sub/index.html"), "sous-page").unwrap();
+    let outside = e.dir.path().join("secret.txt");
+    std::fs::write(&outside, "SECRET").unwrap();
+    std::os::unix::fs::symlink(&outside, dir.join("lien.txt")).unwrap();
+
+    // Sandbox arrêtée, mais un index.html : la page est proposée.
+    let st = e.get(&format!("/api/sessions/{sid}/preview")).await.body;
+    assert_eq!(st["running"], false);
+    assert_eq!(st["has_index"], true, "{st}");
+    let r = e
+        .send("POST", &format!("/api/sessions/{sid}/preview"), json!({"port": 0}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    let grant = r.body["url"].as_str().unwrap().split("g=").nth(1).unwrap().to_string();
+    let base = serve_tcp(enginex_server::preview::router(e.state.clone())).await;
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let get = |p: &str| {
+        http.get(format!("{base}{p}"))
+            .header("cookie", format!("enginex_preview={grant}"))
+            .send()
+    };
+    let r = get("/").await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(r.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+    assert!(r.text().await.unwrap().contains("Le Fournil"));
+    let r = get("/app.js?v=2").await.unwrap();
+    assert!(
+        r.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/javascript")
+    );
+    // Dossier sans « / » : redirigé, puis son index.html.
+    let r = get("/sub").await.unwrap();
+    assert_eq!(r.status(), 302);
+    assert_eq!(r.headers()["location"], "/sub/");
+    assert_eq!(get("/sub/").await.unwrap().text().await.unwrap(), "sous-page");
+    // Ni lien, ni remontée, ni .git, ni fichier absent.
+    for p in ["/lien.txt", "/%2e%2e/secret.txt", "/.git/config", "/absent.html"] {
+        let r = get(p).await.unwrap();
+        assert_eq!(r.status(), 404, "{p}");
+        assert!(!r.text().await.unwrap().contains("SECRET"), "{p}");
+    }
+}

@@ -7,7 +7,7 @@
 // Le jeton est celui de l'app-server (/run/enginex/token) : une autre sandbox
 // du réseau ne peut pas s'en servir.
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, readlinkSync } from 'node:fs';
 import net from 'node:net';
 
 const PORT = Number(process.env.ENGINEX_FWD_PORT || 4501);
@@ -28,18 +28,44 @@ function tokenOk(given) {
   return want.length > 0 && timingSafeEqual(digest(want), digest(given));
 }
 
-// Ports TCP en écoute (état 0A) de /proc/net/tcp et tcp6, sans les nôtres.
-export function listening(tables) {
+// Ports TCP en écoute (état 0A) de /proc/net/tcp et tcp6, sans les nôtres ni
+// ceux dont le socket (inode, colonne 10) est dans `skip`.
+export function listening(tables, skip = new Set()) {
   const ports = new Set();
   for (const t of tables) {
     for (const line of t.split('\n').slice(1)) {
       const f = line.trim().split(/\s+/);
       if (f.length < 4 || f[3] !== '0A') continue;
+      if (f.length > 9 && skip.has(f[9])) continue;
       const port = parseInt(f[1].split(':').pop(), 16);
       if (port && port !== APP_SERVER && port !== PORT) ports.add(port);
     }
   }
   return [...ports].sort((a, b) => a - b);
+}
+
+// Sockets ouverts par Codex lui-même (processus « codex ») : pendant un tour,
+// il écoute sur des ports éphémères de 127.0.0.1 qui ne sont pas l'app.
+export function codexSockets(proc = '/proc') {
+  const out = new Set();
+  let pids = [];
+  try {
+    pids = readdirSync(proc).filter((d) => /^\d+$/.test(d));
+  } catch {
+    return out;
+  }
+  for (const pid of pids) {
+    try {
+      if (readFileSync(`${proc}/${pid}/comm`, 'utf8').trim() !== 'codex') continue;
+      for (const fd of readdirSync(`${proc}/${pid}/fd`)) {
+        try {
+          const m = /^socket:\[(\d+)\]$/.exec(readlinkSync(`${proc}/${pid}/fd/${fd}`));
+          if (m) out.add(m[1]);
+        } catch {}
+      }
+    } catch {}
+  }
+  return out;
 }
 
 function readTables() {
@@ -83,7 +109,7 @@ const server = net.createServer((sock) => {
       return sock.end('ERR jeton refusé\n');
     }
     if (cmd === 'LIST') {
-      return sock.end(`OK ${JSON.stringify(listening(readTables()))}\n`);
+      return sock.end(`OK ${JSON.stringify(listening(readTables(), codexSockets()))}\n`);
     }
     const port = Number(cmd);
     if (!Number.isInteger(port) || port < 1 || port > 65535 || port === PORT || port === APP_SERVER) {

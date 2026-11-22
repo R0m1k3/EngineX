@@ -1167,7 +1167,8 @@ export interface SessionGit {
 }
 export type SideTab = 'files' | 'terminal' | 'git' | 'preview' | 'browser';
 
-export type PreviewStatus = { running: boolean; ports: number[]; error?: string | null; enabled: boolean };
+/** `has_index` : un index.html à la racine du dossier, servi sans app (port 0 = fichiers du dossier). */
+export type PreviewStatus = { running: boolean; ports: number[]; error?: string | null; enabled: boolean; has_index?: boolean };
 export const previewStatus = (id: string) => request<PreviewStatus>('GET', `${S(id)}/preview`);
 export const previewOpen = (id: string, port: number) =>
   request<{ url: string; origin: string }>('POST', `${S(id)}/preview`, { port });
