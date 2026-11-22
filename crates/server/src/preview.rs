@@ -112,16 +112,17 @@ pub async fn status(
 ) -> Result<Json<Value>, ApiError> {
     let row = sessions::row(&state, &id).await?;
     let base = origin(&state, &headers);
-    // Page à servir sans app : `index.html` à la racine du dossier de la session.
-    let has_index = match snapshots::folder(&state, &row).await {
-        Ok(f) => tokio::task::spawn_blocking(move || crate::files::kind_beneath(&f.work, "index.html") == Some(false))
+    // Pages à servir sans app : fichiers `.html` à la racine du dossier de la session.
+    let pages = match snapshots::folder(&state, &row).await {
+        Ok(f) => tokio::task::spawn_blocking(move || root_pages(&f.work))
             .await
-            .unwrap_or(false),
-        Err(_) => false,
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
     };
+    let has_index = pages.first().is_some_and(|p| p == "index.html");
     let Some((fwd, token)) = bridge::hub(&state, &id).preview_target() else {
         return Ok(Json(
-            json!({"running": false, "ports": [], "enabled": base.is_some(), "has_index": has_index}),
+            json!({"running": false, "ports": [], "enabled": base.is_some(), "has_index": has_index, "pages": pages}),
         ));
     };
     let (ports, error) = match enginex_sandbox::fwd::list(fwd.as_deref(), &token).await {
@@ -129,13 +130,40 @@ pub async fn status(
         Err(e) => (Vec::new(), Some(e.to_string())),
     };
     Ok(Json(
-        json!({"running": true, "ports": ports, "error": error, "enabled": base.is_some(), "has_index": has_index}),
+        json!({"running": true, "ports": ports, "error": error, "enabled": base.is_some(), "has_index": has_index, "pages": pages}),
     ))
 }
 
 #[derive(Deserialize)]
 pub struct OpenBody {
     port: u16,
+    /// Mode `FILES` : page ouverte (`dashboard.html`), racine sinon.
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// Fichiers `.html` (liens exclus) à la racine de `work`, `index.html` d'abord, 20 au plus.
+fn root_pages(work: &std::path::Path) -> Vec<String> {
+    let Ok(rd) = std::fs::read_dir(work) else {
+        return Vec::new();
+    };
+    let mut v: Vec<String> = rd
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.to_ascii_lowercase().ends_with(".html") && page_name(n))
+        .collect();
+    v.sort_by(|a, b| (a != "index.html", a).cmp(&(b != "index.html", b)));
+    v.truncate(20);
+    v
+}
+
+/// Nom de page sûr à mettre tel quel dans une URL de redirection.
+fn page_name(n: &str) -> bool {
+    !n.is_empty()
+        && n.len() <= 200
+        && !n.starts_with('.')
+        && n.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
 pub async fn open(
@@ -149,8 +177,17 @@ pub async fn open(
         origin(&state, &headers).ok_or(ApiError::Invalid("aperçu désactivé (ENGINEX_PREVIEW_BIND=off)".into()))?;
     // `FILES` (0) : les fichiers du dossier, pas une app.
     let g = state.0.previews.create(&id, b.port);
+    let page = match b.path.as_deref() {
+        Some(p) if b.port == FILES && p != "index.html" => {
+            if !page_name(p) {
+                return Err(ApiError::Invalid("nom de page invalide".into()));
+            }
+            format!("&p={p}")
+        }
+        _ => String::new(),
+    };
     Ok(Json(
-        json!({"url": format!("{base}/__enginex/open?g={g}"), "origin": base}),
+        json!({"url": format!("{base}/__enginex/open?g={g}{page}"), "origin": base}),
     ))
 }
 
@@ -166,6 +203,9 @@ pub fn router(state: AppState) -> Router {
 #[derive(Deserialize)]
 struct EnterQuery {
     g: String,
+    /// Page du dossier à ouvrir après l'entrée (mode `FILES`).
+    #[serde(default)]
+    p: Option<String>,
 }
 
 pub fn page(status: StatusCode, msg: &str) -> Response<Body> {
@@ -193,7 +233,13 @@ async fn enter(State(state): State<AppState>, Query(q): Query<EnterQuery>) -> Re
     let mut r = Response::new(Body::empty());
     *r.status_mut() = StatusCode::FOUND;
     let h = r.headers_mut();
-    h.insert(header::LOCATION, HeaderValue::from_static("/"));
+    let to = match q.p.as_deref() {
+        Some(p) if page_name(p) => format!("/{p}"),
+        _ => "/".to_string(),
+    };
+    if let Ok(v) = HeaderValue::from_str(&to) {
+        h.insert(header::LOCATION, v);
+    }
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     if let Ok(v) = HeaderValue::from_str(&format!("{COOKIE}={}; Path=/; HttpOnly; SameSite=Lax", q.g)) {
         h.insert(header::SET_COOKIE, v);

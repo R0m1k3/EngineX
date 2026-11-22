@@ -190,6 +190,7 @@ async fn preview_serves_the_session_files_without_an_app() {
     )
     .unwrap();
     std::fs::write(dir.join("app.js"), "console.log(1)").unwrap();
+    std::fs::write(dir.join("dashboard.html"), "<h1>Ventes</h1>").unwrap();
     std::fs::create_dir(dir.join("sub")).unwrap();
     std::fs::write(dir.join("sub/index.html"), "sous-page").unwrap();
     let outside = e.dir.path().join("secret.txt");
@@ -200,6 +201,26 @@ async fn preview_serves_the_session_files_without_an_app() {
     let st = e.get(&format!("/api/sessions/{sid}/preview")).await.body;
     assert_eq!(st["running"], false);
     assert_eq!(st["has_index"], true, "{st}");
+    assert_eq!(st["pages"], json!(["index.html", "dashboard.html"]), "{st}");
+    // Une autre page : l'entrée y redirige ; un nom douteux est refusé.
+    let r = e
+        .send(
+            "POST",
+            &format!("/api/sessions/{sid}/preview"),
+            json!({"port": 0, "path": "../x.html"}),
+        )
+        .await;
+    assert_eq!(r.status, 400, "{}", r.text);
+    let r = e
+        .send(
+            "POST",
+            &format!("/api/sessions/{sid}/preview"),
+            json!({"port": 0, "path": "dashboard.html"}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    let dash = r.body["url"].as_str().unwrap().to_string();
+    assert!(dash.ends_with("&p=dashboard.html"), "{dash}");
     let r = e
         .send("POST", &format!("/api/sessions/{sid}/preview"), json!({"port": 0}))
         .await;
@@ -215,6 +236,10 @@ async fn preview_serves_the_session_files_without_an_app() {
             .header("cookie", format!("enginex_preview={grant}"))
             .send()
     };
+    let path_q = dash.split_once("/__enginex").unwrap().1;
+    let r = http.get(format!("{base}/__enginex{path_q}")).send().await.unwrap();
+    assert_eq!(r.status(), 302);
+    assert_eq!(r.headers()["location"], "/dashboard.html");
     let r = get("/").await.unwrap();
     assert_eq!(r.status(), 200);
     assert!(r.headers()["content-type"].to_str().unwrap().starts_with("text/html"));

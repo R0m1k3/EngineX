@@ -8,12 +8,16 @@
   import EmptyState from '../../lib/ui/EmptyState.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
 
-  let { sessionId }: { sessionId: string } = $props();
+  // `idle` : texte montré quand rien n'est affichable (sandbox arrêtée, aucune page).
+  let { sessionId, idle }: { sessionId: string; idle?: { title: string; text: string } } = $props();
 
   let st = $state<PreviewStatus | null>(null);
   // Port de l'app montrée ; FILES (0) = fichiers du dossier (page sans serveur).
   const FILES = 0;
   let port = $state<number | null>(null);
+  // Page du dossier montrée en mode FILES.
+  let page = $state('');
+  const pages = $derived(st?.pages ?? []);
   let url = $state('');
   let frame = $state(0);
   let error = $state('');
@@ -24,17 +28,18 @@
       error = '';
       // Un seul port : ouvert tout de suite ; aucune app mais un index.html : la page.
       if (port === null && st.running && st.ports.length === 1) await show(st.ports[0]);
-      else if (port === null && (!st.running || !st.ports.length) && st.has_index) await show(FILES);
+      else if (port === null && (!st.running || !st.ports.length) && st.pages?.length) await show(FILES, st.pages[0]);
     } catch (e) {
       error = message(e);
     }
   }
 
-  async function show(p: number) {
+  async function show(p: number, name = '') {
     error = '';
     try {
-      const r = await previewOpen(sessionId, p);
+      const r = await previewOpen(sessionId, p, p === FILES ? name : undefined);
       port = p;
+      page = p === FILES ? name : '';
       url = r.url;
       frame++;
     } catch (e) {
@@ -54,12 +59,12 @@
 
 <div class="preview">
   <div class="tb">
-    {#if (st?.running && st.ports.length) || st?.has_index}
-      <span class="faint">Port</span>
-      <div class="ports" role="group" aria-label="Port de l’app">
-        {#if st?.has_index}
-          <button class="port" aria-pressed={port === FILES} title="index.html du dossier, sans serveur" onclick={() => show(FILES)}>Page</button>
-        {/if}
+    {#if (st?.running && st.ports.length) || pages.length}
+      <span class="faint">{pages.length ? 'Afficher' : 'Port'}</span>
+      <div class="ports" role="group" aria-label="Page ou port de l’app">
+        {#each pages as n (n)}
+          <button class="port" aria-pressed={port === FILES && page === n} title="{n} du dossier, sans serveur" onclick={() => show(FILES, n)}>{n === 'index.html' ? 'Page' : n}</button>
+        {/each}
         {#each st?.running ? st.ports : [] as p (p)}
           <button class="port num" aria-pressed={p === port} onclick={() => show(p)}>{p}</button>
         {/each}
@@ -67,7 +72,7 @@
     {/if}
     <span class="grow url ell" title={url}>{url}</span>
     {#if url}
-      <IconButton icon={RotateCw} label="Recharger l’app" size="sm" onclick={() => show(port ?? FILES)} />
+      <IconButton icon={RotateCw} label="Recharger l’app" size="sm" onclick={() => (port === null ? undefined : show(port, page))} />
       <IconButton icon={ExternalLink} label="Ouvrir dans un nouvel onglet" size="sm" href={url} target="_blank" rel="noopener" />
     {/if}
     <IconButton icon={RefreshCw} label="Relire les ports" size="sm" tip="left" onclick={load} />
@@ -78,6 +83,8 @@
   {:else if !st && !error}<div class="pad"><Skeleton lines={3} /></div>
   {:else if st && !st.enabled}
     <div class="pad"><EmptyState icon={AppWindow} title="Aperçu désactivé" text="L’aperçu est désactivé sur ce serveur (ENGINEX_PREVIEW_BIND=off)." /></div>
+  {:else if st && !st.running && idle}
+    <div class="pad"><EmptyState icon={AppWindow} title={idle.title} text={idle.text} /></div>
   {:else if st && !st.running}
     <div class="pad"><EmptyState icon={AppWindow} title="Sandbox arrêtée" text="Lancez l’app dans la session (par exemple « lance le serveur de dev ») : elle apparaîtra ici." /></div>
   {:else if st && !st.ports.length}

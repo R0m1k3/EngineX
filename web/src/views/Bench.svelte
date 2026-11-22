@@ -266,7 +266,10 @@
         {#if c.session_id}
           <section>
             <h3>2. Aperçu</h3>
-            <div class="preview"><Preview sessionId={c.session_id} /></div>
+            <div class="preview"><Preview
+                sessionId={c.session_id}
+                idle={{ title: 'Pas de page à afficher', text: 'Ce test ne produit pas de page HTML : jugez-le sur les critères et les fichiers ci-dessus.' }}
+              /></div>
           </section>
         {/if}
 
