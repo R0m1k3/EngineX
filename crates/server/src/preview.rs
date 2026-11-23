@@ -393,10 +393,34 @@ fn files_type(rel: &str) -> &'static str {
     }
 }
 
+/// Page du dossier `work` pour le chemin d'URL `raw` (`/`, `/a/b.css`), sans
+/// réseau : (statut, type, corps). Pour l'audit du Tester (`serve_local`).
+pub(crate) fn local_file(work: &std::path::Path, raw: &str) -> (u16, String, Vec<u8>) {
+    let not_found = || (404, "text/plain; charset=utf-8".to_string(), b"introuvable".to_vec());
+    let path = raw.split(['?', '#']).next().unwrap_or("");
+    let Some(path) = percent_decode(path) else {
+        return not_found();
+    };
+    let rel = path.trim_matches('/').to_string();
+    if !rel.is_empty() && !snapshots::valid_rel(&rel) {
+        return not_found();
+    }
+    let is_dir = rel.is_empty() || crate::files::kind_beneath(work, &rel) == Some(true);
+    let file = match (is_dir, rel.is_empty()) {
+        (true, true) => "index.html".to_string(),
+        (true, false) => format!("{rel}/index.html"),
+        _ => rel,
+    };
+    match crate::files::read_beneath(work, &file, FILES_MAX) {
+        Some(b) if b.len() <= FILES_MAX => (200, files_type(&file).to_string(), b),
+        _ => not_found(),
+    }
+}
+
 /// Sert un fichier du dossier de la session (mode `FILES`), sur l'origine
 /// d'aperçu : la page peut lancer son JavaScript sans toucher à l'UI. Lecture
 /// par `files::read_beneath` (aucun lien suivi) ; pas besoin de la sandbox.
-pub(crate) async fn serve_files(state: &AppState, sid: &str, raw: &str) -> Response<Body> {
+async fn serve_files(state: &AppState, sid: &str, raw: &str) -> Response<Body> {
     let Ok(row) = sessions::row(state, sid).await else {
         return page(StatusCode::NOT_FOUND, "Session supprimée.");
     };

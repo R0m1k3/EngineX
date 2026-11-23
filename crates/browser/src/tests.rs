@@ -289,3 +289,30 @@ fn console_block() {
         "{out}"
     );
 }
+
+/// Vrai Chromium : pages servies sans réseau (`serve_local`), feuille de
+/// style relative et `localStorage` sur l'origine fictive.
+#[tokio::test]
+#[ignore = "lancé par la CI avec un vrai Chromium (ENGINEX_TEST_BROWSER)"]
+async fn real_chromium_serves_local_pages() {
+    let url = std::env::var("ENGINEX_TEST_BROWSER").expect("ENGINEX_TEST_BROWSER");
+    let ep = resolve(&url).await.unwrap();
+    let s = Session::attach(&ep).await.unwrap();
+    let files: LocalFiles = Arc::new(|path: &str| match path {
+        "/index.html" => (
+            200,
+            "text/html".into(),
+            b"<link rel=stylesheet href=s.css><p id=p>ok</p><script>localStorage.x='1'</script>".to_vec(),
+        ),
+        "/s.css" => (200, "text/css".into(), b"#p{color:rgb(1,2,3)}".to_vec()),
+        _ => (404, "text/plain".into(), b"non".to_vec()),
+    });
+    s.serve_local("http://bench.enginex.test", files).await.unwrap();
+    s.navigate("http://bench.enginex.test/index.html").await.unwrap();
+    let v = s
+        .eval("getComputedStyle(document.getElementById('p')).color + '|' + localStorage.x")
+        .await
+        .unwrap();
+    assert_eq!(v, Some(json!("rgb(1, 2, 3)|1")));
+    s.close().await;
+}

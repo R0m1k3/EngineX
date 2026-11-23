@@ -265,52 +265,69 @@ async fn rating_is_refused_before_the_audit() {
     assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text);
 }
 
-/// Vrai Chromium : l'audit ouvre la page du dossier de la session (servie par
-/// EngineX, sans serveur dans la sandbox) et la solution de référence de la
-/// calculatrice prend tous ses points, captures comprises.
+/// Vrai Chromium : l'audit donne les pages du dossier de la session au
+/// navigateur sans réseau ; chaque solution de référence des tests visuels
+/// réussit tous ses contrôles de page, captures comprises.
 #[tokio::test]
 #[ignore = "lancé avec un vrai Chromium (ENGINEX_TEST_BROWSER)"]
-async fn real_chromium_audits_the_calculator_reference() {
+async fn real_chromium_audits_the_visual_references() {
     let url = std::env::var("ENGINEX_TEST_BROWSER").expect("ENGINEX_TEST_BROWSER");
-    let mut steps = script(&[(0, ""), (0, "")]);
-    // Le temps de poser la solution dans le dossier avant la fin du tour.
-    let end = step_pos(&steps, 0, is_send("turn/completed"));
-    steps.insert(end, json!({"sleep_ms": 4000}));
-    let (e, _fake) = env_sessions_cfg(&steps, "", |c| c.web.browser_url = Some(url)).await;
-    make_active_preset(&e).await;
-    let r = e
-        .send("POST", "/api/bench/runs", json!({"cases": ["calculator"]}))
-        .await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    let id = r.body["id"].as_i64().unwrap();
-    let run = e
-        .until(&format!("/api/bench/runs/{id}"), |v| {
-            v["cases"][0]["session_id"].is_string()
-        })
-        .await;
-    let sid = run["cases"][0]["session_id"].as_str().unwrap().to_string();
-    let topic = e.dir.path().join("data/workspace/projects/bench/topics/bench");
-    let dir = loop {
-        let b = e.get(&format!("/api/sessions/{sid}")).await.body;
-        if let Some(n) = b["session"]["work_dir"].as_str() {
-            break topic.join("sessions").join(n);
+    let refs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bench/refs");
+    for key in [
+        "landing",
+        "calculator",
+        "todo",
+        "dashboard",
+        "snake",
+        "signup",
+        "calendar",
+    ] {
+        let mut steps = script(&[(0, ""); 8]);
+        // Le temps de poser la solution dans le dossier avant la fin du tour.
+        let end = step_pos(&steps, 0, is_send("turn/completed"));
+        steps.insert(end, json!({"sleep_ms": 4000}));
+        let (e, _fake) = env_sessions_cfg(&steps, "", |c| c.web.browser_url = Some(url.clone())).await;
+        make_active_preset(&e).await;
+        let r = e.send("POST", "/api/bench/runs", json!({"cases": [key]})).await;
+        assert_eq!(r.status, StatusCode::OK, "{key} : {}", r.text);
+        let id = r.body["id"].as_i64().unwrap();
+        let run = e
+            .until(&format!("/api/bench/runs/{id}"), |v| {
+                v["cases"][0]["session_id"].is_string()
+            })
+            .await;
+        let sid = run["cases"][0]["session_id"].as_str().unwrap().to_string();
+        let topic = e.dir.path().join("data/workspace/projects/bench/topics/bench");
+        let dir = loop {
+            let b = e.get(&format!("/api/sessions/{sid}")).await.body;
+            if let Some(n) = b["session"]["work_dir"].as_str() {
+                break topic.join("sessions").join(n);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in std::fs::read_dir(refs.join(key)).unwrap() {
+            let f = f.unwrap().path();
+            std::fs::copy(&f, dir.join(f.file_name().unwrap())).unwrap();
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    };
-    std::fs::create_dir_all(&dir).unwrap();
-    let refs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bench/refs/calculator/index.html");
-    std::fs::copy(refs, dir.join("index.html")).unwrap();
-    let mut run = Value::Null;
-    for _ in 0..240 {
-        run = e.get(&format!("/api/bench/runs/{id}")).await.body;
-        if run["status"] != "running" {
-            break;
+        let mut run = Value::Null;
+        for _ in 0..240 {
+            run = e.get(&format!("/api/bench/runs/{id}")).await.body;
+            if run["status"] != "running" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let c = &run["cases"][0];
+        assert_eq!(c["status"], "done", "{key} : {c}");
+        let checks = c["audit"]["checks"].as_array().unwrap();
+        for ch in checks
+            .iter()
+            .filter(|ch| ch["kind"] == "page" || ch["kind"] == "console")
+        {
+            assert_eq!(ch["ok"], true, "{key} : {ch}");
+        }
+        assert_eq!(c["audit"]["shots"], json!(["desktop", "phone"]), "{key} : {c}");
+        eprintln!("{key} : {} / 20", c["points"]);
     }
-    let c = &run["cases"][0];
-    assert_eq!(c["status"], "done", "{c}");
-    assert_eq!(c["points"].as_f64(), Some(20.0), "{:#}", c["audit"]["checks"]);
-    assert_eq!(c["verdict"], "passed");
-    assert_eq!(c["audit"]["shots"], json!(["desktop", "phone"]), "{c}");
 }

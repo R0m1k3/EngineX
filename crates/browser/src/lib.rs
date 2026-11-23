@@ -321,6 +321,12 @@ fn go_num(f: f64) -> Value {
 
 type Reply = Result<Value, String>;
 
+/// Réponse servie sans réseau à une requête interceptée : (statut, type, corps).
+pub type Served = (u16, String, Vec<u8>);
+/// Pages servies par EngineX lui-même ([`Session::serve_local`]) : le chemin
+/// de l'URL (`/index.html`) donne la réponse.
+pub type LocalFiles = Arc<dyn Fn(&str) -> Served + Send + Sync>;
+
 /// Un onglet du navigateur distant : sa connexion CDP et le multiplexage
 /// requête/réponse ; les événements partent aussi vers `events` (screencast).
 pub struct Session {
@@ -342,6 +348,8 @@ pub struct Session {
     closed: Arc<AtomicBool>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub events: broadcast::Sender<Value>,
+    /// Origine et pages servies sans réseau (`Fetch.requestPaused`).
+    local: Arc<Mutex<Option<(String, LocalFiles)>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -426,6 +434,12 @@ impl Session {
         let console: Arc<Mutex<VecDeque<String>>> = Default::default();
         let k2 = console.clone();
         let (p2, n2, c2, e2) = (pending.clone(), net.clone(), closed.clone(), events.clone());
+        let local: Arc<Mutex<Option<(String, LocalFiles)>>> = Default::default();
+        let (l2, o2) = (local.clone(), out.clone());
+        // Identifiants des réponses envoyées par la boucle de lecture : hors
+        // de la plage des appels (`next`), leurs réponses sont ignorées.
+        // Chrome exige un entier 32 bits (sinon la commande est perdue).
+        let reader_ids = AtomicI64::new(1 << 30);
         let reader = tokio::spawn(async move {
             while let Some(Ok(msg)) = stream.next().await {
                 let data = match msg {
@@ -465,6 +479,25 @@ impl Session {
                     Some("Page.screencastFrame" | "Page.frameNavigated") => {
                         let _ = e2.send(m);
                     }
+                    Some("Fetch.requestPaused") => {
+                        let p = &m["params"];
+                        let rid = p["requestId"].clone();
+                        let url = p["request"]["url"].as_str().unwrap_or("");
+                        let handler = lock(&l2).clone();
+                        let id = reader_ids.fetch_add(1, Ordering::SeqCst);
+                        let msg = match handler.and_then(|(o, f)| url.strip_prefix(&o).map(|rest| f(rest))) {
+                            Some((code, ctype, body)) => json!({"id": id, "method": "Fetch.fulfillRequest", "params": {
+                                "requestId": rid, "responseCode": code,
+                                "responseHeaders": [
+                                    {"name": "Content-Type", "value": ctype},
+                                    {"name": "Cache-Control", "value": "no-store"},
+                                ],
+                                "body": base64::engine::general_purpose::STANDARD.encode(body),
+                            }}),
+                            None => json!({"id": id, "method": "Fetch.continueRequest", "params": {"requestId": rid}}),
+                        };
+                        let _ = o2.send(msg.to_string());
+                    }
                     Some(method @ ("Runtime.exceptionThrown" | "Runtime.consoleAPICalled" | "Log.entryAdded")) => {
                         if let Some(line) = console_line(method, &m["params"]) {
                             let mut k = lock(&k2);
@@ -493,6 +526,7 @@ impl Session {
             closed,
             tasks: Mutex::new(vec![writer, reader]),
             events,
+            local,
         });
         for m in [
             "Page.enable",
@@ -569,6 +603,19 @@ impl Session {
             .get(format!("{}/json/close/{}", self.endpoint, self.target_id))
             .send()
             .await;
+    }
+
+    /// Sert les requêtes vers `origin` (`http://bench.enginex.test`) par
+    /// `files`, sans réseau : le navigateur n'a pas à joindre EngineX.
+    pub async fn serve_local(&self, origin: &str, files: LocalFiles) -> Result<(), String> {
+        let origin = origin.trim_end_matches('/').to_string();
+        *lock(&self.local) = Some((origin.clone(), files));
+        self.call(
+            "Fetch.enable",
+            Some(json!({"patterns": [{"urlPattern": format!("{origin}/*"), "requestStage": "Request"}]})),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Commande CDP sans attendre (accusés du screencast).

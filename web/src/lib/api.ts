@@ -524,8 +524,10 @@ export function message(e: unknown): string {
     case 'git_failed':
     case 'forge_error':
       return `Échec git.${e.detail ? `\n${e.detail}` : ''}`;
+    case 'invalid':
+      return e.detail ?? 'Demande refusée.';
     default:
-      return `Erreur : ${e.code}`;
+      return e.detail ? `Erreur : ${e.detail}` : `Erreur : ${e.code}`;
   }
 }
 

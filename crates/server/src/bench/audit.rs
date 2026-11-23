@@ -9,7 +9,7 @@ use super::{
     cases::{Case, Check, Family, Kind},
     journal::Journal,
 };
-use crate::{appgate, bridge, state::AppState};
+use crate::{bridge, state::AppState};
 
 const SHELL_TIMEOUT_S: u64 = 240;
 const PROOF_MAX: usize = 2000;
@@ -18,6 +18,8 @@ const REPEAT_COMMAND: usize = 3;
 const MAX_SCAN_BYTES: u64 = 1 << 20;
 /// Port du petit serveur de fichiers lancé dans la sandbox pour les contrôles navigateur.
 pub const HIDDEN_DIR: &str = ".bench-hidden";
+/// Origine fictive des pages de l'audit (jamais résolue : servie par EngineX).
+const AUDIT_ORIGIN: &str = "http://bench.enginex.test";
 const HELPERS_JS: &str = include_str!("data/helpers.js");
 const BENCHH_PY: &str = include_str!("data/hidden/benchh.py");
 
@@ -158,7 +160,7 @@ pub async fn run(state: &AppState, case: &Case, case_id: i64, sid: &str, dir: &P
             }
             Kind::Page { path, phone, steps } => {
                 if page.is_none() {
-                    page = Some(PageCtx::open(state, sid, case_id).await);
+                    page = Some(PageCtx::open(state, case_id, dir).await);
                 }
                 match page.as_ref().unwrap() {
                     Ok(ctx) => {
@@ -195,7 +197,7 @@ pub async fn run(state: &AppState, case: &Case, case_id: i64, sid: &str, dir: &P
     let mut shots = Vec::new();
     if let Some(p) = case.page {
         if page.is_none() {
-            page = Some(PageCtx::open(state, sid, case_id).await);
+            page = Some(PageCtx::open(state, case_id, dir).await);
         }
         if let Some(Ok(ctx)) = &page {
             let shots_dir = shots_dir(state, case_id);
@@ -263,12 +265,19 @@ struct PageCtx {
 }
 
 impl PageCtx {
-    /// Pages statiques servies par EngineX depuis le dossier de la session
-    /// (sas `preview::FILES`) : ni serveur à lancer dans la sandbox, ni relais.
-    async fn open(state: &AppState, sid: &str, case_id: i64) -> Result<PageCtx, String> {
-        let origin = appgate::open_app(state, sid, crate::preview::FILES).await?;
+    /// Pages statiques du dossier de la session, données au navigateur par
+    /// EngineX lui-même (requêtes interceptées) : ni serveur, ni réseau entre
+    /// les conteneurs.
+    async fn open(state: &AppState, case_id: i64, dir: &Path) -> Result<PageCtx, String> {
         let key = format!("bench-audit-{case_id}");
         let tab = state.0.browser.get(&key).await?;
+        let origin = AUDIT_ORIGIN.to_string();
+        let work = dir.to_path_buf();
+        let files: enginex_browser::LocalFiles = Arc::new(move |path: &str| crate::preview::local_file(&work, path));
+        if let Err(e) = tab.serve_local(&origin, files).await {
+            state.0.browser.close(&key).await;
+            return Err(format!("interception des pages : {e}"));
+        }
         let _ = tab.call("Log.enable", None).await;
         Ok(PageCtx { tab, origin, key })
     }
@@ -295,12 +304,31 @@ impl PageCtx {
         self.tab.navigate(&url).await?;
         let _ = self
             .tab
-            .eval("try{localStorage.clear();sessionStorage.clear()}catch(e){};1")
+            .eval("try{localStorage.clear();sessionStorage.clear()}catch(e){};window.__benchOld=1;1")
             .await;
         self.tab.take_console();
-        self.tab.navigate(&url).await?;
-        tokio::time::sleep(Duration::from_millis(400)).await;
+        self.fresh_load(&url).await?;
         Ok(url)
+    }
+
+    /// Rechargement rapide : la page tourne dès son chargement (un jeu avance
+    /// tout seul), le contrôle commence dès que le nouveau document est prêt,
+    /// sans attendre le calme du réseau (`navigate` : 600 ms au moins).
+    async fn fresh_load(&self, url: &str) -> Result<(), String> {
+        self.tab.call("Page.navigate", Some(json!({ "url": url }))).await?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if let Ok(Some(Value::Bool(true))) = self
+                .tab
+                .eval("typeof window.__benchOld === 'undefined' && document.readyState === 'complete'")
+                .await
+            {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        Err("la page ne finit pas de charger (10 s)".into())
     }
 
     async fn wait_ready(&self) {

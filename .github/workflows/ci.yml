@@ -87,7 +87,7 @@ jobs:
           ENGINEX_TEST_BROWSER=http://127.0.0.1:9222 cargo test -p enginex-browser -- --ignored --nocapture
           cargo build -p enginex-fake-llama
           ENGINEX_TEST_BROWSER=http://127.0.0.1:9222 cargo test -p enginex-server --test browser -- --ignored --nocapture --test-threads=1
-          ENGINEX_TEST_BROWSER=http://127.0.0.1:9222 cargo test -p enginex-server --test bench real_chromium -- --ignored --nocapture
+          ENGINEX_TEST_BROWSER=http://127.0.0.1:9222 cargo test -p enginex-server --test bench real_chromium -- --ignored --nocapture --test-threads=1
       - run: cargo build -p enginex-fake-llama
       # Le test tourne en uid 1000, comme EngineX en production : la sandbox
       # (uid 1000) lit le jeton et écrit dans le topic.
