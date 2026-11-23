@@ -263,3 +263,31 @@ async fn preview_serves_the_session_files_without_an_app() {
         assert!(!r.text().await.unwrap().contains("SECRET"), "{p}");
     }
 }
+
+#[tokio::test]
+async fn http_preview_from_an_https_page_is_refused_with_a_reason() {
+    use axum::body::Body;
+    use axum::http::{Request, header};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let (e, _fake) = env_sessions_cfg(&script_with("text", |_| {}), "", |c| {
+        c.web.preview_bind = Some("127.0.0.1:0".parse().unwrap());
+        c.web.preview_public_port = 8099;
+    })
+    .await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{sid}/preview"))
+        .header(header::HOST, "enginex:8090")
+        .header(header::ORIGIN, "https://enginex:8090")
+        .header(header::COOKIE, &e.cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({"port": 0}).to_string()))
+        .unwrap();
+    let res = e.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), 400);
+    let text = String::from_utf8_lossy(&res.into_body().collect().await.unwrap().to_bytes()).into_owned();
+    assert!(text.contains("ENGINEX_PREVIEW_URL"), "{text}");
+}

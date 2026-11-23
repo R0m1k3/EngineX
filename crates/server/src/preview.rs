@@ -175,6 +175,21 @@ pub async fn open(
     sessions::row(&state, &id).await?;
     let base =
         origin(&state, &headers).ok_or(ApiError::Invalid("aperçu désactivé (ENGINEX_PREVIEW_BIND=off)".into()))?;
+    // Une iframe http:// dans une page https:// est bloquée par le navigateur
+    // (cadre blanc, sans message) : on le dit.
+    // `Origin` du navigateur : juste même sans ENGINEX_TRUST_PROXY.
+    let page_https = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|o| o.starts_with("https://"))
+        || auth::origin(&state, &headers).starts_with("https://");
+    if page_https && base.starts_with("http://") {
+        return Err(ApiError::Invalid(format!(
+            "aperçu bloqué par le navigateur : EngineX est en HTTPS mais l'aperçu en HTTP ({base}). \
+             Publiez le port d'aperçu derrière le proxy sur une adresse HTTPS à part \
+             (ex. https://apercu.exemple.fr) et donnez-la dans ENGINEX_PREVIEW_URL."
+        )));
+    }
     // `FILES` (0) : les fichiers du dossier, pas une app.
     let g = state.0.previews.create(&id, b.port);
     let page = match b.path.as_deref() {
@@ -381,7 +396,7 @@ fn files_type(rel: &str) -> &'static str {
 /// Sert un fichier du dossier de la session (mode `FILES`), sur l'origine
 /// d'aperçu : la page peut lancer son JavaScript sans toucher à l'UI. Lecture
 /// par `files::read_beneath` (aucun lien suivi) ; pas besoin de la sandbox.
-async fn serve_files(state: &AppState, sid: &str, raw: &str) -> Response<Body> {
+pub(crate) async fn serve_files(state: &AppState, sid: &str, raw: &str) -> Response<Body> {
     let Ok(row) = sessions::row(state, sid).await else {
         return page(StatusCode::NOT_FOUND, "Session supprimée.");
     };

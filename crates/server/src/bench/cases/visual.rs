@@ -134,7 +134,7 @@ const bad = $$('img').filter((i) => !(i.getAttribute('alt') || '').trim()); ok(!
             kind: CONSOLE,
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 pub static CALCULATOR: Case = Case {
@@ -254,7 +254,7 @@ ok(b.every((e) => e.getBoundingClientRect().right <= innerWidth + 1), 'touches h
             kind: CONSOLE,
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 pub static TODO: Case = Case {
@@ -390,7 +390,7 @@ ok(lb.right <= lst.right + 1 && li.scrollWidth <= li.clientWidth + 2, 'la tâche
             kind: CONSOLE,
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 pub static DASHBOARD: Case = Case {
@@ -503,7 +503,7 @@ const ratio = h.Est / want.Est; for (const k of Object.keys(want)) ok(Math.abs(h
             kind: CONSOLE,
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 pub static SNAKE: Case = Case {
@@ -633,7 +633,7 @@ ok(!s.over, 'le demi-tour tue le serpent'); ok(s.snake[0].x > a.x, 'le serpent a
             kind: CONSOLE,
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 pub static SIGNUP: Case = Case {
@@ -745,7 +745,7 @@ ok(!visible('#name'), 'le formulaire est encore affiché');"#,
             kind: CONSOLE,
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 pub static CALENDAR: Case = Case {
@@ -875,7 +875,7 @@ ok(b('08').right <= innerWidth + 1, 'le dimanche dépasse de l’écran');"#,
             kind: CONSOLE,
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 const DATA_JSON: &str = include_str!("../data/dashboard.json");

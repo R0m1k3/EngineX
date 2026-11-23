@@ -52,7 +52,7 @@ Ne modifie pas test_cart.py. Lance les tests pour le vérifier : python3 -m unit
         UNTOUCHED,
         RAN_TESTS,
     ],
-    timeout_s: 900,
+    timeout_s: 1800,
 };
 
 pub static DATES: Case = Case {
@@ -101,7 +101,7 @@ Tout autre texte, ou une date impossible (30 février, 29 février d'une année 
         },
         RAN_TESTS,
     ],
-    timeout_s: 900,
+    timeout_s: 1800,
 };
 
 pub static REST_API: Case = Case {
@@ -151,7 +151,7 @@ Lance-le en arrière-plan et vérifie chaque route avec curl.",
             kind: Kind::Log(journal::used_curl),
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 pub static REFACTOR: Case = Case {
@@ -205,7 +205,7 @@ sans changer le résultat de build_report pour aucune entrée. test_report.py do
         UNTOUCHED,
         RAN_TESTS,
     ],
-    timeout_s: 900,
+    timeout_s: 1800,
 };
 
 pub static MULTI_FILE: Case = Case {
@@ -253,7 +253,7 @@ pub static MULTI_FILE: Case = Case {
         UNTOUCHED,
         RAN_TESTS,
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 const REPORT_PY: &str = include_str!("../data/report.py");

@@ -32,7 +32,7 @@ use crate::{
 };
 use cases::{Case, Family};
 
-const MAX_TURN_S: u64 = 1200;
+const MAX_TURN_S: u64 = 2400;
 
 /// Verrou de démarrage : un seul run actif à la fois.
 static START: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

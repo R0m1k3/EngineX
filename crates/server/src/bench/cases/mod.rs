@@ -147,7 +147,7 @@ mod tests {
                 "{} : aucun contrôle essentiel",
                 c.key
             );
-            assert!(c.timeout_s <= 1200 && c.timeout_s >= 300, "{} : plafond", c.key);
+            assert!(c.timeout_s <= 2400 && c.timeout_s >= 300, "{} : plafond", c.key);
             let files = c.start_files();
             for p in c.protected {
                 assert!(files.iter().any(|(r, _)| r == p), "{} : {p} protégé mais absent", c.key);

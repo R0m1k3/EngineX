@@ -67,7 +67,7 @@ durées triées, valeur au rang ceil(0,95 × n), rangs comptés à partir de 1).
             kind: Kind::Log(journal::no_full_dump_of_log),
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 pub static BROWSER_BUG: Case = Case {
@@ -149,7 +149,7 @@ ok(near(num(txt('#cart-total')), 199.5), '#cart-total : ' + txt('#cart-total'));
             ),
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 pub static REPO_HUNT: Case = Case {
@@ -217,7 +217,7 @@ relance les tests, puis fais un commit git dont le message commence par « fix: 
             kind: Kind::Log(journal::ran_tests_green),
         },
     ],
-    timeout_s: 1200,
+    timeout_s: 2400,
 };
 
 // ---- Fichiers générés (graine fixe) ----

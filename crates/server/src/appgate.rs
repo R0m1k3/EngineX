@@ -175,7 +175,20 @@ pub fn local_target(url: &str) -> Option<(u16, String)> {
 /// Ouvre (ou retrouve) le sas vers l'app qui écoute sur `port` dans la
 /// sandbox de la session. Rend son origine, vue du navigateur. Erreur
 /// lisible par le modèle si la sandbox est arrêtée ou si rien n'écoute.
+///
+/// `preview::FILES` (0) : les fichiers du dossier de la session, servis par
+/// EngineX lui-même (pages statiques ; ni sandbox ni serveur à lancer).
 pub async fn open_app(state: &AppState, sid: &str, port: u16) -> Result<String, String> {
+    if port != preview::FILES {
+        check_listening(sid, state, port).await?;
+    }
+    if let Some(o) = state.0.gates.origin(sid, port) {
+        return Ok(o);
+    }
+    open_gate(state, sid, port).await
+}
+
+async fn check_listening(sid: &str, state: &AppState, port: u16) -> Result<(), String> {
     let hub = bridge::hub(state, sid);
     let Some((fwd, token)) = hub.preview_target() else {
         return Err("la sandbox de la session est arrêtée : rien ne tourne sur localhost".into());
@@ -199,9 +212,10 @@ pub async fn open_app(state: &AppState, sid: &str, port: u16) -> Result<String, 
              attends qu'elle affiche son adresse, puis rouvre http://localhost:<port>."
         ));
     }
-    if let Some(o) = state.0.gates.origin(sid, port) {
-        return Ok(o);
-    }
+    Ok(())
+}
+
+async fn open_gate(state: &AppState, sid: &str, port: u16) -> Result<String, String> {
     let url = state
         .0
         .browser
@@ -231,6 +245,10 @@ pub async fn open_app(state: &AppState, sid: &str, port: u16) -> Result<String, 
         async move {
             if peer.ip().to_canonical() != allowed {
                 return preview::page(StatusCode::FORBIDDEN, "Réservé au navigateur d'EngineX.");
+            }
+            if port == preview::FILES {
+                let path = req.uri().path().to_string();
+                return preview::serve_files(&st, &s, &path).await;
             }
             preview::forward(&st, &s, port, req).await
         }

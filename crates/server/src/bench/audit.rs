@@ -17,7 +17,6 @@ const BIG_FILE_LINES: usize = 400;
 const REPEAT_COMMAND: usize = 3;
 const MAX_SCAN_BYTES: u64 = 1 << 20;
 /// Port du petit serveur de fichiers lancé dans la sandbox pour les contrôles navigateur.
-const AUDIT_PORT: u16 = 8199;
 pub const HIDDEN_DIR: &str = ".bench-hidden";
 const HELPERS_JS: &str = include_str!("data/helpers.js");
 const BENCHH_PY: &str = include_str!("data/hidden/benchh.py");
@@ -264,18 +263,10 @@ struct PageCtx {
 }
 
 impl PageCtx {
+    /// Pages statiques servies par EngineX depuis le dossier de la session
+    /// (sas `preview::FILES`) : ni serveur à lancer dans la sandbox, ni relais.
     async fn open(state: &AppState, sid: &str, case_id: i64) -> Result<PageCtx, String> {
-        let start = format!(
-            "(setsid nohup python3 -m http.server {AUDIT_PORT} --bind 127.0.0.1 >/tmp/bench-http.log 2>&1 &) ; \
-             for i in $(seq 1 60); do python3 -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:{AUDIT_PORT}/',timeout=1)\" 2>/dev/null && exit 0; sleep 0.2; done; \
-             cat /tmp/bench-http.log; exit 1"
-        );
-        match exec(state, sid, &start, 60).await {
-            Ok((0, _)) => {}
-            Ok((_, t)) => return Err(format!("serveur de fichiers : {}", crate::crons::tail(&t))),
-            Err(e) => return Err(e),
-        }
-        let origin = appgate::open_app(state, sid, AUDIT_PORT).await?;
+        let origin = appgate::open_app(state, sid, crate::preview::FILES).await?;
         let key = format!("bench-audit-{case_id}");
         let tab = state.0.browser.get(&key).await?;
         let _ = tab.call("Log.enable", None).await;
