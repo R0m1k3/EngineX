@@ -15,6 +15,8 @@ fn launch<'a>(model: &'a Path, mmproj: Option<&'a Path>, port: u16, caps: Caps) 
         port,
         caps,
         extra_margin_mib: 0,
+        mmproj_margin_mib: 0,
+        gpus: 2,
     }
 }
 
@@ -58,6 +60,23 @@ fn default_argv_uses_fit_and_no_sampling() {
     assert!(has(&a, &["--mmproj", "/models/mm.gguf"]));
     assert!(!a.iter().any(|x| x.starts_with("--temp") || x == "-ngl" || x == "-mg"));
     assert!(!a.iter().any(|x| x.starts_with("--spec") || x.contains("moe")));
+}
+
+#[test]
+fn mmproj_margin_only_on_first_card() {
+    let p = PresetSettings::default();
+    let mut l = launch(
+        Path::new("/models/m.gguf"),
+        Some(Path::new("/models/mm.gguf")),
+        8081,
+        Caps::ALL,
+    );
+    l.mmproj_margin_mib = 1900;
+    assert!(has(&build_argv(&p, &l), &["--fit-target", "2924,1024"]));
+    l.extra_margin_mib = 100;
+    assert!(has(&build_argv(&p, &l), &["--fit-target", "3024,1124"]));
+    l.gpus = 1;
+    assert!(has(&build_argv(&p, &l), &["--fit-target", "3024"]));
 }
 
 #[test]

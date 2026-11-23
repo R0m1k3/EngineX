@@ -185,6 +185,16 @@ pub async fn launch(state: &AppState, id: i64) -> Result<(), ApiError> {
     } else {
         0
     };
+    // Projecteur de vision : chargé après le modèle, sur la première carte,
+    // hors du calcul de `--fit` ; on lui garde sa taille + ses tampons de
+    // préchauffage (une image de taille maximale).
+    let mmproj_margin_mib = match &mmproj {
+        Some(f) if gpus > 0 => {
+            let bytes = tokio::fs::metadata(f).await.map(|m| m.len()).unwrap_or(0);
+            (bytes >> 20) + enginex_hub::fit::MMPROJ_COMPUTE_MIB
+        }
+        _ => 0,
+    };
     let has_mtp = meta.has_mtp();
     if s.spec.draft == DraftKind::Mtp && !(has_mtp && caps.spec) {
         tracing::warn!("preset {id} : MTP demandé mais indisponible (modèle ou moteur), ignoré");
@@ -197,6 +207,8 @@ pub async fn launch(state: &AppState, id: i64) -> Result<(), ApiError> {
         port: state.config().llama_port,
         caps,
         extra_margin_mib,
+        mmproj_margin_mib,
+        gpus,
     };
     let argv = build_argv(&s, &l);
     let fallback_argv = fallback_argv(&s, &l);

@@ -12,6 +12,9 @@ const MIB: u64 = 1 << 20;
 const COMPUTE_PER_CARD: u64 = 512 * MIB;
 /// Lot physique par défaut de llama.cpp (`-ub`).
 const UBATCH: u64 = 512;
+/// Tampons du projecteur de vision (préchauffage sur une image de taille
+/// maximale), en plus de son fichier, sur la première carte.
+pub const MMPROJ_COMPUTE_MIB: u64 = 1024;
 /// Vocabulaire inconnu : valeur haute (Gemma 3 en a 262 144).
 const VOCAB_FALLBACK: u64 = 262_144;
 
@@ -173,7 +176,9 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
                 + no_fa
                 + input.fit_target_mib * MIB;
             if i == 0 {
-                need += input.mmproj_bytes;
+                if input.mmproj_bytes > 0 {
+                    need += input.mmproj_bytes + MMPROJ_COMPUTE_MIB * MIB;
+                }
             }
             if i == last {
                 need += logits + mtp;

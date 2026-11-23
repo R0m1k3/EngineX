@@ -227,6 +227,27 @@ pub struct Launch<'a> {
     /// Marge VRAM ajoutée à `fit_target_mib` (brouillon, que `--fit` ne
     /// compte pas).
     pub extra_margin_mib: u64,
+    /// Marge VRAM ajoutée sur la première carte seulement : le projecteur de
+    /// vision (mmproj), chargé après le modèle sur CUDA0, que `--fit` ne
+    /// compte pas non plus.
+    pub mmproj_margin_mib: u64,
+    /// Nombre de cartes (pour la marge par carte de `--fit-target`).
+    pub gpus: usize,
+}
+
+/// Valeur de `--fit-target` : une marge commune, ou une liste par carte
+/// quand la première porte en plus le mmproj.
+fn fit_target(base: u64, l: &Launch) -> String {
+    let all = base + l.extra_margin_mib;
+    if l.mmproj_margin_mib == 0 {
+        return all.to_string();
+    }
+    let first = all + l.mmproj_margin_mib;
+    std::iter::once(first)
+        .chain(std::iter::repeat_n(all, l.gpus.saturating_sub(1)))
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn num(v: f64) -> String {
@@ -276,7 +297,7 @@ pub fn build_argv(p: &PresetSettings, l: &Launch) -> Vec<String> {
             "--fit".into(),
             "on".into(),
             "--fit-target".into(),
-            (p.fit_target_mib + l.extra_margin_mib).to_string(),
+            fit_target(p.fit_target_mib, l),
         ]);
     }
     if moe_manual {
