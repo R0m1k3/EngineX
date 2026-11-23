@@ -15,6 +15,11 @@ const UBATCH: u64 = 512;
 /// Tampons du projecteur de vision (préchauffage sur une image de taille
 /// maximale), en plus de son fichier, sur la première carte.
 pub const MMPROJ_COMPUTE_MIB: u64 = 1024;
+/// Inkling 2 (`inkling2_loop`) : llama.cpp construit le masque d'attention
+/// en entier, sur la première carte, ≈ 322 octets par (lot × contexte)
+/// (relevé : 20 650 Mio à -ub 1024 -c 65536, b12627). À revoir quand
+/// llama.cpp le découpera (PR #32752).
+const INKLING_MASK_PER_UB_CTX: u64 = 322;
 /// Vocabulaire inconnu : valeur haute (Gemma 3 en a 262 144).
 const VOCAB_FALLBACK: u64 = 262_144;
 
@@ -103,6 +108,9 @@ pub struct FitReport {
     /// Matrice d'attention réservée en plus sans flash attention, par carte.
     #[serde(default)]
     pub no_fa_mib: u64,
+    /// Masque d'attention d'Inkling 2, réservé sur la première carte.
+    #[serde(default)]
+    pub mask_mib: u64,
 }
 
 /// Octets du cache KV pour `ctx × parallel` jetons, `None` si les
@@ -138,6 +146,7 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
         kv_mib,
         cpu_mib: 0,
         no_fa_mib: 0,
+        mask_mib: 0,
     };
     let Some(kv) = kv_bytes(input.meta, input.ctx, input.parallel, input.kv) else {
         return unknown(0);
@@ -162,6 +171,11 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
     } else {
         input.meta.head_count.unwrap_or(32) * ub * input.ctx * 4
     };
+    let mask = if input.meta.arch == "inkling2_loop" {
+        ub * input.ctx * INKLING_MASK_PER_UB_CTX
+    } else {
+        0
+    };
     let mtp = if input.mtp { kv / layers + compute + no_fa } else { 0 };
     let last = cards.len() - 1;
     let share = |bytes: u64, a: u64| (bytes as u128 * a as u128 / total_avail as u128) as u64;
@@ -176,6 +190,7 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
                 + no_fa
                 + input.fit_target_mib * MIB;
             if i == 0 {
+                need += mask;
                 if input.mmproj_bytes > 0 {
                     need += input.mmproj_bytes + MMPROJ_COMPUTE_MIB * MIB;
                 }
@@ -196,7 +211,9 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
         Verdict::Fits
     } else if needs.iter().all(|c| c.need_mib.saturating_sub(margin) <= c.avail_mib) {
         Verdict::Tight
-    } else if input.meta.expert_count.is_some() {
+    } else if input.meta.expert_count.is_some() && mask < avail[0] {
+        // Le masque d'Inkling ne part pas en RAM : plus grand que CUDA0,
+        // rien ne démarre.
         Verdict::Offload
     } else {
         Verdict::NoFit
@@ -208,5 +225,6 @@ pub fn estimate(input: &FitInput, cards: &[CardVram]) -> FitReport {
         kv_mib: kv / MIB,
         cpu_mib,
         no_fa_mib: no_fa.div_ceil(MIB),
+        mask_mib: mask.div_ceil(MIB),
     }
 }

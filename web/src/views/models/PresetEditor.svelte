@@ -101,7 +101,8 @@
     const out: GaugeRow[] = f.cards.map((c, i) => {
       const g = gpus[i];
       const kv = need > 0 ? Math.min(c.need_mib, (f.kv_mib * c.need_mib) / need) : 0;
-      const compute = s.flash_attn ? 0 : Math.min(f.no_fa_mib, Math.max(0, c.need_mib - kv));
+      const extra = (s.flash_attn ? 0 : f.no_fa_mib) + (i === 0 ? (f.mask_mib ?? 0) : 0);
+      const compute = Math.min(extra, Math.max(0, c.need_mib - kv));
       return {
         label: `CUDA${i}`,
         sub: g?.name,
@@ -195,6 +196,12 @@
       <p class="muted">Estimation impossible pour ce modèle.</p>
     {:else}
       <p class="muted">Estimation en cours…</p>
+    {/if}
+    {#if fit?.mask_mib}
+      <Note tone="warn">
+        Inkling 2 : llama.cpp réserve sur CUDA0 un masque d’attention d’environ {gb(fit.mask_mib)} Go,
+        proportionnel au lot physique (-ub) × contexte. Baissez le lot physique (256 ou 512) ou le contexte.
+      </Note>
     {/if}
     {#if !s.flash_attn}
       <Note tone="warn">

@@ -237,3 +237,35 @@ fn hybrid_counts_only_attention_layers() {
     // ≈ 2,4 Gio au lieu de 8,6 en comptant toutes les couches.
     assert!(kv < 3 << 30);
 }
+
+#[test]
+fn inkling_mask_on_first_card() {
+    let m = GgufMeta {
+        arch: "inkling2_loop".into(),
+        expert_count: Some(128),
+        ..meta()
+    };
+    let input = |ctx, ubatch| FitInput {
+        meta: &m,
+        weights_bytes: 8 << 30,
+        mmproj_bytes: 0,
+        ctx,
+        parallel: 1,
+        kv: KvType::Q8_0,
+        fit_target_mib: 1024,
+        draft_bytes: 0,
+        flash_attn: true,
+        ubatch,
+        mtp: false,
+    };
+    // Relevé réel : -ub 1024 -c 65536 → 20 650 Mio sur CUDA0, plus que la carte.
+    let r = estimate(&input(65536, 1024), &CARDS);
+    assert_eq!(r.mask_mib, 20608);
+    assert_eq!(r.verdict, Verdict::NoFit);
+    // Lot de 256 à 32k : ≈ 2,6 Gio, tient.
+    let r = estimate(&input(32768, 256), &CARDS);
+    assert_eq!(r.mask_mib, 2576);
+    assert_eq!(r.verdict, Verdict::Fits);
+    // Les autres architectures n'ont pas ce masque.
+    assert_eq!(run(65536, &CARDS).mask_mib, 0);
+}

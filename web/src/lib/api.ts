@@ -129,6 +129,8 @@ export interface FitReport {
   cpu_mib: number;
   /** Matrice d'attention réservée en plus par carte sans flash attention. */
   no_fa_mib: number;
+  /** Masque d'attention d'Inkling 2, sur la première carte. */
+  mask_mib?: number;
 }
 
 export interface FitResult {
