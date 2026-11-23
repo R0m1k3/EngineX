@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calculatrice</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #1d2228; font-family: system-ui, sans-serif; }
+  .calc { width: min(360px, 94vw); background: #2b323a; border-radius: 18px; padding: 16px; }
+  #display { background: #12161a; color: #e9f1f7; font-size: 2.4rem; text-align: right; padding: 14px; border-radius: 10px; min-height: 72px; overflow: hidden; }
+  .keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
+  button { height: 60px; border: 0; border-radius: 10px; font-size: 1.3rem; background: #3a434d; color: #fff; cursor: pointer; }
+  button.op { background: #e0913a; } button.eq { background: #4caf7a; grid-column: span 2; } button.clr { background: #c75050; }
+</style>
+</head>
+<body>
+<div class="calc">
+  <div id="display">0</div>
+  <div class="keys">
+    <button data-key="C" class="clr">C</button><button data-key="/" class="op">÷</button><button data-key="*" class="op">×</button><button data-key="-" class="op">−</button>
+    <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button><button data-key="+" class="op">+</button>
+    <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button><button data-key=".">.</button>
+    <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button><button data-key="0">0</button>
+    <button data-key="=" class="eq">=</button>
+  </div>
+</div>
+<script>
+  const display = document.getElementById('display');
+  let expr = '', done = false;
+  const show = () => { display.textContent = expr === '' ? '0' : expr; };
+  function evaluate(e) {
+    const t = e.match(/(\d+\.?\d*|\.\d+|[+\-*/])/g) || [];
+    const nums = [], ops = [];
+    const prec = { '+': 1, '-': 1, '*': 2, '/': 2 };
+    const apply = () => { const b = nums.pop(), a = nums.pop(), o = ops.pop();
+      if (o === '/' && b === 0) throw new Error('div0');
+      nums.push(o === '+' ? a + b : o === '-' ? a - b : o === '*' ? a * b : a / b); };
+    for (const x of t) {
+      if (x in prec) { while (ops.length && prec[ops[ops.length - 1]] >= prec[x]) apply(); ops.push(x); }
+      else nums.push(parseFloat(x));
+    }
+    while (ops.length) apply();
+    return parseFloat(nums[0].toPrecision(12));
+  }
+  function press(k) {
+    if (k === 'C') { expr = ''; done = false; return show(); }
+    if (k === 'back') { expr = expr.slice(0, -1); return show(); }
+    if (k === '=') {
+      if (!expr) return;
+      try { expr = String(evaluate(expr.replace(/[+\-*/]$/, ''))); } catch { expr = 'Erreur'; }
+      done = true; return show();
+    }
+    const isOp = '+-*/'.includes(k);
+    if (done) { if (!isOp || expr === 'Erreur') expr = ''; done = false; }
+    if (isOp && /[+\-*/]$/.test(expr)) expr = expr.slice(0, -1);
+    if (isOp && expr === '') expr = '0';
+    expr += k; show();
+  }
+  document.querySelectorAll('[data-key]').forEach((b) => b.addEventListener('click', () => press(b.dataset.key)));
+  document.addEventListener('keydown', (e) => {
+    const map = { Enter: '=', '=': '=', Escape: 'C', Backspace: 'back' };
+    const k = map[e.key] || ('0123456789.+-*/'.includes(e.key) && e.key.length === 1 ? e.key : null);
+    if (k) { e.preventDefault(); press(k); }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+body { margin: 0; font-family: Georgia, serif; color: #2b2118; background: #faf6f0; }
+header { display: flex; justify-content: space-between; padding: 16px 24px; background: #2b2118; color: #faf6f0; }
+.product { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; max-width: 960px; margin: 40px auto; padding: 0 24px; }
+.photo { aspect-ratio: 1; border-radius: 12px; background: radial-gradient(circle at 50% 35%, #ffe8a3, #c9a15b 60%, #6b4f2a); }
+.price { font-size: 1.6rem; color: #8a5a1f; }
+label { display: block; margin: 16px 0; }
+input { width: 64px; padding: 6px; }
+button { padding: 12px 20px; border: 0; border-radius: 8px; background: #8a5a1f; color: #fff; font-size: 1rem; cursor: pointer; }
+@media (max-width: 700px) { .product { grid-template-columns: 1fr; } }

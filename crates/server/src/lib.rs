@@ -149,6 +149,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/bench/runs/{id}/stop", post(bench::stop))
         .route("/api/bench/runs/{id}/cases/{cid}/rate", post(bench::rate))
         .route("/api/bench/compare", get(bench::compare))
+        .route("/api/bench/cases/{cid}/shots/{name}", get(bench::shot))
         .route("/api/skills", get(skills::list))
         .route("/api/skills/{name}", get(skills::get).put(skills::put))
         .route("/api/skills/{name}/enabled", put(skills::put_enabled))

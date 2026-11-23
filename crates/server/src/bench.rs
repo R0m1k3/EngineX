@@ -1,19 +1,24 @@
-//! Page Tester : lance des cas de codage fixes sur le preset actif, audite
-//! ce que le modèle a fait, puis reçoit la note de Michael.
+//! Page Tester : lance 15 tests fixes sur le preset actif et les contrôle.
 //!
-//! Un run = une exécution d'un ou plusieurs cas, l'un après l'autre. Chaque cas
-//! a sa session (origine `bench`, sans secrets du coffre, sans correction
-//! automatique ni « Essai de l'app »). L'audit rejoue les critères du cas dans
-//! la sandbox, relève des alertes et des métriques ; la note n'est acceptée
-//! qu'après l'audit.
+//! Un run = un ou plusieurs tests, l'un après l'autre, une session chacun
+//! (origine `bench` : sans secrets du coffre, sans mémoire, sans correction
+//! automatique ni « Essai de l'app »). L'audit (`audit.rs`) rejoue les
+//! contrôles : shell dans la sandbox, scénarios dans le Chromium d'EngineX,
+//! règles sur le journal. Résultat = points gagnés / points du test, verdict
+//! Réussi / Partiel / Échoué. Les tests visuels reçoivent en plus la note
+//! visuelle de Michael (1 à 5), jamais mélangée aux points.
 
+mod audit;
 pub mod cases;
+pub mod journal;
 
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use axum::{
     Json,
     extract::{Path as UrlPath, State},
+    http::header,
+    response::IntoResponse,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -25,20 +30,14 @@ use crate::{
     state::{AppState, now},
     workspace,
 };
-use cases::Case;
+use cases::{Case, Family};
 
 const MAX_TURN_S: u64 = 1200;
-const CRITERION_TIMEOUT_S: u64 = 240;
-const BIG_FILE_LINES: usize = 400;
-const REPEAT_COMMAND: usize = 3;
-const PROOF_MAX: usize = 2000;
-/// Au-delà, un fichier n'est pas lu pour l'alerte « fichier long » (données, binaires).
-const MAX_SCAN_BYTES: u64 = 1 << 20;
 
 /// Verrou de démarrage : un seul run actif à la fois.
 static START: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// La session appartient-elle à un cas Tester ? (sandbox sans secrets)
+/// La session appartient-elle à un test ? (sandbox sans secrets, sans mémoire)
 pub async fn is_bench_session(state: &AppState, session_id: &str) -> bool {
     sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM bench_cases WHERE session_id = ?)")
         .bind(session_id)
@@ -48,31 +47,17 @@ pub async fn is_bench_session(state: &AppState, session_id: &str) -> bool {
         != 0
 }
 
-// ---- Notation ----
-
-/// Note manuelle sur 100 : moyenne des 4 axes (1 à 5) ramenée à 0-100.
-pub fn manual_score(axes: &[i64; 4]) -> f64 {
-    let mean = axes.iter().sum::<i64>() as f64 / 4.0;
-    (mean - 1.0) / 4.0 * 100.0
-}
-
-/// Note finale : moyenne de l'auto et de la manuelle, ou la manuelle seule si
-/// aucun critère auto. `None` tant que la note manuelle manque.
-pub fn final_score(auto: Option<f64>, manual: Option<f64>) -> Option<f64> {
-    let m = manual?;
-    Some(match auto {
-        Some(a) => (a + m) / 2.0,
-        None => m,
-    })
-}
-
 // ---- Routes ----
 
 pub async fn list_cases() -> Json<Value> {
     Json(json!(
         cases::all()
             .iter()
-            .map(|c| json!({"key": c.key, "title": c.title, "prompt": c.prompt, "criteria_count": c.criteria.len(), "timeout_s": c.timeout_s}))
+            .map(|c| json!({
+                "key": c.key, "title": c.title, "family": c.family.key(), "summary": c.summary,
+                "prompt": c.prompt, "timeout_s": c.timeout_s, "points_max": c.points_max(),
+                "checks": c.checks.iter().map(|k| json!({"name": k.name, "points": k.points, "essential": k.essential})).collect::<Vec<_>>(),
+            }))
             .collect::<Vec<_>>()
     ))
 }
@@ -86,9 +71,9 @@ pub async fn start(State(state): State<AppState>, ApiJson(b): ApiJson<StartBody>
     let keys: Vec<&'static Case> = match b.cases.filter(|c| !c.is_empty()) {
         Some(list) => list
             .iter()
-            .map(|k| cases::get(k).ok_or_else(|| ApiError::Invalid(format!("cas inconnu : {k}"))))
+            .map(|k| cases::get(k).ok_or_else(|| ApiError::Invalid(format!("test inconnu : {k}"))))
             .collect::<Result<_, _>>()?,
-        None => cases::all().iter().collect(),
+        None => cases::all().to_vec(),
     };
     let _g = START.lock().await;
     let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bench_runs WHERE status = 'running'")
@@ -111,10 +96,11 @@ pub async fn start(State(state): State<AppState>, ApiJson(b): ApiJson<StartBody>
     let mut ids = Vec::new();
     for c in &keys {
         let id: i64 = sqlx::query_scalar(
-            "INSERT INTO bench_cases (run_id, case_key, status) VALUES (?, ?, 'pending') RETURNING id",
+            "INSERT INTO bench_cases (run_id, case_key, status, points_max) VALUES (?, ?, 'pending', ?) RETURNING id",
         )
         .bind(run_id)
         .bind(c.key)
+        .bind(c.points_max())
         .fetch_one(state.db())
         .await?;
         ids.push((id, *c));
@@ -122,6 +108,40 @@ pub async fn start(State(state): State<AppState>, ApiJson(b): ApiJson<StartBody>
     let st = state.clone();
     tokio::spawn(async move { run_task(st, run_id, preset, ids).await });
     Ok(Json(json!({"id": run_id})))
+}
+
+/// Résumé d'un ensemble de tests : réussis, résultat en %, note visuelle moyenne.
+pub fn summarize(cs: &[Value]) -> Value {
+    let audited: Vec<&Value> = cs.iter().filter(|c| c["verdict"].is_string()).collect();
+    let passed = audited.iter().filter(|c| c["verdict"] == "passed").count();
+    let partial = audited.iter().filter(|c| c["verdict"] == "partial").count();
+    let (pts, max): (f64, f64) = audited.iter().fold((0.0, 0.0), |(p, m), c| {
+        (
+            p + c["points"].as_f64().unwrap_or(0.0),
+            m + c["points_max"].as_f64().unwrap_or(0.0),
+        )
+    });
+    let visuals: Vec<f64> = cs.iter().filter_map(|c| c["visual"].as_f64()).collect();
+    let to_rate = cs
+        .iter()
+        .filter(|c| c["family"] == "visual" && c["verdict"].is_string() && c["visual"].is_null())
+        .count();
+    let duration: i64 = cs
+        .iter()
+        .filter_map(|c| c["audit"]["metrics"]["duration_s"].as_i64())
+        .sum();
+    let tps: Vec<f64> = cs
+        .iter()
+        .filter_map(|c| c["audit"]["metrics"]["tps"].as_f64())
+        .collect();
+    json!({
+        "cases": cs.len(), "audited": audited.len(), "passed": passed, "partial": partial,
+        "failed": audited.len() - passed - partial,
+        "result": (max > 0.0).then(|| pts / max * 100.0),
+        "visual": (!visuals.is_empty()).then(|| visuals.iter().sum::<f64>() / visuals.len() as f64),
+        "visual_rated": visuals.len(), "to_rate": to_rate, "duration_s": duration,
+        "tps": (!tps.is_empty()).then(|| tps.iter().sum::<f64>() / tps.len() as f64),
+    })
 }
 
 pub async fn list_runs(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
@@ -133,12 +153,9 @@ pub async fn list_runs(State(state): State<AppState>) -> Result<Json<Value>, Api
     let mut out = Vec::new();
     for (id, preset, status, started, finished) in rows {
         let cs = case_rows(&state, id).await?;
-        let scores: Vec<f64> = cs.iter().filter_map(|c| c["final"].as_f64()).collect();
-        let avg = (!scores.is_empty()).then(|| scores.iter().sum::<f64>() / scores.len() as f64);
         out.push(json!({
             "id": id, "preset_id": preset, "preset": preset_name(&state, preset).await, "status": status,
-            "started_at": started, "finished_at": finished, "cases": cs.len(),
-            "rated": scores.len(), "average": avg,
+            "started_at": started, "finished_at": finished, "summary": summarize(&cs),
         }));
     }
     Ok(Json(json!(out)))
@@ -151,9 +168,10 @@ pub async fn get_run(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) -
             .fetch_optional(state.db())
             .await?
             .ok_or(ApiError::NotFound)?;
+    let cs = case_rows(&state, id).await?;
     Ok(Json(json!({
         "id": id, "preset_id": preset, "preset": preset_name(&state, preset).await, "status": status,
-        "started_at": started, "finished_at": finished, "cases": case_rows(&state, id).await?,
+        "started_at": started, "finished_at": finished, "summary": summarize(&cs), "cases": cs,
     })))
 }
 
@@ -167,89 +185,109 @@ async fn preset_name(state: &AppState, id: i64) -> String {
         .unwrap_or_else(|| format!("preset {id} (supprimé)"))
 }
 
-type CaseRow = (
-    i64,
-    String,
-    Option<String>,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<f64>,
-    Option<String>,
-    Option<f64>,
-    Option<String>,
-    Option<i64>,
-    Option<i64>,
-    Option<i64>,
-);
+#[derive(sqlx::FromRow)]
+struct CaseRow {
+    id: i64,
+    case_key: String,
+    session_id: Option<String>,
+    status: String,
+    reason: Option<String>,
+    audit_json: Option<String>,
+    points: Option<f64>,
+    points_max: Option<i64>,
+    verdict: Option<String>,
+    visual: Option<i64>,
+    comment: Option<String>,
+    audited_at: Option<i64>,
+    started_at: Option<i64>,
+    finished_at: Option<i64>,
+}
+
+fn case_json(r: CaseRow) -> Value {
+    let def = cases::get(&r.case_key);
+    json!({
+        "id": r.id, "key": r.case_key, "title": def.map(|c| c.title).unwrap_or("(test retiré)"),
+        "family": def.map(|c| c.family.key()).unwrap_or("code"),
+        "session_id": r.session_id, "status": r.status, "reason": r.reason,
+        "audit": r.audit_json.and_then(|a| serde_json::from_str::<Value>(&a).ok()),
+        "points": r.points, "points_max": r.points_max.or(def.map(|c| c.points_max() as i64)),
+        "verdict": r.verdict, "visual": r.visual, "comment": r.comment,
+        "audited_at": r.audited_at, "started_at": r.started_at, "finished_at": r.finished_at,
+    })
+}
 
 async fn case_rows(state: &AppState, run_id: i64) -> Result<Vec<Value>, ApiError> {
     let rows: Vec<CaseRow> = sqlx::query_as(
-        "SELECT id, case_key, session_id, status, reason, audit_json, auto_score, manual_json, manual_score, comment, audited_at, started_at, finished_at \
-         FROM bench_cases WHERE run_id = ? ORDER BY id",
+        "SELECT id, case_key, session_id, status, reason, audit_json, points, points_max, verdict, visual, comment, \
+         audited_at, started_at, finished_at FROM bench_cases WHERE run_id = ? ORDER BY id",
     )
     .bind(run_id)
     .fetch_all(state.db())
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(
-            |(id, key, sid, status, reason, audit, auto, manual, mscore, comment, audited, started, finished)| {
-                let title = cases::get(&key).map(|c| c.title).unwrap_or("(cas retiré)");
-                json!({
-                    "id": id, "key": key, "title": title, "session_id": sid, "status": status, "reason": reason,
-                    "audit": audit.and_then(|a| serde_json::from_str::<Value>(&a).ok()),
-                    "auto_score": auto, "manual": manual.and_then(|m| serde_json::from_str::<Value>(&m).ok()),
-                    "manual_score": mscore, "final": final_score(auto, mscore), "comment": comment,
-                    "audited_at": audited, "started_at": started, "finished_at": finished,
-                })
-            },
-        )
-        .collect())
+    Ok(rows.into_iter().map(case_json).collect())
 }
 
 #[derive(Deserialize)]
 pub struct RateBody {
-    fonctionne: i64,
-    qualite: i64,
-    rendu: i64,
-    consigne: i64,
+    visual: Option<i64>,
     comment: Option<String>,
 }
 
+/// Note visuelle (tests visuels, 1 à 5) et commentaire (tous les tests).
 pub async fn rate(
     State(state): State<AppState>,
     UrlPath((run_id, case_id)): UrlPath<(i64, i64)>,
     ApiJson(b): ApiJson<RateBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let axes = [b.fonctionne, b.qualite, b.rendu, b.consigne];
-    if axes.iter().any(|v| !(1..=5).contains(v)) {
-        return Err(ApiError::BadRequest);
-    }
-    let audited: Option<Option<i64>> =
-        sqlx::query_scalar("SELECT audited_at FROM bench_cases WHERE id = ? AND run_id = ?")
+    let row: Option<(String, Option<i64>)> =
+        sqlx::query_as("SELECT case_key, audited_at FROM bench_cases WHERE id = ? AND run_id = ?")
             .bind(case_id)
             .bind(run_id)
             .fetch_optional(state.db())
             .await?;
-    match audited {
-        None => return Err(ApiError::NotFound),
-        Some(None) => return Err(ApiError::NotAudited),
-        Some(Some(_)) => {}
+    let Some((key, audited)) = row else {
+        return Err(ApiError::NotFound);
+    };
+    if audited.is_none() {
+        return Err(ApiError::NotAudited);
     }
-    let manual = json!({"fonctionne": b.fonctionne, "qualite": b.qualite, "rendu": b.rendu, "consigne": b.consigne});
+    let visual_case = cases::get(&key).is_some_and(|c| c.family == Family::Visual);
+    if let Some(v) = b.visual
+        && (!visual_case || !(1..=5).contains(&v))
+    {
+        return Err(ApiError::BadRequest);
+    }
     let comment = b
         .comment
         .map(|c| c.trim().chars().take(4000).collect::<String>())
         .filter(|c| !c.is_empty());
-    sqlx::query("UPDATE bench_cases SET manual_json = ?, manual_score = ?, comment = ? WHERE id = ?")
-        .bind(manual.to_string())
-        .bind(manual_score(&axes))
+    sqlx::query("UPDATE bench_cases SET visual = COALESCE(?, visual), comment = ? WHERE id = ?")
+        .bind(b.visual)
         .bind(comment)
         .bind(case_id)
         .execute(state.db())
         .await?;
-    Ok(Json(json!({"ok": true, "manual_score": manual_score(&axes)})))
+    Ok(Json(json!({"ok": true})))
+}
+
+/// Capture d'un test (`desktop` ou `phone`).
+pub async fn shot(
+    State(state): State<AppState>,
+    UrlPath((case_id, name)): UrlPath<(i64, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let name = name.trim_end_matches(".png");
+    if !matches!(name, "desktop" | "phone") {
+        return Err(ApiError::NotFound);
+    }
+    let path = audit::shots_dir(&state, case_id).join(format!("{name}.png"));
+    let bytes = tokio::fs::read(path).await.map_err(|_| ApiError::NotFound)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "private, max-age=86400"),
+        ],
+        bytes,
+    ))
 }
 
 pub async fn stop(State(state): State<AppState>, UrlPath(id): UrlPath<i64>) -> Result<Json<Value>, ApiError> {
@@ -285,13 +323,15 @@ pub async fn delete_run(State(state): State<AppState>, UrlPath(id): UrlPath<i64>
     if status == "running" {
         return Err(ApiError::JobRunning);
     }
-    let sids: Vec<String> =
-        sqlx::query_scalar("SELECT session_id FROM bench_cases WHERE run_id = ? AND session_id IS NOT NULL")
-            .bind(id)
-            .fetch_all(state.db())
-            .await?;
-    for sid in sids {
-        if let Err(e) = sessions::delete(State(state.clone()), UrlPath(sid.clone())).await {
+    let rows: Vec<(i64, Option<String>)> = sqlx::query_as("SELECT id, session_id FROM bench_cases WHERE run_id = ?")
+        .bind(id)
+        .fetch_all(state.db())
+        .await?;
+    for (cid, sid) in rows {
+        let _ = std::fs::remove_dir_all(audit::shots_dir(&state, cid));
+        if let Some(sid) = sid
+            && let Err(e) = sessions::delete(State(state.clone()), UrlPath(sid.clone())).await
+        {
             tracing::warn!("tester : suppression de la session {sid} : {e:?}");
         }
     }
@@ -302,39 +342,53 @@ pub async fn delete_run(State(state): State<AppState>, UrlPath(id): UrlPath<i64>
     Ok(Json(json!({"ok": true})))
 }
 
-/// (run, preset, cas, auto, manuelle)
-type ScoreRow = (i64, i64, String, Option<f64>, Option<f64>);
-/// preset -> cas -> (somme des notes, nombre, runs)
-type Acc = BTreeMap<i64, BTreeMap<String, (f64, usize, std::collections::BTreeSet<i64>)>>;
-
-/// Moyenne des notes finales par preset et par cas (cas notés seulement).
+/// Par preset : résumé de tous ses tests audités, et résultat moyen par test.
 pub async fn compare(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let rows: Vec<ScoreRow> = sqlx::query_as(
-        "SELECT r.id, r.preset_id, c.case_key, c.auto_score, c.manual_score \
-         FROM bench_cases c JOIN bench_runs r ON r.id = c.run_id WHERE c.manual_score IS NOT NULL",
-    )
-    .fetch_all(state.db())
-    .await?;
-    // preset -> cas -> (somme, nombre, runs)
-    let mut acc: Acc = BTreeMap::new();
-    for (run, preset, key, auto, manual) in rows {
-        let Some(f) = final_score(auto, manual) else { continue };
-        let e = acc.entry(preset).or_default().entry(key).or_default();
-        e.0 += f;
+    let runs: Vec<(i64, i64)> = sqlx::query_as("SELECT id, preset_id FROM bench_runs ORDER BY id")
+        .fetch_all(state.db())
+        .await?;
+    let mut per_preset: BTreeMap<i64, (Vec<Value>, usize)> = BTreeMap::new();
+    for (run, preset) in runs {
+        let cs: Vec<Value> = case_rows(&state, run)
+            .await?
+            .into_iter()
+            .filter(|c| c["verdict"].is_string())
+            .collect();
+        if cs.is_empty() {
+            continue;
+        }
+        let e = per_preset.entry(preset).or_default();
+        e.0.extend(cs);
         e.1 += 1;
-        e.2.insert(run);
     }
     let mut out = Vec::new();
-    for (preset, per_case) in acc {
-        let all_runs: std::collections::BTreeSet<i64> = per_case.values().flat_map(|v| v.2.iter().copied()).collect();
-        let cases_json: Vec<Value> = per_case
+    for (preset, (cs, nruns)) in per_preset {
+        let mut by_case: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
+        for c in &cs {
+            by_case
+                .entry(c["key"].as_str().unwrap_or("").to_string())
+                .or_default()
+                .push(c);
+        }
+        let cases_json: Vec<Value> = by_case
             .iter()
-            .map(|(k, (sum, n, runs))| json!({"key": k, "average": sum / *n as f64, "runs": runs.len()}))
+            .map(|(k, v)| {
+                let pct: Vec<f64> = v
+                    .iter()
+                    .filter_map(|c| Some(c["points"].as_f64()? / c["points_max"].as_f64().filter(|m| *m > 0.0)?))
+                    .collect();
+                let vis: Vec<f64> = v.iter().filter_map(|c| c["visual"].as_f64()).collect();
+                json!({
+                    "key": k, "samples": v.len(),
+                    "result": (!pct.is_empty()).then(|| pct.iter().sum::<f64>() / pct.len() as f64 * 100.0),
+                    "passed": v.iter().filter(|c| c["verdict"] == "passed").count(),
+                    "visual": (!vis.is_empty()).then(|| vis.iter().sum::<f64>() / vis.len() as f64),
+                })
+            })
             .collect();
-        let total: f64 = per_case.values().map(|(s, n, _)| s / *n as f64).sum::<f64>() / per_case.len() as f64;
         out.push(json!({
-            "preset_id": preset, "preset": preset_name(&state, preset).await,
-            "runs": all_runs.len(), "average": total, "cases": cases_json,
+            "preset_id": preset, "preset": preset_name(&state, preset).await, "runs": nruns,
+            "summary": summarize(&cs), "cases": cases_json,
         }));
     }
     Ok(Json(json!(out)))
@@ -343,19 +397,19 @@ pub async fn compare(State(state): State<AppState>) -> Result<Json<Value>, ApiEr
 // ---- Exécution ----
 
 async fn run_status(state: &AppState, run_id: i64) -> String {
-    sqlx::query_scalar::<_, String>("SELECT status FROM bench_runs WHERE id = ?")
+    sqlx::query_scalar("SELECT status FROM bench_runs WHERE id = ?")
         .bind(run_id)
         .fetch_optional(state.db())
         .await
         .ok()
         .flatten()
-        .unwrap_or_default()
+        .unwrap_or_else(|| "stopped".into())
 }
 
-/// Les cas jamais lancés d'un run arrêté ne restent pas « en attente ».
+/// Les tests jamais lancés d'un run arrêté sont clos (pas d'attente sans fin).
 async fn close_pending(state: &AppState, run_id: i64) {
     let _ = sqlx::query(
-        "UPDATE bench_cases SET status = 'failed', reason = 'non lancé (run arrêté)' WHERE run_id = ? AND status = 'pending'",
+        "UPDATE bench_cases SET status = 'failed', reason = 'arrêté avant de commencer' WHERE run_id = ? AND status = 'pending'",
     )
     .bind(run_id)
     .execute(state.db())
@@ -363,13 +417,17 @@ async fn close_pending(state: &AppState, run_id: i64) {
 }
 
 async fn finish_run(state: &AppState, run_id: i64, status: &str) {
-    close_pending(state, run_id).await;
-    let _ = sqlx::query("UPDATE bench_runs SET status = ?, finished_at = ? WHERE id = ? AND status = 'running'")
-        .bind(status)
-        .bind(now())
-        .bind(run_id)
-        .execute(state.db())
-        .await;
+    let _ = sqlx::query(
+        "UPDATE bench_runs SET status = ?, finished_at = COALESCE(finished_at, ?) WHERE id = ? AND status = 'running'",
+    )
+    .bind(status)
+    .bind(now())
+    .bind(run_id)
+    .execute(state.db())
+    .await;
+    if status != "done" {
+        close_pending(state, run_id).await;
+    }
 }
 
 async fn run_task(state: AppState, run_id: i64, preset: i64, cases_list: Vec<(i64, &'static Case)>) {
@@ -388,7 +446,7 @@ async fn run_task(state: AppState, run_id: i64, preset: i64, cases_list: Vec<(i6
             stopped = true;
             break;
         }
-        // Le preset actif a changé : le lot s'arrête (les cas restants restent en attente).
+        // Le preset actif a changé : le lot s'arrête (les tests restants sont clos).
         if presets::active_id(&state).await.ok().flatten() != Some(preset) {
             tracing::warn!("tester : preset actif changé, run {run_id} arrêté");
             stopped = true;
@@ -397,7 +455,6 @@ async fn run_task(state: AppState, run_id: i64, preset: i64, cases_list: Vec<(i6
         run_case(&state, run_id, preset, case_id, case, &topic).await;
     }
     finish_run(&state, run_id, if stopped { "stopped" } else { "done" }).await;
-    // Arrêt demandé pendant le dernier cas : la boucle ne l'a pas vu.
     let word = if run_status(&state, run_id).await == "stopped" {
         "arrêté"
     } else {
@@ -405,7 +462,7 @@ async fn run_task(state: AppState, run_id: i64, preset: i64, cases_list: Vec<(i6
     };
     crate::feed::emit(
         &state,
-        crate::feed::Note::new("bench", "info", format!("Tester : run {run_id} {word} ({total} cas)")).link("#bench"),
+        crate::feed::Note::new("bench", "info", format!("Tester : run {run_id} {word} ({total} tests)")).link("#bench"),
     );
 }
 
@@ -424,6 +481,14 @@ fn write_file(dir: &Path, rel: &str, content: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(p, content)
+}
+
+async fn set_reason(state: &AppState, case_id: i64, reason: &str) {
+    let _ = sqlx::query("UPDATE bench_cases SET reason = ? WHERE id = ?")
+        .bind((!reason.is_empty()).then_some(reason))
+        .bind(case_id)
+        .execute(state.db())
+        .await;
 }
 
 async fn run_case(
@@ -446,8 +511,8 @@ async fn run_case(
         return;
     };
     let dir = snapshots::own_dir(&topic.dir, &work_dir);
-    for (rel, content) in case.files {
-        if let Err(e) = write_file(&dir, rel, content) {
+    for (rel, content) in case.start_files() {
+        if let Err(e) = write_file(&dir, &rel, &content) {
             fail_case(state, case_id, &format!("fichier de départ {rel} : {e}")).await;
             return;
         }
@@ -457,7 +522,7 @@ async fn run_case(
         .bind(&sid)
         .execute(state.db())
         .await;
-    // La ligne du cas est écrite avant le tour : la sandbox démarre sans secrets.
+    // La ligne du test est écrite avant toute sandbox : elle démarre sans secrets.
     let started = now();
     let _ = sqlx::query("UPDATE bench_cases SET session_id = ?, status = 'running', started_at = ? WHERE id = ?")
         .bind(&sid)
@@ -465,45 +530,58 @@ async fn run_case(
         .bind(case_id)
         .execute(state.db())
         .await;
-    // Stop arrivé pendant la préparation : pas de tour.
     if run_status(state, run_id).await != "running" {
         fail_case(state, case_id, "arrêté").await;
         return;
     }
+    if let Some(setup) = case.setup {
+        set_reason(state, case_id, "préparation…").await;
+        match audit::exec(state, &sid, setup, 120).await {
+            Ok((0, _)) => set_reason(state, case_id, "").await,
+            Ok((code, out)) => {
+                fail_case(
+                    state,
+                    case_id,
+                    &format!("préparation (code {code}) : {}", crate::crons::tail(&out)),
+                )
+                .await;
+                return;
+            }
+            Err(e) => {
+                fail_case(state, case_id, &format!("préparation : {e}")).await;
+                return;
+            }
+        }
+    }
     let timeout = Duration::from_secs(case.timeout_s.min(MAX_TURN_S));
     let (outcome, message) = crate::crons::run_prompt(state, &sid, case.prompt, timeout, "bench").await;
-    let stopped = run_status(state, run_id).await != "running";
     let (status, reason) = if outcome == "ok" {
         ("done", None)
     } else if message.starts_with("délai dépassé") {
-        ("failed", Some("plafond de temps".to_string()))
+        (
+            "failed",
+            Some("plafond de temps atteint (contrôlé quand même)".to_string()),
+        )
     } else {
         ("failed", Some(message.chars().take(300).collect::<String>()))
     };
-    // Arrêté : pas d'audit (il lancerait encore les critères), donc pas de note.
-    if stopped {
+    // Arrêté : pas d'audit (il lancerait encore les contrôles).
+    if run_status(state, run_id).await != "running" {
         fail_case(state, case_id, "arrêté").await;
         return;
     }
-    // Phase visible dans la page pendant que les critères tournent.
-    let _ = sqlx::query("UPDATE bench_cases SET reason = 'audit des critères…' WHERE id = ?")
-        .bind(case_id)
-        .execute(state.db())
-        .await;
-    let audit = audit(state, case, &sid, &dir, started).await;
-    let auto: Option<f64> = {
-        let crit = audit["criteria"].as_array().cloned().unwrap_or_default();
-        (!crit.is_empty())
-            .then(|| crit.iter().filter(|c| c["ok"].as_bool() == Some(true)).count() as f64 / crit.len() as f64 * 100.0)
-    };
+    set_reason(state, case_id, "contrôles en cours…").await;
+    let audit = audit::run(state, case, case_id, &sid, &dir, started).await;
     let _ = sqlx::query(
-        "UPDATE bench_cases SET status = ?, reason = ?, audit_json = ?, auto_score = ?, audited_at = ?, finished_at = ? \
-         WHERE id = ?",
+        "UPDATE bench_cases SET status = ?, reason = ?, audit_json = ?, points = ?, points_max = ?, verdict = ?, \
+         audited_at = ?, finished_at = ? WHERE id = ?",
     )
     .bind(status)
     .bind(reason)
     .bind(audit.to_string())
-    .bind(auto)
+    .bind(audit["points"].as_f64())
+    .bind(audit["points_max"].as_i64())
+    .bind(audit["verdict"].as_str())
     .bind(now())
     .bind(now())
     .bind(case_id)
@@ -511,305 +589,24 @@ async fn run_case(
     .await;
 }
 
-// ---- Audit ----
-
-async fn audit(state: &AppState, case: &Case, sid: &str, dir: &Path, since: i64) -> Value {
-    // Les fichiers de test fournis sont remis tels quels avant les critères.
-    restore_protected(case, dir);
-    let criteria = run_criteria(state, case, sid).await;
-    json!({
-        "criteria": criteria,
-        "auto_count": criteria.len(),
-        "alerts": alerts(state, case, sid, dir).await,
-        "metrics": metrics(state, sid, since).await,
-    })
-}
-
-/// Le dossier est écrit par la sandbox : on passe par `files::*_beneath`
-/// (aucun lien suivi), sinon un test remplacé par un lien ferait écrire hors du dossier.
-fn restore_protected(case: &Case, dir: &Path) {
-    for rel in case.protected {
-        if let Some((_, content)) = case.files.iter().find(|(r, _)| r == rel) {
-            let res = crate::files::remove_beneath(dir, rel)
-                .and_then(|()| crate::files::create_beneath(dir, rel, content.as_bytes()));
-            if let Err(e) = res {
-                tracing::warn!("tester : restauration de {rel} : {e}");
-            }
-        }
-    }
-}
-
-async fn run_criteria(state: &AppState, case: &Case, sid: &str) -> Vec<Value> {
-    let hub = bridge::hub(state, sid);
-    let _ = crate::sessions::make_room(state, sid).await;
-    let conn = hub.ready(state).await;
-    let mut out = Vec::new();
-    for c in case.criteria {
-        let Ok((client, cwd)) = &conn else {
-            out.push(json!({"name": c.name, "ok": false, "proof": format!("sandbox : {}", conn.as_ref().err().cloned().unwrap_or_default())}));
-            continue;
-        };
-        let script = format!("export BENCH_DIR=\"$PWD\"\n{}", c.script);
-        let mut params = enginex_codex::types::command_exec(
-            &["bash", "-lc", &script],
-            cwd,
-            None,
-            None,
-            Some(CRITERION_TIMEOUT_S * 1000),
-        );
-        params["outputBytesCap"] = json!(64 * 1024);
-        let r = client
-            .request_with_timeout(
-                "command/exec",
-                params,
-                Some(Duration::from_secs(CRITERION_TIMEOUT_S + 30)),
-            )
-            .await;
-        hub.touch_activity();
-        let (ok, proof) = match r {
-            Ok(v) => {
-                let code = v["exitCode"].as_i64().unwrap_or(-1);
-                let text = format!(
-                    "{}{}",
-                    v["stdout"].as_str().unwrap_or(""),
-                    v["stderr"].as_str().unwrap_or("")
-                );
-                (code == 0, format!("code {code}\n{}", crate::crons::tail(&text)))
-            }
-            Err(enginex_codex::Error::Timeout(_)) => (false, "délai dépassé".to_string()),
-            Err(e) => (false, format!("command/exec : {e}")),
-        };
-        let proof = state.masker().mask(&proof).into_owned();
-        out.push(json!({"name": c.name, "ok": ok, "proof": proof.chars().take(PROOF_MAX).collect::<String>()}));
-    }
-    out
-}
-
-/// Commandes lancées par le modèle (`commandExecution`), dans l'ordre.
-async fn commands(state: &AppState, sid: &str) -> Vec<String> {
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT data FROM chat_items WHERE session_id = ? AND kind = 'commandExecution' ORDER BY seq",
-    )
-    .bind(sid)
-    .fetch_all(state.db())
-    .await
-    .unwrap_or_default();
-    rows.iter()
-        .filter_map(|d| serde_json::from_str::<Value>(d).ok())
-        .filter_map(|v| v["command"].as_str().map(str::to_string))
-        .collect()
-}
-
-fn normalize(cmd: &str) -> String {
-    cmd.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Alertes d'affichage (jamais dans le score) : fichier trop long, même
-/// commande répétée, paquet ajouté que la consigne ne cite pas.
-async fn alerts(state: &AppState, case: &Case, sid: &str, dir: &Path) -> Vec<Value> {
-    let mut out = Vec::new();
-    let mut big = Vec::new();
-    big_files(dir, dir, 0, case, &mut big);
-    for (rel, n) in big {
-        out.push(json!({"kind": "big_file", "text": format!("{rel} : {n} lignes (> {BIG_FILE_LINES})")}));
-    }
-    let cmds = commands(state, sid).await;
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for c in &cmds {
-        *counts.entry(normalize(c)).or_default() += 1;
-    }
-    for (c, n) in counts {
-        if n >= REPEAT_COMMAND {
-            out.push(json!({"kind": "repeated_command", "text": format!("{n} fois : {}", c.chars().take(160).collect::<String>())}));
-        }
-    }
-    let prompt = case.prompt.to_lowercase();
-    for c in &cmds {
-        for pkg in added_packages(c) {
-            if !prompt.contains(&pkg.to_lowercase()) {
-                out.push(json!({"kind": "added_package", "text": format!("{pkg} ajouté ({})", c.chars().take(120).collect::<String>())}));
-            }
-        }
-    }
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|a| seen.insert(a.to_string()));
-    out
-}
-
-/// Paquets installés par une commande (`npm i x`, `pip install x`, `cargo add x`…).
-fn added_packages(cmd: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    for part in cmd.split(['&', ';', '|', '\n']) {
-        let t: Vec<&str> = part.split_whitespace().collect();
-        let pos = t
-            .iter()
-            .position(|w| matches!(*w, "npm" | "pnpm" | "yarn" | "pip" | "pip3" | "cargo"));
-        let Some(i) = pos else { continue };
-        let verb_ok = t.get(i + 1).is_some_and(|v| matches!(*v, "install" | "i" | "add"));
-        if !verb_ok {
-            continue;
-        }
-        for w in &t[i + 2..] {
-            // `pip install -r x`, `npm install` seul, options et chemins : pas des paquets.
-            if w.starts_with('-') || w.contains('/') && !w.starts_with('@') || w.contains('.') && !w.starts_with('@') {
-                continue;
-            }
-            found.push(w.to_string());
-        }
-    }
-    found
-}
-
-fn big_files(root: &Path, dir: &Path, depth: usize, case: &Case, out: &mut Vec<(String, usize)>) {
-    if depth > 4 {
-        return;
-    }
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        let name = e.file_name().to_string_lossy().to_string();
-        // Liens ignorés : ils peuvent pointer hors du dossier de la session.
-        let Ok(ft) = e.file_type() else { continue };
-        if ft.is_symlink() {
-            continue;
-        }
-        if ft.is_dir() {
-            if matches!(
-                name.as_str(),
-                ".git" | "node_modules" | "__pycache__" | ".enginex" | "target" | "venv" | ".venv"
-            ) {
-                continue;
-            }
-            big_files(root, &p, depth + 1, case, out);
-        } else if ft.is_file() && e.metadata().is_ok_and(|m| m.len() <= MAX_SCAN_BYTES) {
-            let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().to_string();
-            let Some(text) =
-                crate::files::read_beneath(root, &rel, MAX_SCAN_BYTES as usize).and_then(|b| String::from_utf8(b).ok())
-            else {
-                continue;
-            };
-            if case.files.iter().any(|(r, _)| *r == rel) || rel.ends_with(".json") || rel.ends_with(".lock") {
-                continue;
-            }
-            let n = text.lines().count();
-            if n > BIG_FILE_LINES {
-                out.push((rel, n));
-            }
-        }
-    }
-}
-
-/// Durée du tour (hors attente en file : de `started_at` à `completed_at`),
-/// jetons, débit moyen, nombre de commandes et de fichiers écrits.
-async fn metrics(state: &AppState, sid: &str, since: i64) -> Value {
-    let turns: Vec<(Option<i64>, i64, Option<String>)> = sqlx::query_as(
-        "SELECT completed_at, started_at, usage FROM chat_turns WHERE session_id = ? AND started_at >= ? ORDER BY started_at",
-    )
-    .bind(sid)
-    .bind(since)
-    .fetch_all(state.db())
-    .await
-    .unwrap_or_default();
-    let duration: i64 = turns.iter().map(|(end, start, _)| end.unwrap_or(*start) - start).sum();
-    let tokens: i64 = turns
-        .iter()
-        .filter_map(|(_, _, u)| u.as_deref().and_then(|u| serde_json::from_str::<Value>(u).ok()))
-        .map(|u| {
-            u["total"]["totalTokens"]
-                .as_i64()
-                .or_else(|| u["totalTokens"].as_i64())
-                .unwrap_or(0)
-        })
-        .sum();
-    let items: Vec<(String, String)> =
-        sqlx::query_as("SELECT kind, data FROM chat_items WHERE session_id = ? ORDER BY seq")
-            .bind(sid)
-            .fetch_all(state.db())
-            .await
-            .unwrap_or_default();
-    let (mut cmds, mut files, mut tps_sum, mut tps_n) = (0, 0, 0.0, 0);
-    for (kind, data) in &items {
-        match kind.as_str() {
-            "commandExecution" => cmds += 1,
-            "fileChange" => files += 1,
-            _ => {}
-        }
-        if let Some(t) = serde_json::from_str::<Value>(data)
-            .ok()
-            .and_then(|v| v["gen"]["tps"].as_f64())
-            && t > 0.0
-        {
-            tps_sum += t;
-            tps_n += 1;
-        }
-    }
-    json!({
-        "duration_s": duration, "tokens": tokens, "commands": cmds, "file_changes": files,
-        "tps": (tps_n > 0).then(|| tps_sum / tps_n as f64), "turns": turns.len(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn manual_scale() {
-        assert_eq!(manual_score(&[1, 1, 1, 1]), 0.0);
-        assert_eq!(manual_score(&[5, 5, 5, 5]), 100.0);
-        assert_eq!(manual_score(&[3, 3, 3, 3]), 50.0);
-    }
-
-    #[test]
-    fn final_is_half_and_half() {
-        assert_eq!(final_score(Some(100.0), Some(50.0)), Some(75.0));
-        assert_eq!(final_score(None, Some(50.0)), Some(50.0));
-        assert_eq!(final_score(Some(100.0), None), None);
-    }
-
-    #[test]
-    fn packages_are_found() {
-        assert_eq!(added_packages("npm install jsdom express"), vec!["jsdom", "express"]);
-        assert_eq!(added_packages("cd x && pip install requests"), vec!["requests"]);
-        assert!(added_packages("npm install").is_empty());
-        assert!(added_packages("pip install -r requirements.txt").is_empty());
-        assert!(added_packages("python3 -m unittest").is_empty());
-    }
-
-    #[test]
-    fn every_case_is_well_formed() {
-        for c in cases::all() {
-            assert!(c.criteria.len() >= 3, "{} : au moins 3 critères", c.key);
-            assert!(c.timeout_s <= MAX_TURN_S, "{}", c.key);
-            for p in c.protected {
-                assert!(c.files.iter().any(|(r, _)| r == p), "{} : {p} non fourni", c.key);
-            }
-        }
-        assert_eq!(cases::all().len(), 10);
-    }
-
-    #[test]
-    fn restore_and_scan_never_follow_links() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (work, outside) = (tmp.path().join("w"), tmp.path().join("hors.txt"));
-        std::fs::create_dir(&work).unwrap();
-        std::fs::write(&outside, "x\n".repeat(BIG_FILE_LINES + 10)).unwrap();
-        let case = cases::get("bugfix").unwrap();
-        let rel = case.protected[0];
-        std::os::unix::fs::symlink(&outside, work.join(rel)).unwrap();
-        std::os::unix::fs::symlink(tmp.path(), work.join("lien")).unwrap();
-        restore_protected(case, &work);
-        // Le fichier hors du dossier est intact, le test est redevenu un vrai fichier.
-        assert_eq!(
-            std::fs::read_to_string(&outside).unwrap().lines().count(),
-            BIG_FILE_LINES + 10
-        );
-        let m = std::fs::symlink_metadata(work.join(rel)).unwrap();
-        assert!(m.is_file());
-        let want = case.files.iter().find(|(r, _)| *r == rel).unwrap().1;
-        assert_eq!(std::fs::read_to_string(work.join(rel)).unwrap(), want);
-        let mut big = Vec::new();
-        big_files(&work, &work, 0, case, &mut big);
-        assert!(big.is_empty(), "{big:?}");
+    fn summary_counts() {
+        let c = |v: &str, p: f64, fam: &str, vis: Option<i64>| json!({"verdict": v, "points": p, "points_max": 20, "family": fam, "visual": vis});
+        let s = summarize(&[
+            c("passed", 20.0, "visual", Some(4)),
+            c("partial", 10.0, "visual", None),
+            c("failed", 0.0, "code", None),
+            json!({"verdict": null, "family": "code"}),
+        ]);
+        assert_eq!(s["passed"], 1);
+        assert_eq!(s["partial"], 1);
+        assert_eq!(s["failed"], 1);
+        assert_eq!(s["result"].as_f64(), Some(50.0));
+        assert_eq!(s["visual"].as_f64(), Some(4.0));
+        assert_eq!(s["to_rate"], 1);
     }
 }

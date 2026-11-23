@@ -1243,57 +1243,79 @@ export const deleteWebhook = (id: number) => request('DELETE', `/api/webhooks/${
 
 // ---- Tester (page Tester) ----
 
+export type BenchFamily = 'visual' | 'code' | 'tools';
+export type BenchVerdict = 'passed' | 'partial' | 'failed';
+
 export interface BenchCaseDef {
   key: string;
   title: string;
+  family: BenchFamily;
+  summary: string;
   prompt: string;
-  criteria_count: number;
   timeout_s: number;
+  points_max: number;
+  checks: { name: string; points: number; essential: boolean }[];
 }
 
-export interface BenchCriterion {
+export interface BenchCheck {
   name: string;
+  points: number;
+  earned: number;
+  essential: boolean;
   ok: boolean;
   proof: string;
+  kind: 'shell' | 'page' | 'console' | 'log';
 }
 
 export interface BenchAudit {
-  criteria: BenchCriterion[];
-  auto_count: number;
+  checks: BenchCheck[];
+  points: number;
+  points_max: number;
+  verdict: BenchVerdict;
+  shots: ('desktop' | 'phone')[];
+  visual: boolean;
   alerts: { kind: 'big_file' | 'repeated_command' | 'added_package'; text: string }[];
   metrics: {
     duration_s: number;
     tokens: number;
     commands: number;
-    file_changes: number;
+    tools: number;
     tps: number | null;
     turns: number;
   };
-}
-
-export interface BenchManual {
-  fonctionne: number;
-  qualite: number;
-  rendu: number;
-  consigne: number;
 }
 
 export interface BenchCase {
   id: number;
   key: string;
   title: string;
+  family: BenchFamily;
   session_id: string | null;
   status: 'pending' | 'running' | 'done' | 'failed';
   reason: string | null;
   audit: BenchAudit | null;
-  auto_score: number | null;
-  manual: BenchManual | null;
-  manual_score: number | null;
-  final: number | null;
+  points: number | null;
+  points_max: number | null;
+  verdict: BenchVerdict | null;
+  visual: number | null;
   comment: string | null;
   audited_at: number | null;
   started_at: number | null;
   finished_at: number | null;
+}
+
+export interface BenchSummary {
+  cases: number;
+  audited: number;
+  passed: number;
+  partial: number;
+  failed: number;
+  result: number | null;
+  visual: number | null;
+  visual_rated: number;
+  to_rate: number;
+  duration_s: number;
+  tps: number | null;
 }
 
 export interface BenchRunSummary {
@@ -1303,12 +1325,10 @@ export interface BenchRunSummary {
   status: 'running' | 'done' | 'stopped';
   started_at: number;
   finished_at: number | null;
-  cases: number;
-  rated: number;
-  average: number | null;
+  summary: BenchSummary;
 }
 
-export interface BenchRun extends Omit<BenchRunSummary, 'cases' | 'rated' | 'average'> {
+export interface BenchRun extends BenchRunSummary {
   cases: BenchCase[];
 }
 
@@ -1316,8 +1336,8 @@ export interface BenchCompare {
   preset_id: number;
   preset: string;
   runs: number;
-  average: number;
-  cases: { key: string; average: number; runs: number }[];
+  summary: BenchSummary;
+  cases: { key: string; samples: number; result: number | null; passed: number; visual: number | null }[];
 }
 
 export const benchCases = () => request<BenchCaseDef[]>('GET', '/api/bench/cases');
@@ -1326,6 +1346,7 @@ export const benchRun = (id: number) => request<BenchRun>('GET', `/api/bench/run
 export const startBench = (cases?: string[]) => request<{ id: number }>('POST', '/api/bench/runs', { cases });
 export const stopBench = (id: number) => request('POST', `/api/bench/runs/${id}/stop`, {});
 export const deleteBench = (id: number) => request('DELETE', `/api/bench/runs/${id}`);
-export const rateBench = (run: number, caseId: number, b: BenchManual & { comment?: string }) =>
+export const rateBench = (run: number, caseId: number, b: { visual?: number; comment?: string }) =>
   request('POST', `/api/bench/runs/${run}/cases/${caseId}/rate`, b);
 export const benchCompare = () => request<BenchCompare[]>('GET', '/api/bench/compare');
+export const benchShotUrl = (caseId: number, name: string) => `/api/bench/cases/${caseId}/shots/${name}`;

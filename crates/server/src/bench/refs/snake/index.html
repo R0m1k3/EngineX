@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snake</title>
+<style>
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #10151b; color: #dfe8ef; font-family: system-ui, sans-serif; }
+  canvas { background: #18212b; border-radius: 8px; max-width: 94vw; } #msg { height: 1.4em; }
+</style>
+</head>
+<body>
+<div>
+  <p>Score : <strong id="score">0</strong></p>
+  <canvas id="game" width="400" height="400"></canvas>
+  <p id="msg"></p>
+</div>
+<script>
+  const COLS = 20, ROWS = 20, C = 20, cv = document.getElementById('game'), ctx = cv.getContext('2d');
+  let snake, dir, next, food, score, over, timer;
+  const D = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+  const OPP = { up: 'down', down: 'up', left: 'right', right: 'left' };
+  function placeFood() { do { food = { x: Math.floor(Math.random() * COLS), y: Math.floor(Math.random() * ROWS) }; } while (snake.some((s) => s.x === food.x && s.y === food.y)); }
+  function reset() { snake = [{ x: 5, y: 10 }, { x: 4, y: 10 }, { x: 3, y: 10 }]; dir = next = 'right'; score = 0; over = false; placeFood(); document.getElementById('msg').textContent = ''; clearInterval(timer); timer = setInterval(step, 120); draw(); }
+  function step() {
+    if (over) return; dir = next;
+    const h = { x: snake[0].x + D[dir][0], y: snake[0].y + D[dir][1] };
+    if (h.x < 0 || h.y < 0 || h.x >= COLS || h.y >= ROWS || snake.some((s) => s.x === h.x && s.y === h.y)) { over = true; document.getElementById('msg').textContent = 'Partie terminée — Entrée pour rejouer'; return draw(); }
+    snake.unshift(h);
+    if (h.x === food.x && h.y === food.y) { score++; placeFood(); } else snake.pop();
+    draw();
+  }
+  function draw() {
+    ctx.fillStyle = '#18212b'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = '#e4572e'; ctx.fillRect(food.x * C + 2, food.y * C + 2, C - 4, C - 4);
+    snake.forEach((s, i) => { ctx.fillStyle = i ? '#76b041' : '#a7d676'; ctx.fillRect(s.x * C + 1, s.y * C + 1, C - 2, C - 2); });
+    document.getElementById('score').textContent = score;
+  }
+  document.addEventListener('keydown', (e) => {
+    const k = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[e.key];
+    if (k) { e.preventDefault(); if (k !== OPP[dir]) next = k; }
+    if (e.key === 'Enter' && over) reset();
+  });
+  window.__game = {
+    state: () => ({ snake: snake.map((s) => ({ ...s })), dir, food: { ...food }, score, over, cols: COLS, rows: ROWS }),
+    setFood: (x, y) => { food = { x, y }; draw(); },
+  };
+  reset();
+</script>
+</body>
+</html>

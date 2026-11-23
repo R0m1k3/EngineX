@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inscription</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #eef1f5; color: #1c2430; }
+  .box { max-width: 440px; margin: 40px auto; background: #fff; padding: 24px; border-radius: 12px; }
+  label { display: block; margin-top: 14px; font-weight: 600; } input[type=text], input[type=email], input[type=password] { width: 100%; padding: 10px; margin-top: 4px; border: 1px solid #b8c2cf; border-radius: 6px; font-size: 1rem; }
+  .err { color: #b3261e; font-size: .9rem; min-height: 1.2em; margin: 4px 0 0; } .terms { font-weight: 400; }
+  button { margin-top: 18px; width: 100%; padding: 12px; border: 0; border-radius: 8px; background: #2459a8; color: #fff; font-size: 1rem; } button:disabled { background: #9aa8bb; }
+  @media (max-width: 480px) { .box { margin: 0; border-radius: 0; } }
+</style>
+</head>
+<body>
+<div class="box">
+  <form id="form" novalidate>
+    <h1>Créer un compte</h1>
+    <label for="name">Nom</label><input id="name" type="text"><p class="err" id="name-error"></p>
+    <label for="email">Email</label><input id="email" type="email"><p class="err" id="email-error"></p>
+    <label for="password">Mot de passe</label><input id="password" type="password"><p class="err" id="password-error"></p>
+    <label for="confirm">Confirmation</label><input id="confirm" type="password"><p class="err" id="confirm-error"></p>
+    <label class="terms"><input id="terms" type="checkbox"> J'accepte les conditions</label>
+    <button id="submit" type="submit" disabled>S'inscrire</button>
+  </form>
+  <p id="success" hidden></p>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id), touched = new Set();
+  const rules = {
+    name: (v) => v.trim().length >= 2 ? '' : 'Au moins 2 caractères.',
+    email: (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? '' : 'Adresse email invalide.',
+    password: (v) => v.length >= 8 && /[a-z]/i.test(v) && /\d/.test(v) ? '' : '8 caractères dont une lettre et un chiffre.',
+    confirm: (v) => v === $('password').value ? '' : 'Les mots de passe diffèrent.',
+  };
+  function update() {
+    let ok = true;
+    for (const k in rules) { const m = rules[k]($(k).value); if (m) ok = false; $(k + '-error').textContent = touched.has(k) ? m : ''; }
+    $('submit').disabled = !(ok && $('terms').checked);
+  }
+  for (const k in rules) $(k).addEventListener('input', () => { touched.add(k); update(); });
+  $('terms').addEventListener('change', update);
+  $('form').addEventListener('submit', (e) => { e.preventDefault(); update(); if ($('submit').disabled) return; $('form').hidden = true; $('success').hidden = false; $('success').textContent = `Bienvenue, ${$('name').value.trim()} !`; });
+</script>
+</body>
+</html>

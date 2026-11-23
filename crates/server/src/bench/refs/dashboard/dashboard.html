@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ventes</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #f6f7f9; color: #1f2933; }
+  main { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+  .wrap { overflow-x: auto; background: #fff; border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; } th, td { padding: 10px; border-bottom: 1px solid #e4e7eb; text-align: left; }
+  th { cursor: pointer; background: #eef2f6; } td.num, th.num { text-align: right; }
+  #chart { width: 100%; max-width: 520px; height: 240px; display: block; margin-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ventes du trimestre</h1>
+  <label>Région <select id="region"><option value="">Toutes</option></select></label>
+  <p>Total : <strong id="total"></strong></p>
+  <div class="wrap"><table><thead><tr><th data-k="region">Région</th><th data-k="produit">Produit</th><th data-k="montant" class="num">Montant</th><th data-k="mois">Mois</th></tr></thead><tbody></tbody></table></div>
+  <svg id="chart" viewBox="0 0 520 240"></svg>
+</main>
+<script>
+  const DATA = [
+    {"region": "Nord", "produit": "Lampe", "montant": 120.5, "mois": "janvier"},
+    {"region": "Nord", "produit": "Tapis", "montant": 310, "mois": "février"},
+    {"region": "Nord", "produit": "Plante", "montant": 45.25, "mois": "mars"},
+    {"region": "Sud", "produit": "Lampe", "montant": 200, "mois": "janvier"},
+    {"region": "Sud", "produit": "Tapis", "montant": 95.75, "mois": "février"},
+    {"region": "Sud", "produit": "Plante", "montant": 60, "mois": "mars"},
+    {"region": "Est", "produit": "Lampe", "montant": 150, "mois": "janvier"},
+    {"region": "Est", "produit": "Tapis", "montant": 410.5, "mois": "février"},
+    {"region": "Est", "produit": "Plante", "montant": 30, "mois": "mars"},
+    {"region": "Ouest", "produit": "Lampe", "montant": 80, "mois": "janvier"},
+    {"region": "Ouest", "produit": "Tapis", "montant": 275, "mois": "février"},
+    {"region": "Ouest", "produit": "Plante", "montant": 55.5, "mois": "mars"}
+  ];
+  const fmt = (n) => n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+  let sortKey = null, dir = 1;
+  const sel = document.getElementById('region');
+  const regions = [...new Set(DATA.map((d) => d.region))];
+  for (const r of regions) sel.add(new Option(r, r));
+  function render() {
+    let rows = DATA.filter((d) => !sel.value || d.region === sel.value);
+    if (sortKey) rows = [...rows].sort((a, b) => (typeof a[sortKey] === 'number' ? a[sortKey] - b[sortKey] : a[sortKey].localeCompare(b[sortKey], 'fr')) * dir);
+    document.querySelector('tbody').innerHTML = rows.map((d) => `<tr><td>${d.region}</td><td>${d.produit}</td><td class="num">${fmt(d.montant)}</td><td>${d.mois}</td></tr>`).join('');
+    document.getElementById('total').textContent = fmt(rows.reduce((s, d) => s + d.montant, 0));
+  }
+  document.querySelectorAll('th').forEach((th) => th.addEventListener('click', () => {
+    const k = th.dataset.k; dir = sortKey === k ? -dir : 1; sortKey = k; render();
+  }));
+  sel.addEventListener('change', render);
+  const sums = regions.map((r) => [r, DATA.filter((d) => d.region === r).reduce((s, d) => s + d.montant, 0)]);
+  const max = Math.max(...sums.map((s) => s[1]));
+  document.getElementById('chart').innerHTML = sums.map(([r, v], i) => {
+    const h = v / max * 190, x = 30 + i * 120;
+    return `<rect data-region="${r}" x="${x}" y="${210 - h}" width="70" height="${h}" fill="#3e7cb1"/><text x="${x + 35}" y="230" text-anchor="middle" font-size="13">${r}</text>`;
+  }).join('');
+  render();
+</script>
+</body>
+</html>

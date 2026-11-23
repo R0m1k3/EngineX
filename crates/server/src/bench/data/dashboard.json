@@ -1,0 +1,14 @@
+[
+  {"region": "Nord", "produit": "Lampe", "montant": 120.5, "mois": "janvier"},
+  {"region": "Nord", "produit": "Tapis", "montant": 310, "mois": "février"},
+  {"region": "Nord", "produit": "Plante", "montant": 45.25, "mois": "mars"},
+  {"region": "Sud", "produit": "Lampe", "montant": 200, "mois": "janvier"},
+  {"region": "Sud", "produit": "Tapis", "montant": 95.75, "mois": "février"},
+  {"region": "Sud", "produit": "Plante", "montant": 60, "mois": "mars"},
+  {"region": "Est", "produit": "Lampe", "montant": 150, "mois": "janvier"},
+  {"region": "Est", "produit": "Tapis", "montant": 410.5, "mois": "février"},
+  {"region": "Est", "produit": "Plante", "montant": 30, "mois": "mars"},
+  {"region": "Ouest", "produit": "Lampe", "montant": 80, "mois": "janvier"},
+  {"region": "Ouest", "produit": "Tapis", "montant": 275, "mois": "février"},
+  {"region": "Ouest", "produit": "Plante", "montant": 55.5, "mois": "mars"}
+]
