@@ -120,6 +120,13 @@
     });
     return out;
   });
+  // Seuil de compactage de Codex (miroir de `codex_config::compact_limit`) : contexte
+  // par requête, moins la réflexion et 10 240 de marge, entre 50 % et 75 % du contexte.
+  const compactAt = $derived.by(() => {
+    const ctx = Math.floor((s.ctx || 0) / Math.max(1, s.parallel || 1));
+    const reserve = (s.reasoning === 'on' ? (s.reasoning_budget ?? 0) : 0) + 10240;
+    return Math.max(Math.min(Math.round(ctx * 0.75), Math.max(0, ctx - reserve)), Math.floor(ctx / 2));
+  });
   const verdictTone: Record<Verdict, Tone> = { fits: 'ok', tight: 'warn', offload: 'warn', no_fit: 'danger', unknown: 'neutral' };
 
   async function save() {
@@ -311,6 +318,13 @@
         hint="Réflexion comprise. Vide = jusqu’à la fin du contexte."
         value={s.max_output ?? ''} oninput={(e) => (s.max_output = optNum(e.currentTarget.value))} />
     </div>
+    {#if compactAt > 0 && compactAt < 20480}
+      <Note tone="warn">
+        Le contexte sera résumé dès {int(compactAt)} jetons. Après un résumé, il en reste déjà environ 7 000
+        (consignes et résumé) : le modèle risque de résumer en boucle sans avancer. Augmentez le contexte
+        ou baissez la réflexion max.
+      </Note>
+    {/if}
   </Section>
 
   <Section title="Avancé" text="Nom, placement sur les cartes et options passées telles quelles à llama-server.">

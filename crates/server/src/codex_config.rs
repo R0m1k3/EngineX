@@ -25,9 +25,14 @@ fn toml_str(s: &str) -> String {
 /// de réflexion + marge (voir `reserve_for`). Sans cela, un prompt de 45k sur
 /// 65k de contexte passait sous les 75 %, puis la réflexion (16k) remplissait
 /// le contexte : llama-server coupait (`length`) et le tour échouait.
+///
+/// Jamais sous la moitié du contexte : après un résumé, le prompt repart à
+/// ~7k (consignes + résumé) ; avec un seuil à 14k (40k de contexte, 16k de
+/// réflexion), une seule relecture le dépassait et Codex résumait en boucle.
+/// Le rare dépassement est couvert par le plafond de Codex et le relais.
 pub fn compact_limit(ctx: u64, reserve: u64) -> u64 {
     let frac = (ctx as f64 * 0.75).round() as u64;
-    frac.min(ctx.saturating_sub(reserve)).max(ctx / 4)
+    frac.min(ctx.saturating_sub(reserve)).max(ctx / 2)
 }
 
 /// Place à garder libre après le dernier prompt : réflexion + réponse et
@@ -130,8 +135,10 @@ mod tests {
     fn compact_leaves_room_for_reasoning() {
         // 65536 - (16384 + 10240) = 38912 : un prompt de 45k déclenche le compactage.
         assert_eq!(compact_limit(65536, 26624), 38912);
-        // contexte trop petit : jamais sous 25 %.
-        assert_eq!(compact_limit(16384, 26624), 4096);
+        // contexte trop petit : jamais sous 50 %.
+        assert_eq!(compact_limit(16384, 26624), 8192);
+        // Inkling 40k + 16k de réflexion : 14336 bouclait, 20480 désormais.
+        assert_eq!(compact_limit(40960, 26624), 20480);
     }
 
     #[test]

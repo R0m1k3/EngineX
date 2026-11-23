@@ -58,7 +58,13 @@ struct TurnState {
     /// Instantané d'avant le tour (avant que Codex ne connaisse l'id du tour).
     snap_pre: Option<String>,
     begun: Instant,
+    /// Compactages de Codex dans ce tour (garde-fou `MAX_COMPACTIONS`).
+    compactions: u32,
 }
+
+/// Au-delà, le tour est interrompu : le contexte restant après un résumé ne
+/// suffit plus à avancer d'un pas, Codex boucle (résumé, relecture, résumé…).
+const MAX_COMPACTIONS: u32 = 3;
 
 struct PendingReq {
     rid: String,
@@ -563,6 +569,7 @@ impl Hub {
             started_at: now(),
             origin,
             snap_pre: None,
+            compactions: 0,
             begun: Instant::now(),
         });
         st.last_activity = Instant::now();
@@ -975,6 +982,28 @@ impl Hub {
         self.emit("notice", json!({ "item": item }));
     }
 
+    /// Trop de compactages dans un tour : interrompu, avec la raison.
+    async fn stop_compaction_loop(self: &Arc<Self>, state: &AppState) {
+        tracing::warn!(
+            "session {} : {MAX_COMPACTIONS} compactages dans le tour, interrompu",
+            self.id
+        );
+        self.notice(
+            state,
+            &format!(
+                "Tour arrêté : contexte résumé {MAX_COMPACTIONS} fois sans avancer. Le contexte du preset est trop \
+                 petit pour ce travail : augmentez le contexte ou baissez le budget de réflexion."
+            ),
+        )
+        .await;
+        let hub = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = hub.interrupt().await {
+                tracing::warn!("session {} : turn/interrupt : {e}", hub.id);
+            }
+        });
+    }
+
     pub async fn interrupt(&self) -> Result<(), ApiError> {
         {
             let mut st = self.st.lock().expect("verrou");
@@ -1383,9 +1412,19 @@ impl Hub {
                 if method == "item/completed" && item["type"] == "contextCompaction" {
                     // Codex vient de refaire son message developer avec les
                     // instructions de la connexion (essai E9).
-                    let sha = self.st.lock().expect("verrou").conn_memory_sha.clone();
+                    let (sha, count) = {
+                        let mut st = self.st.lock().expect("verrou");
+                        let count = st.turn.as_mut().map(|t| {
+                            t.compactions += 1;
+                            t.compactions
+                        });
+                        (st.conn_memory_sha.clone(), count)
+                    };
                     if let Some(sha) = sha {
                         let _ = sessions::set_session_field(state, &self.id, "memory_seen", Some(&sha)).await;
+                    }
+                    if count == Some(MAX_COMPACTIONS) {
+                        self.stop_compaction_loop(state).await;
                     }
                 }
                 if method == "item/completed" {

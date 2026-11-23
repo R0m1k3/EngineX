@@ -859,3 +859,30 @@ async fn stop_if_idle_never_kills_an_open_turn() {
     assert!(!hub.has_conn());
     assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
 }
+
+#[tokio::test]
+async fn compaction_loop_interrupts_the_turn() {
+    let mut script = first_segment();
+    let mut t = interruptible_turn(2);
+    for k in 1..=3 {
+        t.insert(
+            2,
+            json!({"send": {"method": "item/completed", "params": {"threadId": "$thread", "turnId": "$turn:2",
+                   "item": {"type": "contextCompaction", "id": format!("$item:2{k}")}}}}),
+        );
+    }
+    script.extend(t);
+    let (e, fake) = env_sessions_cfg(&script, "", |_| {}).await;
+    make_active_preset(&e).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    turn(&e, &sid, "un").await;
+    ev.until("turn_stored", |_| true).await;
+    turn(&e, &sid, "deux").await;
+    let n = ev.until("notice", |_| true).await;
+    assert!(n["item"]["text"].as_str().unwrap().contains("résumé 3 fois"), "{n}");
+    let t = ev.until("turn_stored", |_| true).await;
+    assert_eq!(t["turn"]["status"], "interrupted");
+    assert_eq!(fake.received("turn/interrupt").len(), 1);
+    assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
+}
