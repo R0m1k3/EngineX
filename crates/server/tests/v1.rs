@@ -518,6 +518,26 @@ async fn gate_holds_loads_until_requests_end() {
     assert_eq!(job_done(&e, "activate").await["step"], "done");
     let (text, _) = late.await.unwrap();
     assert!(text.contains("event: response.completed"), "{text}");
+
+    // « Forcer » : rien à forcer hors attente ; pendant l'attente, le flux
+    // en cours est coupé (réponse en échec) et l'activation passe aussitôt.
+    let r = e.send("POST", "/api/engine/force", json!({})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    let slow = post("lent 3");
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let r = e.send("POST", &format!("/api/presets/{id}/activate"), json!({})).await;
+    assert_eq!(r.body["started"], true);
+    e.until("/api/engine/versions", |v| v["job"]["step"] == "wait_requests")
+        .await;
+    let r = e.send("POST", "/api/engine/force", json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let (text, took) = slow.await.unwrap();
+    assert!(
+        text.contains("event: response.failed") && text.contains("bascule forcée"),
+        "{text}"
+    );
+    assert!(took < Duration::from_secs(5), "flux coupé tard : {took:?}");
+    assert_eq!(job_done(&e, "activate").await["step"], "done");
 }
 
 // ---- Étape 4a : masquage et clés internes ----

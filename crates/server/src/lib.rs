@@ -108,6 +108,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/presets/{id}/refresh-sources", post(presets::refresh_sources))
         .route("/api/engine", get(engine_api::engine))
         .route("/api/engine/stop", post(engine_api::stop))
+        .route("/api/engine/force", post(engine_api::force))
         .route("/api/engine/auto-update", put(autoupdate::set_auto))
         .route("/api/engine/logs", get(engine_api::logs))
         .route("/api/engine/versions", get(engine_api::versions))

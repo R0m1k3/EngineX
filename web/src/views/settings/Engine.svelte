@@ -11,9 +11,10 @@
   import ProgressBar from '../../lib/ui/ProgressBar.svelte';
   import Section from './Section.svelte';
   import Note from './Note.svelte';
+  import { confirmDialog } from '../../lib/ui/dialog.svelte';
   import {
     versions, engine, checkVersion, installVersion, useVersion, rollbackVersion, deleteVersion, setAutoUpdate,
-    message, jobError, JOB_KIND, JOB_STEP,
+    message, jobError, JOB_KIND, JOB_STEP, forceEngineJob,
     type Versions, type EngineInfo,
   } from '../../lib/api';
 
@@ -35,6 +36,21 @@
     error = '';
     try {
       await fn();
+      await load();
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
+  // Coupe les requêtes en cours (les tours concernés finissent en erreur).
+  async function force() {
+    const ok = await confirmDialog(
+      'Les réponses du modèle en cours sont interrompues : les tours concernés (sessions, Tester, agents) finissent en erreur.',
+      { title: 'Forcer maintenant ?', confirm: 'Forcer', danger: true },
+    );
+    if (!ok) return;
+    try {
+      await forceEngineJob();
       await load();
     } catch (e) {
       error = message(e);
@@ -100,6 +116,9 @@
           <span class:okc={v.job.step === 'done'} class:bad={v.job.step === 'failed'}>{JOB_STEP[v.job.step]}</span>
           {#if v.job.step === 'download' && v.job.total_bytes}<span class="muted num"> {octets(v.job.done_bytes)} / {octets(v.job.total_bytes)}</span>{/if}
         </p>
+        {#if v.job.step === 'wait_requests'}
+          <Button size="sm" variant="danger" onclick={force}>Forcer maintenant</Button>
+        {/if}
         {#if v.job.step === 'download' && v.job.total_bytes}
           <ProgressBar value={v.job.done_bytes} max={v.job.total_bytes} label="Téléchargement" />
         {/if}

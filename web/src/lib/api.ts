@@ -319,6 +319,8 @@ export const activatePreset = (id: number, confirm_nofit = false) =>
 export const refreshSources = (id: number) => request<Preset>('POST', `/api/presets/${id}/refresh-sources`);
 export const engine = () => request<EngineInfo>('GET', '/api/engine');
 export const stopEngine = () => request('POST', '/api/engine/stop');
+/** Tâche moteur en attente des requêtes : les interrompt et passe. */
+export const forceEngineJob = () => request('POST', '/api/engine/force');
 export const engineLogs = (tail = 200) => request<{ lines: string[] }>('GET', `/api/engine/logs?tail=${tail}`);
 export const versions = () => request<Versions>('GET', '/api/engine/versions');
 export const checkVersion = () => request<{ tag: string; build: string }>('POST', '/api/engine/versions/check');

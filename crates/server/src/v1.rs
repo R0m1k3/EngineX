@@ -587,6 +587,29 @@ async fn relay_responses(
         _gate: Some(gate),
         _lease: lease,
     };
+    let mut abort = state.v1_abort_rx();
+    let served = tokio::select! {
+        r = relay_served(state, tx, tr, raw, log, outcome) => Some(r),
+        _ = abort.changed() => None,
+    };
+    match served {
+        Some(r) => r,
+        None => send(tx, tr.fail("server_error", ABORTED), outcome).await,
+    }
+}
+
+/// Message des requêtes coupées par « Forcer ».
+const ABORTED: &str = "requête interrompue : le moteur change (bascule forcée)";
+
+/// Suite de `relay_responses`, porte tenue.
+async fn relay_served(
+    state: &AppState,
+    tx: &Tx,
+    tr: &mut Translator,
+    raw: &Bytes,
+    log: &mut Log,
+    outcome: &mut Option<String>,
+) -> bool {
     if let Some(cause) = not_ready(&state.supervisor().state()) {
         return send(tx, tr.fail("server_error", &cause), outcome).await;
     }
@@ -764,6 +787,7 @@ pub async fn chat_completions(
         Ok(Some(p)) => p,
         _ => p,
     };
+    let mut abort = state.v1_abort_rx();
     req["model"] = json!(p.name);
     sampling::inject(&mut req, &p.settings.sampling);
     let log = Log {
@@ -776,12 +800,20 @@ pub async fn chat_completions(
         session: None,
     };
     let streamed = req.get("stream").and_then(Value::as_bool) == Some(true);
-    let res = match state.0.http.post(chat_url(&state)).json(&req).send().await {
-        Ok(r) => r,
-        Err(e) => {
+    let sent = tokio::select! {
+        r = state.0.http.post(chat_url(&state)).json(&req).send() => Some(r),
+        _ = abort.changed() => None,
+    };
+    let res = match sent {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => {
             tracing::warn!("llama-server injoignable : {e}");
             log.write(&state, "server_error", None, None);
             return V1Error::new(StatusCode::BAD_GATEWAY, "server_error", "llama-server injoignable").into_response();
+        }
+        None => {
+            log.write(&state, "interrompu", None, None);
+            return V1Error::new(StatusCode::SERVICE_UNAVAILABLE, "engine_unavailable", ABORTED).into_response();
         }
     };
     let status = StatusCode::from_u16(res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -791,7 +823,13 @@ pub async fn chat_completions(
         .cloned()
         .unwrap_or_else(|| header::HeaderValue::from_static("application/json"));
     if !streamed || !status.is_success() {
-        let bytes = res.bytes().await.unwrap_or_default();
+        let bytes = tokio::select! {
+            b = res.bytes() => b.unwrap_or_default(),
+            _ = abort.changed() => {
+                log.write(&state, "interrompu", None, None);
+                return V1Error::new(StatusCode::SERVICE_UNAVAILABLE, "engine_unavailable", ABORTED).into_response();
+            }
+        };
         let body = serde_json::from_slice::<Value>(&bytes).ok();
         let field = |k: &str| body.as_ref().and_then(|v| v.get(k));
         log.write(
@@ -815,6 +853,7 @@ pub async fn chat_completions(
             let next = tokio::select! {
                 n = stream.next() => n,
                 _ = tx.closed() => { outcome = "client parti"; break }
+                _ = abort.changed() => { outcome = "interrompu"; break }
             };
             match next {
                 Some(Ok(b)) => {

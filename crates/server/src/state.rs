@@ -68,6 +68,9 @@ pub(crate) struct Inner {
     /// fin de son flux ; tout chargement ou arrêt de llama-server la prend en
     /// écriture jusqu'à `Ready`/`Failed`/`Stopped`. Toujours après `begin_job`.
     pub serve_gate: Arc<RwLock<()>>,
+    /// Interruption des requêtes `/v1` en cours (bouton « Forcer » pendant
+    /// l'attente de la porte) : chaque requête servie surveille ce compteur.
+    pub v1_abort: tokio::sync::watch::Sender<u64>,
     /// File d'attente commune des tours.
     pub queue: crate::queue::Queue,
     /// Fil de notifications, push web, webhooks.
@@ -137,6 +140,7 @@ impl AppState {
             probe: Mutex::new(None),
             hf_cache: Mutex::new(HashMap::new()),
             serve_gate: Arc::new(RwLock::new(())),
+            v1_abort: tokio::sync::watch::channel(0).0,
             queue: Default::default(),
             feed: Default::default(),
             last_done_ms: AtomicI64::new(0),
@@ -190,6 +194,16 @@ impl AppState {
 
     pub fn serve_gate(&self) -> &Arc<RwLock<()>> {
         &self.0.serve_gate
+    }
+
+    /// À prendre au moment où la requête obtient la porte.
+    pub fn v1_abort_rx(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.0.v1_abort.subscribe()
+    }
+
+    /// Interrompt les requêtes `/v1` qui tiennent la porte.
+    pub fn abort_v1(&self) {
+        self.0.v1_abort.send_modify(|n| *n += 1);
     }
 
     pub fn last_done_ms(&self) -> i64 {

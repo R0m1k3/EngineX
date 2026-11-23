@@ -431,6 +431,25 @@ pub async fn engine(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
     })))
 }
 
+/// `POST /api/engine/force` : la tâche en attente de la fin des requêtes
+/// (`wait_requests`) les interrompt et passe tout de suite. Les tours
+/// concernés finissent en erreur.
+pub async fn force(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let waiting = state
+        .0
+        .engine_job
+        .lock()
+        .expect("job")
+        .as_ref()
+        .is_some_and(|j| !j.finished && j.step == "wait_requests");
+    if !waiting {
+        return Err(ApiError::Invalid("aucune tâche n'attend la fin des requêtes".into()));
+    }
+    tracing::info!("tâche moteur forcée : requêtes /v1 en cours interrompues");
+    state.abort_v1();
+    Ok(Json(json!({ "ok": true })))
+}
+
 /// Arrêt du moteur : tâche en fond qui attend la fin des requêtes en cours.
 pub async fn stop(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     begin_job(&state, "stop", "")?;
@@ -656,6 +675,9 @@ pub enum SwitchFail {
     ToolsBroken,
     /// La sonde passait avant, elle n'a pas répondu (erreur passagère possible).
     ToolsUnknown,
+    /// Chargement raté avec la nouvelle version ET avec l'ancienne : la cause
+    /// n'est pas la version (VRAM prise ailleurs…), elle n'est pas écartée.
+    NotTheEngine,
 }
 
 fn fail(kind: SwitchFail, message: String) -> SwitchError {
@@ -750,8 +772,13 @@ pub(crate) async fn switch_to(
                 .map_err(failed)?;
             state.0.fallback.store(was_fallback, Ordering::SeqCst);
             reset_cache(state).await;
-            if launch(state, id).await.is_ok() {
-                wait_loaded(state).await;
+            let back_ok = launch(state, id).await.is_ok() && wait_loaded(state).await;
+            if err.kind == SwitchFail::Failed && !back_ok {
+                err.kind = SwitchFail::NotTheEngine;
+                err.message = format!(
+                    "{} ; le modèle ne charge pas non plus avec {old_active} : la version n'est pas en cause",
+                    err.message
+                );
             }
             if err.kind == SwitchFail::ToolsBroken {
                 crate::autoupdate::skip(state, tag).await;

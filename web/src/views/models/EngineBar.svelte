@@ -10,8 +10,9 @@
   import { dec1, int } from '../../lib/ui/format';
   import type { DotKind, GaugeRow } from '../../lib/ui/types';
   import Note from '../settings/Note.svelte';
+  import { confirmDialog } from '../../lib/ui/dialog.svelte';
   import {
-    engine, engineLogs, presets, stopEngine, versions, message, jobError, JOB_KIND, JOB_STEP,
+    engine, engineLogs, presets, stopEngine, forceEngineJob, versions, message, jobError, JOB_KIND, JOB_STEP,
     type EngineInfo, type Preset, type Job,
   } from '../../lib/api';
 
@@ -36,6 +37,21 @@
   async function stop() {
     try {
       await stopEngine();
+      await load();
+    } catch (e) {
+      error = message(e);
+    }
+  }
+
+  // Coupe les requêtes en cours (les tours concernés finissent en erreur).
+  async function force() {
+    const ok = await confirmDialog(
+      'Les réponses du modèle en cours sont interrompues : les tours concernés (sessions, Tester, agents) finissent en erreur.',
+      { title: 'Forcer maintenant ?', confirm: 'Forcer', danger: true },
+    );
+    if (!ok) return;
+    try {
+      await forceEngineJob();
       await load();
     } catch (e) {
       error = message(e);
@@ -156,6 +172,9 @@
       <div class="job">
         {JOB_KIND[shownJob.kind]}{shownJob.tag && !['activate', 'stop', 'delete'].includes(shownJob.kind) ? ` (${shownJob.tag})` : ''} :
         <span class:okc={shownJob.step === 'done'} class:bad={shownJob.step === 'failed'}>{JOB_STEP[shownJob.step]}</span>
+        {#if shownJob.step === 'wait_requests'}
+          <Button size="sm" variant="danger" onclick={force}>Forcer maintenant</Button>
+        {/if}
       </div>
       {#if shownJob.error}<Note tone="danger">{jobError(shownJob.error)}</Note>{/if}
     {/if}
