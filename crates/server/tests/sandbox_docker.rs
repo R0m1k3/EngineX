@@ -31,6 +31,11 @@ async fn until_long(ev: &mut Sse, name: &str, secs: u64) -> Value {
 /// EngineX avec le backend Docker, servi sur `0.0.0.0:port` (joignable depuis
 /// la sandbox par la passerelle de l'hôte).
 async fn docker_env(model: &str) -> (Env, u16, PathBuf, tempfile::TempDir) {
+    docker_env_with(model, None).await
+}
+
+/// `host_data` : dossier de l'hôte donné à Docker à la place de `<data>`.
+async fn docker_env_with(model: &str, host_data: Option<PathBuf>) -> (Env, u16, PathBuf, tempfile::TempDir) {
     assert_eq!(
         std::env::var("ENGINEX_TEST_DOCKER").as_deref(),
         Ok("1"),
@@ -51,7 +56,7 @@ async fn docker_env(model: &str) -> (Env, u16, PathBuf, tempfile::TempDir) {
             c.sandbox.backend = SandboxBackend::Docker;
             c.sandbox.docker_host = "tcp://127.0.0.1:23750".into();
             c.sandbox.network = "enginex-sandbox-test".into();
-            c.sandbox.host_data = Some(c.data_dir.clone());
+            c.sandbox.host_data = Some(host_data.unwrap_or_else(|| c.data_dir.clone()));
             c.sandbox.devbox_image = image;
             c.sandbox.api_url = format!("http://host.docker.internal:{port}/v1");
             c.sandbox.host_gateway = true;
@@ -400,4 +405,24 @@ async fn copy_session_in_a_real_docker_sandbox() {
         .await
         .unwrap();
     assert_eq!(left.as_array().unwrap().len(), 0, "{left}");
+}
+
+#[tokio::test]
+#[ignore = "lancé par la CI (job sandbox-e2e, ENGINEX_TEST_DOCKER=1)"]
+async fn wrong_host_data_is_refused_before_any_sandbox() {
+    // Dossier de l'hôte qui n'est pas `<data>` (ENGINEX_HOST_DATA faux) : EX
+    // écrirait ailleurs, la sandbox ne démarre pas et la raison est donnée.
+    let other = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(other.path().join("workspace")).unwrap();
+    let (e, _port, _log, _tmp) = docker_env_with("model-e2e", Some(other.path().to_path_buf())).await;
+    let sid = new_session(&e, "auto").await;
+    let mut ev = sse(&e, &format!("/api/sessions/{sid}/events")).await;
+    let r = turn(&e, &sid, "Écris ok.txt").await;
+    assert_eq!(r.status, 202, "{}", r.text);
+    let t = until_long(&mut ev, "turn_stored", 300).await;
+    assert_ne!(t["turn"]["status"], "completed", "{t}");
+    let status = e.get("/api/sandbox/status").await.body;
+    let err = status["host_data"]["error"].as_str().unwrap_or("");
+    assert!(err.contains("ENGINEX_HOST_DATA"), "{status}");
+    assert!(!work_dir(&e, &sid).await.join("ok.txt").exists());
 }

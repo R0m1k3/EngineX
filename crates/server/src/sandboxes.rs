@@ -41,6 +41,8 @@ pub struct Sandboxes {
     backend: OnceLock<Result<Arc<Backend>, String>>,
     host_data: OnceLock<Result<PathBuf, String>>,
     instance: OnceLock<String>,
+    /// Contrôle du dossier de l'hôte (`None` : pas encore fait).
+    host_check: tokio::sync::Mutex<Option<Result<(), String>>>,
     pub live: Mutex<HashMap<String, Live>>,
 }
 
@@ -205,6 +207,73 @@ pub(crate) fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Res
     std::fs::rename(tmp, path)
 }
 
+/// Fichier témoin du contrôle du dossier de l'hôte, à la racine du workspace.
+const HOST_MARKER: &str = ".enginex-host-check";
+
+/// Le dossier de l'hôte que Docker monte dans les sandboxes est-il bien le
+/// `<data>` d'EngineX ? Sinon (ENGINEX_HOST_DATA faux, `/data/workspace` monté
+/// à part) la sandbox écrit ailleurs : l'historique voit les fichiers, le
+/// panneau Fichiers, l'aperçu et l'audit du Tester non. Fait une fois ; un
+/// conteneur d'aide qui ne démarre pas ne bloque rien.
+async fn check_host_data(state: &AppState, backend: &Backend) -> anyhow::Result<()> {
+    if !matches!(backend, Backend::Docker(_)) {
+        return Ok(());
+    }
+    let mut done = state.0.sandboxes.host_check.lock().await;
+    if let Some(r) = done.clone() {
+        return r.map_err(anyhow::Error::msg);
+    }
+    let ws = state.config().data_dir.join("workspace");
+    std::fs::create_dir_all(&ws)?;
+    let marker = ws.join(HOST_MARKER);
+    let token = auth::random_token();
+    let _ = std::fs::remove_file(&marker);
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .open(&marker)?;
+        f.write_all(token.as_bytes())?;
+    }
+    let spec = enginex_sandbox::HelperSpec {
+        session_id: "host-check".into(),
+        owner: state.0.sandboxes.instance().to_string(),
+        binds: vec![(ws.clone(), "WS", false)],
+        script: r#"cat "$WS/.enginex-host-check" 2>/dev/null; exit 0"#,
+        env: Vec::new(),
+        network: false,
+    };
+    let res = backend.run_helper(&spec, std::time::Duration::from_secs(60)).await;
+    let _ = std::fs::remove_file(&marker);
+    let out = match res {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!("contrôle du dossier de l'hôte impossible : {e}");
+            return Ok(());
+        }
+    };
+    let r = if String::from_utf8_lossy(&out.stdout).trim() == token {
+        Ok(())
+    } else {
+        let host = match state.0.sandboxes.host_data.get() {
+            Some(Ok(p)) => p.display().to_string(),
+            _ => "?".into(),
+        };
+        let e = format!(
+            "le dossier de l'hôte monté dans les sandboxes ({host}) n'est pas le /data d'EngineX : \
+             EX écrirait ailleurs que dans le dossier de la session. Corrigez ou retirez \
+             ENGINEX_HOST_DATA dans la stack (et ne montez pas /data/workspace à part), puis redémarrez EngineX."
+        );
+        tracing::error!("{e}");
+        Err(e)
+    };
+    *done = Some(r.clone());
+    r.map_err(anyhow::Error::msg)
+}
+
 /// URL du serveur MCP vue de la sandbox : `api_url` sans `/v1`, plus `/mcp`.
 pub fn mcp_url(api_url: &str) -> String {
     let base = api_url.trim_end_matches('/');
@@ -224,6 +293,7 @@ pub(crate) async fn start(
         .sandboxes
         .backend()
         .map_err(|_| anyhow::anyhow!("sandboxes indisponibles"))?;
+    check_host_data(state, &backend).await?;
     // 1. ancien conteneur supprimé, puis sa clé révoquée.
     backend.stop(session_id).await?;
     api_keys::revoke_internal(state, &key_name(session_id)).await?;
@@ -445,11 +515,14 @@ pub async fn pull(State(state): State<AppState>) -> Result<Json<Value>, ApiError
 pub async fn status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let sb = &state.0.sandboxes;
     let cfg = &state.config().sandbox;
-    let (host_path, host_error) = match sb.host_data.get() {
+    let (host_path, mut host_error) = match sb.host_data.get() {
         Some(Ok(p)) => (Some(p.display().to_string()), None),
         Some(Err(e)) => (None, Some(e.clone())),
         None => (None, None),
     };
+    if let Some(Some(Err(e))) = sb.host_check.try_lock().ok().map(|g| g.clone()) {
+        host_error = Some(e);
+    }
     let (docker, image_present, codex) = match sb.backend.get() {
         Some(Ok(b)) => match &**b {
             Backend::Docker(d) => {
