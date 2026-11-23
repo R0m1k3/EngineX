@@ -3,9 +3,10 @@ name: ci
 on:
   push:
   pull_request:
-  # Test de contrat chaque lundi : voir quand une nouvelle version de Codex casse.
+  # Chaque jour : dernier Codex testé (contrat + bout en bout) puis devbox
+  # republiée ; EngineX la retire toutes les 6 h (Codex à jour sans rien faire).
   schedule:
-    - cron: '0 6 * * 1'
+    - cron: '0 5 * * *'
 
 jobs:
   test:

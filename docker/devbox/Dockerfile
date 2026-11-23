@@ -38,6 +38,8 @@ ENV PATH=/usr/local/go/bin:$PATH
 # Codex CLI.
 RUN npm i -g --no-audit --no-fund "@openai/codex@${CODEX_VERSION}" && npm cache clean --force \
     && codex --version
+# Version affichée dans Paramètres → Sessions.
+LABEL org.enginex.codex-version=${CODEX_VERSION}
 
 # Relais d'aperçu (port 4501), lancé avec l'app-server par EngineX.
 COPY enginex-fwd.mjs /usr/local/lib/enginex/fwd.mjs

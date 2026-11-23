@@ -120,6 +120,15 @@ impl Docker {
         self.client.inspect_image(&self.opts.image).await.is_ok()
     }
 
+    /// Version de Codex de l'image locale (étiquette posée par la CI).
+    pub async fn codex_version(&self) -> Option<String> {
+        let img = self.client.inspect_image(&self.opts.image).await.ok()?;
+        img.config?
+            .labels?
+            .remove("org.enginex.codex-version")
+            .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+    }
+
     /// Tire l'image de la devbox (progression en octets).
     pub async fn pull(&self, progress: &(dyn Fn(Progress) + Send + Sync)) -> anyhow::Result<()> {
         let opts = CreateImageOptions {

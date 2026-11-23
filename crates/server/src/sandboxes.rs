@@ -433,6 +433,15 @@ pub async fn pull_now(state: &AppState) {
 
 // ---- Routes ----
 
+/// Mise à jour immédiate de la devbox (nouvelles sandboxes seulement).
+pub async fn pull(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    if !matches!(state.0.sandboxes.backend().as_deref(), Ok(Backend::Docker(_))) {
+        return Err(ApiError::Invalid("pas de Docker : rien à mettre à jour".into()));
+    }
+    pull_now(&state).await;
+    status(State(state)).await
+}
+
 pub async fn status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let sb = &state.0.sandboxes;
     let cfg = &state.config().sandbox;
@@ -441,16 +450,21 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
         Some(Err(e)) => (None, Some(e.clone())),
         None => (None, None),
     };
-    let (docker, image_present) = match sb.backend.get() {
+    let (docker, image_present, codex) = match sb.backend.get() {
         Some(Ok(b)) => match &**b {
             Backend::Docker(d) => {
                 let s = d.status().await;
-                (json!({"reachable": s.reachable, "error": s.error}), s.image_present)
+                let codex = if s.image_present { d.codex_version().await } else { None };
+                (
+                    json!({"reachable": s.reachable, "error": s.error}),
+                    s.image_present,
+                    codex,
+                )
             }
-            Backend::Local(_) => (json!({"reachable": false, "error": null}), false),
+            Backend::Local(_) => (json!({"reachable": false, "error": null}), false, None),
         },
-        Some(Err(e)) => (json!({"reachable": false, "error": e}), false),
-        None => (json!({"reachable": false, "error": null}), false),
+        Some(Err(e)) => (json!({"reachable": false, "error": e}), false, None),
+        None => (json!({"reachable": false, "error": null}), false, None),
     };
     let last_at: Option<i64> = setting(&state, "devbox.last_pull_at")
         .await?
@@ -461,7 +475,7 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<Value>, ApiErr
         "available": sb.backend().is_ok(),
         "docker": docker,
         "host_data": {"path": host_path, "error": host_error},
-        "image": {"name": cfg.devbox_image, "present": image_present,
+        "image": {"name": cfg.devbox_image, "present": image_present, "codex": codex,
                   "last_pull_at": last_at, "last_pull_error": last_err},
         "live": sb.live.lock().expect("verrou").len(),
     })))

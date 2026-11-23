@@ -50,7 +50,7 @@ impl Default for SandboxTimings {
             rpc_timeout: Duration::from_secs(30),
             idle_tick: Duration::from_secs(30),
             idle_override: None,
-            pull_every: Some(Duration::from_secs(24 * 3600)),
+            pull_every: Some(Duration::from_secs(6 * 3600)),
             memory_turn_timeout: Duration::from_secs(600),
         }
     }

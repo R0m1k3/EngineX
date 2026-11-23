@@ -1234,3 +1234,12 @@ async fn no_app_check_without_browser_or_when_switched_off() {
         assert!(fake.unexpected().is_empty(), "{:?}", fake.unexpected());
     }
 }
+
+#[tokio::test]
+async fn devbox_update_without_docker_is_refused_with_a_reason() {
+    let (e, _as) = env_sessions(&[]).await;
+    let r = e.send("POST", "/api/sandbox/pull", json!({})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    assert!(r.text.contains("Docker"), "{}", r.text);
+    assert!(e.get("/api/sandbox/status").await.body["image"]["codex"].is_null());
+}

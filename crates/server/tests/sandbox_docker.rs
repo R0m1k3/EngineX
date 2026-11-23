@@ -64,6 +64,8 @@ async fn docker_env(model: &str) -> (Env, u16, PathBuf, tempfile::TempDir) {
     let status = e.get("/api/sandbox/status").await.body;
     assert_eq!(status["docker"]["reachable"], true, "{status}");
     assert_eq!(status["image"]["present"], true, "{status}");
+    // Version de Codex lue sur l'étiquette posée par la CI.
+    assert!(status["image"]["codex"].is_string(), "{status}");
     make_active_preset(&e).await;
     // EngineX joignable depuis la sandbox (passerelle de l'hôte).
     let l = tokio::net::TcpListener::bind(("0.0.0.0", port)).await.unwrap();

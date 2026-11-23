@@ -231,6 +231,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/sessions/{id}/git/push", post(git::session_push))
         .route("/api/sessions/{id}/git/pull-request", post(git::session_pull_request))
         .route("/api/sandbox/status", get(sandboxes::status))
+        .route("/api/sandbox/pull", post(sandboxes::pull))
         .route(
             "/api/settings/sessions",
             get(sandboxes::get_settings).put(sandboxes::put_settings),

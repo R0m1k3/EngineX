@@ -713,7 +713,7 @@ export interface SandboxStatus {
   available: boolean;
   docker: { reachable: boolean; error: string | null };
   host_data: { path: string | null; error: string | null };
-  image: { name: string; present: boolean; last_pull_at: number | null; last_pull_error: string | null };
+  image: { name: string; present: boolean; codex: string | null; last_pull_at: number | null; last_pull_error: string | null };
   live: number;
 }
 
@@ -780,6 +780,7 @@ export const putSecret = (scope: string, name: string, value: string) =>
   request<{ id: number }>('PUT', '/api/vault', { scope, name, value });
 export const deleteSecret = (id: number) => request('DELETE', `/api/vault/${id}`);
 export const sandboxStatus = () => request<SandboxStatus>('GET', '/api/sandbox/status');
+export const sandboxPull = () => request<SandboxStatus>('POST', '/api/sandbox/pull');
 export const sessionSettings = () => request<SessionSettings>('GET', '/api/settings/sessions');
 export const saveSessionSettings = (s: SessionSettings) => request<SessionSettings>('PUT', '/api/settings/sessions', s);
 

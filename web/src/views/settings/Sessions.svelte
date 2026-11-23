@@ -8,7 +8,7 @@
   import Section from './Section.svelte';
   import Note from './Note.svelte';
   import {
-    sandboxStatus, sessionSettings, saveSessionSettings, message, type SandboxStatus,
+    sandboxStatus, sandboxPull, sessionSettings, saveSessionSettings, message, type SandboxStatus,
   } from '../../lib/api';
 
   let status = $state<SandboxStatus | null>(null);
@@ -62,6 +62,20 @@
       toast('Réglages des sessions enregistrés.', 'ok');
     } catch (err) {
       error = message(err);
+    }
+  }
+
+  let pulling = $state(false);
+  async function pullNow() {
+    pulling = true;
+    try {
+      status = await sandboxPull();
+      if (status.image.last_pull_error) toast(`Échec de la mise à jour : ${status.image.last_pull_error}`, 'error');
+      else toast('Image à jour : les prochaines sandboxes l’utilisent.', 'ok');
+    } catch (e) {
+      toast(message(e), 'error');
+    } finally {
+      pulling = false;
     }
   }
 
@@ -131,7 +145,9 @@
             <StatusDot kind={status.image.present ? 'ok' : 'off'} />
             {status.image.present ? 'présente' : 'pas encore téléchargée (au premier message)'}
           </span>
-          <div class="sub">Dernière mise à jour : {date(status.image.last_pull_at)}</div>
+          {#if status.image.codex}<div class="sub">Version d’EX : <span class="mono">{status.image.codex}</span></div>{/if}
+          <div class="sub">Dernière mise à jour : {date(status.image.last_pull_at)} · vérifiée toutes les 6 h, EX testé et republié chaque jour</div>
+          <Button size="sm" variant="secondary" disabled={pulling} onclick={pullNow}>{pulling ? 'Mise à jour…' : 'Mettre à jour maintenant'}</Button>
           {#if status.image.last_pull_error}<div class="sub bad">Échec de la mise à jour : {status.image.last_pull_error}</div>{/if}
         </dd>
       {/if}
