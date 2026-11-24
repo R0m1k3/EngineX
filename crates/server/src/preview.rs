@@ -126,12 +126,26 @@ pub async fn status(
         ));
     };
     let (ports, error) = match enginex_sandbox::fwd::list(fwd.as_deref(), &token).await {
-        Ok(p) => (p, None),
+        Ok(p) => (answering(fwd.as_deref(), &token, p).await, None),
         Err(e) => (Vec::new(), Some(e.to_string())),
     };
     Ok(Json(
         json!({"running": true, "ports": ports, "error": error, "enabled": base.is_some(), "has_index": has_index, "pages": pages}),
     ))
+}
+
+/// Ports qui acceptent vraiment une connexion : un socket en écoute qui
+/// refuse (port éphémère d'un outil, serveur arrêté entre-temps) n'est pas une
+/// app, et l'UI ouvrirait ce port au lieu de la page du dossier.
+async fn answering(fwd: Option<&str>, token: &str, ports: Vec<u16>) -> Vec<u16> {
+    let probes = ports
+        .into_iter()
+        .map(|p| async move { enginex_sandbox::fwd::connect(fwd, token, p).await.ok().map(|_| p) });
+    futures_util::future::join_all(probes)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 #[derive(Deserialize)]

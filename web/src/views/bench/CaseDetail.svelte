@@ -95,6 +95,12 @@
         {/if}
         {#if c.reason} — {c.reason}{/if}
       </p>
+      {#if c.audit.page_error}
+        <p class="page-error">
+          <strong>Le navigateur de l’audit n’a pas ouvert la page</strong> : les contrôles de page sont KO sans avoir été joués.
+          <code>{c.audit.page_error}</code>
+        </p>
+      {/if}
     </section>
 
     <section>
@@ -194,6 +200,8 @@
   .checks summary { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 0; }
   .pts { white-space: nowrap; color: var(--muted); }
   .ess { font-size: var(--fs-xs); color: var(--muted); border: 1px solid var(--line); border-radius: var(--r); padding: 0 4px; }
+  .page-error { margin: var(--s2) 0 0; color: var(--danger, #c0392b); font-size: var(--fs-sm); }
+  .page-error code { display: block; margin-top: 4px; white-space: pre-wrap; color: var(--text); }
   .proof { margin: 6px 0 0; padding: 8px; background: var(--raised); border-radius: var(--r); overflow: auto; max-height: 220px; font-size: var(--fs-sm); white-space: pre-wrap; }
   .shots { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 8px; }
   figure { margin: 0; display: grid; gap: 4px; }

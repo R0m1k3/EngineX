@@ -86,6 +86,15 @@ pub async fn start(State(state): State<AppState>, ApiJson(b): ApiJson<StartBody>
     if crate::v1::not_ready(&state.supervisor().state()).is_some() {
         return Err(ApiError::EngineNotReady);
     }
+    // Le navigateur de l'audit d'abord : sinon le modèle travaille des minutes
+    // pour des contrôles de page tous KO.
+    if keys.iter().any(|c| c.needs_browser())
+        && let Err(e) = audit::browser_selftest(&state).await
+    {
+        return Err(ApiError::Invalid(format!(
+            "navigateur de l'audit indisponible, rien n'est lancé : {e}"
+        )));
+    }
     let run_id: i64 = sqlx::query_scalar(
         "INSERT INTO bench_runs (preset_id, status, started_at) VALUES (?, 'running', ?) RETURNING id",
     )

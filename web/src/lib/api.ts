@@ -1277,6 +1277,8 @@ export interface BenchAudit {
   points: number;
   points_max: number;
   verdict: BenchVerdict;
+  /** Le navigateur n'a pas pu ouvrir la page : la raison (contrôles de page tous KO). */
+  page_error?: string | null;
   shots: ('desktop' | 'phone')[];
   visual: boolean;
   alerts: { kind: 'big_file' | 'repeated_command' | 'added_package'; text: string }[];

@@ -68,6 +68,25 @@ async fn start_is_refused_for_bad_input_or_a_running_run() {
     assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text);
 }
 
+/// Sans navigateur joignable, un test visuel n'est pas lancé : le modèle ne
+/// travaille pas des minutes pour des contrôles de page tous KO.
+#[tokio::test]
+async fn a_visual_test_is_refused_without_a_working_browser() {
+    let (e, _fake) = env_sessions_cfg(&script(&[]), "", |c| {
+        c.web.browser_url = Some("http://127.0.0.1:9".into())
+    })
+    .await;
+    make_active_preset(&e).await;
+    let r = e.send("POST", "/api/bench/runs", json!({"cases": ["landing"]})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    assert!(r.text.contains("navigateur de l'audit"), "{}", r.text);
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bench_runs")
+        .fetch_one(e.state.db())
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+}
+
 #[tokio::test]
 async fn stop_marks_a_running_run_stopped() {
     let e = env().await;

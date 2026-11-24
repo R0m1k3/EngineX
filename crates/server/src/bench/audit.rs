@@ -138,6 +138,7 @@ pub async fn run(state: &AppState, case: &Case, case_id: i64, sid: &str, dir: &P
     let mut console: Vec<String> = Vec::new();
     let mut page: Option<Result<PageCtx, String>> = None;
     let mut console_slot = None;
+    let mut load_error: Option<String> = None;
     for c in case.checks {
         let v = match &c.kind {
             Kind::Shell(script) => {
@@ -166,6 +167,9 @@ pub async fn run(state: &AppState, case: &Case, case_id: i64, sid: &str, dir: &P
                     Ok(ctx) => {
                         let (ok, proof, lines) = ctx.check(path, *phone, steps).await;
                         console.extend(lines);
+                        if !ok && load_error.is_none() && proof.starts_with("chargement : ") {
+                            load_error = Some(proof.clone());
+                        }
                         result(c, ok, if ok { c.points as f64 } else { 0.0 }, proof, "page")
                     }
                     Err(e) => result(c, false, 0.0, format!("page impossible à ouvrir : {e}"), "page"),
@@ -218,6 +222,11 @@ pub async fn run(state: &AppState, case: &Case, case_id: i64, sid: &str, dir: &P
     if let Some(Ok(ctx)) = &page {
         ctx.close(state).await;
     }
+    // Page jamais ouverte : la raison en tête de fiche, pas seulement sous chaque contrôle.
+    let page_error = match &page {
+        Some(Err(e)) => Some(format!("page impossible à ouvrir : {e}")),
+        _ => load_error,
+    };
     let _ = exec(state, sid, &format!("rm -rf {HIDDEN_DIR}"), 30).await;
 
     let points: f64 = out.iter().filter_map(|c| c["earned"].as_f64()).sum();
@@ -226,6 +235,7 @@ pub async fn run(state: &AppState, case: &Case, case_id: i64, sid: &str, dir: &P
         "points": (points * 10.0).round() / 10.0,
         "points_max": case.points_max(),
         "verdict": verdict(&out),
+        "page_error": page_error,
         "shots": shots,
         "visual": case.family == Family::Visual,
         "alerts": alerts(case, &journal_commands(&rows), dir),
@@ -258,6 +268,25 @@ async fn write_hidden(state: &AppState, case: &Case, sid: &str, dir: &Path) -> S
 
 // ---- Navigateur ----
 
+/// Essai du navigateur de l'audit avant de lancer le modèle : une page servie
+/// comme celles de l'audit, chargée puis lue. Rend la raison de l'échec.
+pub async fn browser_selftest(state: &AppState) -> Result<(), String> {
+    const PAGE: &str = "<!doctype html><title>t</title><h1 id=x>EngineX</h1>";
+    let files: enginex_browser::LocalFiles =
+        Arc::new(|_: &str| (200, "text/html; charset=utf-8".to_string(), PAGE.as_bytes().to_vec()));
+    let ctx = PageCtx::open_with(state, "bench-selftest", files).await?;
+    let res = async {
+        ctx.load("index.html", false).await?;
+        match ctx.tab.eval("document.getElementById('x')?.textContent").await? {
+            Some(Value::String(t)) if t == "EngineX" => Ok(()),
+            v => Err(format!("page d'essai illisible ({v:?})")),
+        }
+    }
+    .await;
+    ctx.close(state).await;
+    res
+}
+
 struct PageCtx {
     tab: Arc<enginex_browser::Session>,
     origin: String,
@@ -269,11 +298,15 @@ impl PageCtx {
     /// EngineX lui-même (requêtes interceptées) : ni serveur, ni réseau entre
     /// les conteneurs.
     async fn open(state: &AppState, case_id: i64, dir: &Path) -> Result<PageCtx, String> {
-        let key = format!("bench-audit-{case_id}");
-        let tab = state.0.browser.get(&key).await?;
-        let origin = AUDIT_ORIGIN.to_string();
         let work = dir.to_path_buf();
         let files: enginex_browser::LocalFiles = Arc::new(move |path: &str| crate::preview::local_file(&work, path));
+        Self::open_with(state, &format!("bench-audit-{case_id}"), files).await
+    }
+
+    async fn open_with(state: &AppState, key: &str, files: enginex_browser::LocalFiles) -> Result<PageCtx, String> {
+        let key = key.to_string();
+        let tab = state.0.browser.get(&key).await?;
+        let origin = AUDIT_ORIGIN.to_string();
         if let Err(e) = tab.serve_local(&origin, files).await {
             state.0.browser.close(&key).await;
             return Err(format!("interception des pages : {e}"));
